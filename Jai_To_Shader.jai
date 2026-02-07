@@ -14,16 +14,23 @@
 #load "hlsl_backend.jai";
 #load "metal_backend.jai";
 
-get_plugin :: () -> *Metaprogram_Plugin {
-  p := New(Metaprogram_Plugin);
-  
+Jai_To_Shader_Plugin :: struct {
+    using #as plugin: Metaprogram_Plugin;
+    output_shaders: bool;
+}
+
+get_plugin :: () -> *Jai_To_Shader_Plugin {
+  p := New(Jai_To_Shader_Plugin);
+
   p.message = convert_procs;
   p.shutdown = p => { free(p); };
-  
+
   return p;
 }
 
 convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
+  plugin := cast(*Jai_To_Shader_Plugin) p;
+
   if message.kind == {
     case .TYPECHECKED; {
       tc := cast(*Message_Typechecked) message;
@@ -62,8 +69,13 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             case; compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader",
                             make_location(ctx.main_fn.header));
           }
-          
+
           add_build_string(s, p.workspace);
+          if plugin.output_shaders {
+            ext := tprint("%", ctx.language);
+            to_lower_in_place(ext);
+            write_entire_file(tprint("output_%.%", ctx.name, ext), s);
+          }
           remove ctx;
         }
       }
