@@ -11,10 +11,13 @@ jai_to_shader_plugin: *Metaprogram_Plugin;
 
 #run build();
 build :: () {
+  text_output_flags := get_build_options().text_output_flags;
+  
   w := compiler_create_workspace("Shaders");
   
   options := get_build_options(w);
   options.output_executable_name = "Shaders";
+  options.text_output_flags = text_output_flags;
   set_build_options(options, w);
   
   jai_to_shader_plugin = get_plugin();
