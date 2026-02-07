@@ -7,14 +7,14 @@ Input :: #import "Input";
 #import,file "../Jai_To_Shader.jai";
 
 #load "glsl_shaders.jai";
-#load "backend.jai";
+#load "example_gl_backend.jai";
 
 main :: () {
   window := create_window(1080, 720, "FancyTiles");
   load_gl(window);
 
-  print("Vertex Shader:\n%\n\n=========\n\n", tiles_vertex_shader_string);
-  print("Fragment Shader:\n%\n", tiles_fragment_shader_string);
+  log("Vertex Shader:\n%\n\n=========\n", tiles_vertex_shader_string);
+  log("Fragment Shader:\n%", tiles_fragment_shader_string);
 
   vao: u32;
   buffer: u32;
@@ -64,15 +64,12 @@ main :: () {
   }
   glGetShaderiv(frag_module, GL_COMPILE_STATUS, *err);
   if xx err == GL_FALSE {
-    print("Fragment Shader Compilation Failed:\n");
+    log_error("Fragment Shader Compilation Failed:");
     length: u32;
     glGetShaderiv(frag_module, GL_INFO_LOG_LENGTH, xx *length);
     info: *GLchar = alloc(length * size_of(GLchar));
     glGetShaderInfoLog(frag_module, length, xx 0, info);
-    info_str: string;
-    info_str.data = xx info;
-    info_str.count = length;
-    print("%\n", info_str);
+    log_error("%", string.{ length, info });
     free(info);
     exit(1);
   }
@@ -82,15 +79,12 @@ main :: () {
   glLinkProgram(shader);
   glGetProgramiv(shader, GL_LINK_STATUS, *err);
   if xx err == GL_FALSE {
-    print("Program Linking Failed:\n");
+    log_error("Program Linking Failed:");
     length: u32;
     glGetProgramiv(shader, GL_INFO_LOG_LENGTH, xx *length);
     info: *GLchar = alloc(length * size_of(GLchar));
     glGetProgramInfoLog(shader, length, xx 0, info);
-    info_str: string;
-    info_str.data = xx info;
-    info_str.count = length;
-    print("%", info_str);
+    log_error("%", string.{ length, info });
     free(info);
     exit(1);
   }

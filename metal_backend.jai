@@ -15,9 +15,7 @@ write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bo
 }
 
 print_metal_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: Code_Procedure_Header) {
-  append(sb, "/* TODO: print_metal_function: ");
-  append(sb, fn.name);
-  append(sb, " */");
+  append(sb, "/* TODO: print_metal_function: ", fn.name, " */");
 }
 
 print_metal_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder, pc: *Code_Procedure_Call) {

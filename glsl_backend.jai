@@ -63,9 +63,7 @@ write_glsl_fragment_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure
 
 write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
   sb: String_Builder;
-  append(*sb, tprint("%_string", node.header.name));
-  append(*sb, " :: #string END\n");
-  append(*sb, GLSL_VERSION);
+  append(*sb, tprint("%_string", node.header.name), " :: #string END\n", GLSL_VERSION);
   print_glsl_in_vars(*sb, node.header, output_layout=false);
   print_glsl_uniforms(*sb, node.header);
   print_glsl_out_vars(*sb, node.header);
@@ -76,8 +74,7 @@ write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bod
   append(*sb, "\n");
   // Output code
   for ctx.functions {
-    append(*sb, it.code);
-    append(*sb, "\n");
+    append(*sb, it.code, "\n");
   }
   append(*sb, "\nEND");
 
@@ -155,8 +152,7 @@ print_glsl_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
     else
       print_glsl_type(sb, it.expression.type);
     
-    append(sb, " ");
-    append(sb, it.name);
+    append(sb, " ", it.name);
     
     if it_index != header.arguments.count-1 append(sb, ", ");
   }
@@ -165,8 +161,7 @@ print_glsl_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
 
 print_glsl_member_with_typename :: (sb: *String_Builder, thing: *Type_Info_Struct_Member) {
   print_glsl_type(sb, thing.type);
-  append(sb, " ");
-  append(sb, thing.name);
+  append(sb, " ", thing.name);
 }
 
 print_glsl_type :: (sb: *String_Builder, type: *Type_Info) {
@@ -206,8 +201,7 @@ print_glsl_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
           print_glsl_type(sb, op.type_inst.result);
         else
           print_glsl_type(sb, op.expression.type);
-        append(sb, " ");
-        append(sb, op.name);
+        append(sb, " ", op.name);
         
         if op.expression {
           append(sb, " = ");
@@ -219,10 +213,7 @@ print_glsl_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
       case .BINARY_OPERATOR; {
         op := cast(*Code_Binary_Operator) it;
         add_indents(sb, indent);
-        
-        print_glsl_expr(ctx, sb, op.left);
-        append(sb, " ", operator_string(op.operator_type), " ");
-        print_glsl_expr(ctx, sb, op.right);
+        print_glsl_binary_operator(ctx, sb, op);
         append(sb, ";\n");
       }
       
@@ -323,16 +314,12 @@ print_glsl_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
         if op.for_flags & .POINTER
           compiler_report("Iteration by Pointers is disallowed in Jai Shaders", make_location(op));
         
-        append(sb, "for (int ");
-        append(sb, op.ident_decl.name);
-        append(sb, " = ");
+        append(sb, "for (int ", op.ident_decl.name, " = ");
         print_glsl_expr(ctx, sb, op.iteration_expression);
-        append(sb, "; ");
-        append(sb, op.ident_decl.name);
+        append(sb, "; ", op.ident_decl.name);
         append(sb, ifx op.for_flags & .REVERSE then " > " else " < ");
         print_glsl_expr(ctx, sb, op.iteration_expression_right);
-        append(sb, "; ");
-        append(sb, op.ident_decl.name);
+        append(sb, "; ", op.ident_decl.name);
         append(sb, ifx op.for_flags & .REVERSE then " -= 1) {\n" else " += 1) {\n");
         print_glsl_stmt(ctx, sb, op.block, indent=indent+1);
         add_indents(sb, indent);
@@ -412,9 +399,7 @@ print_glsl_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node:
 
     case .BINARY_OPERATOR; {
       bn := cast(*Code_Binary_Operator) node;
-      print_glsl_expr(ctx, sb, bn.left);
-      append(sb, " ", operator_string(bn.operator_type), " ");
-      print_glsl_expr(ctx, sb, bn.right);
+      print_glsl_binary_operator(ctx, sb, bn);
     }
     
     case .PROCEDURE_CALL; {
@@ -430,6 +415,13 @@ print_glsl_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node:
     
     case; PP.print_expression(sb, node);
   }
+}
+
+print_glsl_binary_operator :: (ctx: *Shader_Write_Context, sb: *String_Builder, bn: *Code_Binary_Operator) {
+  print_glsl_expr(ctx, sb, bn.left);
+  space: string = ifx cast(u8)bn.operator_type == "." then "" else " ";
+  append(sb, space, operator_string(bn.operator_type), space);
+  print_glsl_expr(ctx, sb, bn.right);
 }
 
 print_glsl_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder, pc: *Code_Procedure_Call) {
@@ -461,8 +453,7 @@ print_glsl_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: Cod
     else
       print_glsl_type(sb, it.expression.type);
     
-    append(sb, " ");
-    append(sb, it.name);
+    append(sb, " ", it.name);
     
     if it_index != fn.arguments.count-1 append(sb, ", ");
   }

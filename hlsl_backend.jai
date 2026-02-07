@@ -216,9 +216,7 @@ print_hlsl_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
     else
       print_hlsl_type(sb, it.expression.type);
     
-    append(sb, " ");
-    append(sb, it.name);
-    
+    append(sb, " ", it.name);
     if it_index != header.arguments.count-1 append(sb, ", ");
   }
   append(sb, ");\n");
