@@ -6,12 +6,11 @@
 
 #import "Metaprogram_Plugins";
 
-#load "Jai_To_Shader.jai";
+#import,file "Jai_To_Shader.jai";
 
-jai_to_shader_plugin: *Metaprogram_Plugin;
 OUTPUT_EXE_NAME :: "Shaders";
 
-#run build();
+#run,stallable build();
 build :: () {
   set_build_options_dc(.{do_output=false, write_added_strings=false});
 
@@ -25,27 +24,30 @@ build :: () {
   options.text_output_flags = text_output_flags;
   set_build_options(options, w);
 
-  jai_to_shader_plugin = get_plugin();
+  jai_to_shader_plugin := get_plugin();
   jai_to_shader_plugin.workspace = w;
+
+  autorun := false;
+  for command_line_opts.compile_time_command_line {
+      if it == {
+        case "-run"; autorun = true;
+        case "-output_shaders"; jai_to_shader_plugin.output_shaders = true;
+      }
+  }
 
   compiler_begin_intercept(w);
   add_build_file("./src/glsl_example.jai", w);
-  message_loop(w);
+  message_loop(w, jai_to_shader_plugin);
   compiler_end_intercept(w);
-
-  for command_line_opts.compile_time_command_line {
-      if it == "-run" {
-          run_command(OUTPUT_EXE_NAME);
-      }
+  if autorun {
+    run_command(OUTPUT_EXE_NAME);
   }
 }
 
-message_loop :: (w: Workspace) {
+message_loop :: (w: Workspace, plugin: *Metaprogram_Plugin) {
   while true {
     message := compiler_wait_for_message();
-
-    convert_procs(jai_to_shader_plugin, message);
-
+    plugin.message(plugin, message);
     if message.kind == .COMPLETE break;
   }
 }
