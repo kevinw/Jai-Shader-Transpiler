@@ -8,10 +8,11 @@
 
 // Think about:
 // Changing GLSL version without changing module code.
-
+// Adding #line directive for shader debuggers to point back at the original Jai file
 
 #load "glsl_backend.jai";
 #load "hlsl_backend.jai";
+#load "metal_backend.jai";
 
 get_plugin :: () -> *Metaprogram_Plugin {
   p := New(Metaprogram_Plugin);
@@ -26,42 +27,15 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
   if message.kind == {
     case .TYPECHECKED; {
       tc := cast(*Message_Typechecked) message;
-      
       for tc.procedure_bodies {
-
-        // Has a GLSL Note
+        // Has a @glsl Note
         if proc_has_note(it.expression.header, "glsl") {
-          ctx: Shader_Write_Context;
-          ctx.main_fn = it.expression;
-          ctx.language = .GLSL;
-          ctx.name = it.expression.header.name;
-          if proc_has_note(it.expression.header, "vertex_shader") {
-            ctx.type = .Vertex;
-          } else if proc_has_note(it.expression.header, "fragment_shader") {
-            ctx.type = .Fragment;
-          } else {
-            compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader",
-                            make_location(it.expression.header));
-          }
-          array_add(*currently_waiting_contexts, ctx);
+          array_add(*currently_waiting_contexts, create_shader_write_context(.GLSL, it.expression));
         }
         
-        // Has a HLSL Note
+        // Has a @hlsl Note
         if proc_has_note(it.expression.header, "hlsl") {
-          ctx: Shader_Write_Context;
-          ctx.main_fn = it.expression;
-          ctx.language = .HLSL;
-          ctx.name = it.expression.header.name;
-          
-          if proc_has_note(it.expression.header, "vertex_shader") {
-            ctx.type = .Vertex;
-          } else if proc_has_note(it.expression.header, "fragment_shader") {
-            ctx.type = .Fragment;
-          } else {
-            compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader",
-                            make_location(it.expression.header));
-          }
-          array_add(*currently_waiting_contexts, ctx);
+          array_add(*currently_waiting_contexts, create_shader_write_context(.HLSL, it.expression));
         }
 
         // Has neither GLSL nor HLSL Notes, but has a vertex_shader or fragment_shader note
@@ -72,8 +46,6 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
                             make_location(it.expression.header));
           }
         }
-
-
       }
     }
     
@@ -84,8 +56,9 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           
           s: string;
           if ctx.type == {
-            case .Vertex;   s = write_vertex_shader(ctx, ctx.main_fn);
+            case .Vertex;   s = write_vertex_shader  (ctx, ctx.main_fn);
             case .Fragment; s = write_fragment_shader(ctx, ctx.main_fn);
+            case .Compute;  s = write_compute_shader (ctx, ctx.main_fn);
             case; compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader",
                             make_location(ctx.main_fn.header));
           }
@@ -106,7 +79,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 }
 
 write_vertex_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  print("Converting Vertex Shader: %\n", node.header.name);
+  log("Converting Vertex Shader: %", node.header.name);
   
   if ctx.language == {
     case .GLSL; return write_glsl_vertex_shader(ctx, node);
@@ -117,11 +90,24 @@ write_vertex_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) 
 }
 
 write_fragment_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  print("Converting Fragment Shader: %\n", node.header.name);
+  log("Converting Fragment Shader: %", node.header.name);
   
   if ctx.language == {
-    case .GLSL; return write_glsl_fragment_shader(ctx, node);
-    case .HLSL; return write_hlsl_fragment_shader(ctx, node);
+    case .GLSL;  return write_glsl_fragment_shader(ctx, node);
+    case .HLSL;  return write_hlsl_fragment_shader(ctx, node);
+    case .METAL; return write_metal_fragment_shader(ctx, node);
+  }
+  
+  return "";
+}
+
+write_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+  log("Converting Compute Shader: %", node.header.name);
+  
+  if ctx.language == {
+    case .GLSL;  return write_glsl_compute_shader(ctx, node);
+    case .HLSL;  return write_hlsl_compute_shader(ctx, node);
+    case .METAL; return write_metal_compute_shader(ctx, node);
   }
   
   return "";
@@ -129,22 +115,25 @@ write_fragment_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body
 
 write_procedure_call :: (ctx: *Shader_Write_Context, node: *String_Builder, pc: *Code_Procedure_Call) {
   if ctx.language == {
-    case .GLSL; print_glsl_procedure_call(ctx, node, pc);
-    case .HLSL; print_hlsl_procedure_call(ctx, node, pc);
+    case .GLSL;  print_glsl_procedure_call (ctx, node, pc);
+    case .HLSL;  print_hlsl_procedure_call (ctx, node, pc);
+    case .METAL; print_metal_procedure_call(ctx, node, pc);
   }
 }
 
 write_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, called_fn: *Code_Procedure_Header) {
   if ctx.language == {
-    case .GLSL; print_glsl_function(ctx, sb, called_fn);
-    case .HLSL; print_hlsl_function(ctx, sb, called_fn);
+    case .GLSL;  print_glsl_function (ctx, sb, called_fn);
+    case .HLSL;  print_hlsl_function (ctx, sb, called_fn);
+    case .METAL; print_metal_function(ctx, sb, called_fn);
   }
 }
 
 write_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
   if ctx.language == {
-    case .GLSL; return write_glsl_shader_code(ctx, node);
-    case .HLSL; return write_hlsl_shader_code(ctx, node);
+    case .GLSL;  return write_glsl_shader_code (ctx, node);
+    case .HLSL;  return write_hlsl_shader_code (ctx, node);
+    case .METAL; return write_metal_shader_code(ctx, node);
   }
 
   return "";
@@ -252,12 +241,14 @@ Sampler3D :: #type,distinct s32;
 Shader_Type :: enum {
   Vertex;
   Fragment;
+  Compute;
 }
 
 Shader_Language :: enum {
   NONE;
   GLSL;
   HLSL;
+  METAL;
 }
 
 Shader_Function :: struct {
@@ -283,9 +274,31 @@ PP :: #import "Program_Print";
 #import "Math";
 #import "Hash_Table";
 
+append :: inline (builder: *String_Builder, strings: ..string) {
+  for strings {
+    append(builder, it.data, it.count);
+  }
+}
+
 #scope_file
 
 proc_has_note :: (node: *Code_Procedure_Header, note: string) -> bool {
   for node.notes if it.text == note return true;
   return false;
+}
+
+create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure_Body) -> Shader_Write_Context {
+    shader_type: Shader_Type;
+    if      proc_has_note(proc.header, "vertex_shader")    shader_type = .Vertex;
+    else if proc_has_note(proc.header, "fragment_shader")  shader_type = .Fragment;
+    else if proc_has_note(proc.header, "compute_shader")   shader_type = .Compute;
+    else
+      compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader", make_location(proc.header));
+    
+    return {
+        name = proc.header.name,
+        type = shader_type,
+        language = language,
+        main_fn = proc,
+    };
 }

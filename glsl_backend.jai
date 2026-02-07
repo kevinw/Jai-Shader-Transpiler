@@ -6,6 +6,25 @@ GLSL_VERSION :: "#version 330 core\n";
 // The functions are appended onto the functions list, and then the for loop runs to push onto
 // the main builder
 
+write_glsl_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+  if node.header.returns.count != 1
+    compiler_report("GLSL Backend: Jai Compute Shader must return a structure with at least a Vector4 gl_Position field", make_location(node.header));
+  if node.header.arguments.count != 2
+    compiler_report("GLSL Backend: Jai Compute Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(node.header));
+  if node.header.parameter_usings.count != 2
+    compiler_report("GLSL Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(node.header));
+
+  // main function string builder
+  main_sb: String_Builder;
+  append(*main_sb, "void main() {\n");
+  print_glsl_stmt(ctx, *main_sb, node.block, is_main=true);
+  append(*main_sb, "}\n");
+  array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
+  
+  return write_glsl_shader_code(ctx, node);
+}
+
+
 write_glsl_vertex_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
   if node.header.returns.count != 1
     compiler_report("GLSL Backend: Jai Vertex Shader must return a structure with at least a Vector4 gl_Position field", make_location(node.header));
@@ -198,19 +217,18 @@ print_glsl_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
       }
       
       case .BINARY_OPERATOR; {
-        add_indents(sb, indent);
         op := cast(*Code_Binary_Operator) it;
+        add_indents(sb, indent);
         
         print_glsl_expr(ctx, sb, op.left);
-        append(sb, operator_string(op.operator_type));
+        append(sb, " ", operator_string(op.operator_type), " ");
         print_glsl_expr(ctx, sb, op.right);
         append(sb, ";\n");
       }
       
       case .IF; {
-        add_indents(sb, indent);
-        
         op := cast(*Code_If) it;
+        add_indents(sb, indent);
         
         if op.if_flags & .IS_SWITCH_STATEMENT {
           // GLSL switches only allow Integers for some reason, so we'll transpile other
@@ -395,7 +413,7 @@ print_glsl_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node:
     case .BINARY_OPERATOR; {
       bn := cast(*Code_Binary_Operator) node;
       print_glsl_expr(ctx, sb, bn.left);
-      append(sb, operator_string(bn.operator_type));
+      append(sb, " ", operator_string(bn.operator_type), " ");
       print_glsl_expr(ctx, sb, bn.right);
     }
     

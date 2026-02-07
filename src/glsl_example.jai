@@ -4,8 +4,7 @@ Input :: #import "Input";
 #import "Window_Creation";
 #import "GL";
 
-// This should be an import for actual apps
-#load "../Jai_To_Shader.jai";
+#import,file "../Jai_To_Shader.jai";
 
 #load "glsl_shaders.jai";
 #load "backend.jai";
