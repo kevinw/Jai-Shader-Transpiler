@@ -212,7 +212,7 @@ print_glsl_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
         
         op := cast(*Code_If) it;
         
-        if op.is_switch_statement {
+        if op.if_flags & .IS_SWITCH_STATEMENT {
           // GLSL switches only allow Integers for some reason, so we'll transpile other
           // things as a simple if-else chain
           if op.condition.type.type == .INTEGER {
@@ -489,7 +489,7 @@ jai_to_glsl_type_map :: #run -> Table(string, string) {
   return ret;
 }
 jai_to_glsl_type_name :: (in: string) -> string {
-  val, success := table_find(*jai_to_glsl_type_map, in);
+  success, val := table_find(*jai_to_glsl_type_map, in);
   return ifx success then val else in;
 }
 
@@ -691,10 +691,6 @@ texture :: (sampler: $T, point: $S, bias: float = 0) -> Vector4 {
 
 //~ Types and Helpers for GLSL
 
-
-operator * :: (a: Matrix2, b: Vector2) -> Vector2 {
-    return inline multiply(a, b);
-}
 
 #scope_file
 

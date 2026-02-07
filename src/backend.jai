@@ -19,13 +19,15 @@
     the_gl_fbc: GLXFBConfig;
 
     #import "X11";
-} else {
-    the_gl_context: *NSOpenGLContext;
-
+} else #if OS == .MACOS {
     #import "Objective_C";
+    #import "Objective_C/AppKit";
+    the_gl_context: *NSOpenGLContext;
+} else {
+    #assert false "Todo implement for this OS";
 }
 
-load_gl :: (window : *Window_Type) {
+load_gl :: (window : Window_Type) {
     do_first_time_init := false;
     
     if the_gl_context {
@@ -95,7 +97,7 @@ swap_buffers :: (window: Window_Type, vsync := true) {
     } else #if OS == .MACOS {
         // On macOS, OpenGL buffer swapping is done on the context, not on the view.
         // So we can only swap for the active window. (And you need to swap before switching to another view).
-        assert(window == state.current_window_info.window);
+        assert(window == window);
         NSOpenGLContext.flushBuffer(the_gl_context);
     } else {
         assert(false);
