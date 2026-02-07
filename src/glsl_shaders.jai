@@ -33,6 +33,12 @@ FragmentShader_Out :: struct {
 
 tiles_fragment_shader :: (using in : VertexShader_Out, using un : FragmentShader_Uniforms) -> FragmentShader_Out {
   using out: FragmentShader_Out;
+  
+  positions := Vector2.[
+      { 0.0,  0.5},
+      {-0.5, -0.5},
+      { 0.5, -0.5}
+  ];
 
   aspect_ratio := u_resolution.y / u_resolution.x;
   uv := Vector2.{ gl_FragCoord.x, gl_FragCoord.y } / u_resolution.x;
