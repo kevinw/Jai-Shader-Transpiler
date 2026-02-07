@@ -239,7 +239,7 @@ print_hlsl_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
         
         op := cast(*Code_If) it;
         
-        if op.is_switch_statement {
+        if op.if_flags & .IS_SWITCH_STATEMENT {
           // GLSL switches only allow Integers for some reason, so we'll transpile other
           // things as a simple if-else chain
           // Unsure about HLSL so I'll keep this in unless required to change
@@ -524,7 +524,7 @@ jai_to_hlsl_type_map :: #run -> Table(string, string) {
   return ret;
 }
 jai_to_hlsl_type_name :: (in: string) -> string {
-  val, success := table_find(*jai_to_hlsl_type_map, in);
+  success, val := table_find(*jai_to_hlsl_type_map, in);
   return ifx success then val else in;
 }
 

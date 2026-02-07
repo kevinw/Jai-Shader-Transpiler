@@ -177,8 +177,8 @@ handle_custom_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder
 
 // @whatthefuckisthis im 99% sure there's a simpler way of converting an int to a string directly.
 // or atleast printing it as a character, because the first switch is.... yikes
-operator_string :: (op : s32) -> string {
-  if op == {
+operator_string :: (op: Operator_Type) -> string {
+  if cast(u8)op == {
     case #char "="; return "=";
     case #char "<"; return "<";
     case #char "?"; return "?";
@@ -192,7 +192,8 @@ operator_string :: (op : s32) -> string {
     case #char "~"; return "~";
     case #char "."; return ".";
   }
-  if cast(Operator_Type)op == {
+
+  if op == {
     case .PLUS_ASSIGN; return "+=";
     case .MINUS_ASSIGN; return "-=";
     case .TIMES_ASSIGN; return "*=";
@@ -223,7 +224,6 @@ operator_string :: (op : s32) -> string {
     // case .LOGICAL_OR_ASSIGN; return "||=";
     
     //case ARRAY_SUBSCRIPT; return "[]";
-    
     case; return "<operator_not_supported>";
   }
 }
@@ -289,4 +289,3 @@ proc_has_note :: (node: *Code_Procedure_Header, note: string) -> bool {
   for node.notes if it.text == note return true;
   return false;
 }
-
