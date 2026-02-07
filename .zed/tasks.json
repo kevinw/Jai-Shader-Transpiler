@@ -1,0 +1,6 @@
+[
+  {
+    "command": "jai -quiet build.jai - -run",
+    "label": "Build and run",
+  },
+]
