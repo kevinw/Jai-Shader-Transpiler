@@ -20,7 +20,7 @@ build :: (build_file: string, output_exe_name: string) {
   command_line_opts := get_build_options();
   text_output_flags := command_line_opts.text_output_flags;
 
-  w := compiler_create_workspace("Shaders");
+  w := compiler_create_workspace(output_exe_name);
 
   options := get_build_options(w);
   options.output_executable_name = output_exe_name;

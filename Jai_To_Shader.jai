@@ -270,6 +270,16 @@ Shader_Write_Context :: struct {
   functions: [..] Shader_Function;
 }
 
+node_is_fragment_shader :: (node: *Code_Procedure_Header) -> bool {
+  for node.notes if it.text == "fragment_shader" return true;
+  return false;
+}
+
+member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
+  for member.notes if it == note return true;
+  return false;
+}
+
 
 #import "Basic";
 #import "Compiler";

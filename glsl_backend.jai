@@ -426,11 +426,6 @@ print_glsl_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: Cod
 
 #scope_file
 
-member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
-  for member.notes if it == note return true;
-  return false;
-}
-
 // This is some hardcoding, and is incomplete.
 // More types need to be added here
 jai_to_glsl_type_map :: #run -> Table(string, string) {

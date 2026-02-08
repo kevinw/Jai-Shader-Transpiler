@@ -511,16 +511,6 @@ check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Ty
 }
 
 
-node_is_fragment_shader :: (node: *Code_Procedure_Header) -> bool {
-  for node.notes if it.text == "fragment_shader" return true;
-  return false;
-}
-
-member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
-  for member.notes if it == note return true;
-  return false;
-}
-
 jai_to_metal_type_map :: #run -> Table(string, string) {
   ret: Table(string, string);
   table_add(*ret, "s32", "int");
