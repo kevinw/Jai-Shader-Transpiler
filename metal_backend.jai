@@ -1,4 +1,5 @@
 METAL_HEADER :: "#include <metal_stdlib>\nusing namespace metal;\n\n";
+METAL_UNIFORM_BUFFER_INDEX :: 0;
 
 METAL_RADIANS_HELPERS :: "inline float jai_radians(float v) { return v * 0.01745329251994329577f; }\ninline float2 jai_radians(float2 v) { return v * 0.01745329251994329577f; }\ninline float3 jai_radians(float3 v) { return v * 0.01745329251994329577f; }\ninline float4 jai_radians(float4 v) { return v * 0.01745329251994329577f; }\n\n";
 METAL_DEGREES_HELPERS :: "inline float jai_degrees(float v) { return v * 57.29577951308232088f; }\ninline float2 jai_degrees(float2 v) { return v * 57.29577951308232088f; }\ninline float3 jai_degrees(float3 v) { return v * 57.29577951308232088f; }\ninline float4 jai_degrees(float4 v) { return v * 57.29577951308232088f; }\n\n";
@@ -147,7 +148,7 @@ print_metal_stage_in_arg :: (sb: *String_Builder, arg: *Code_Declaration) {
 print_metal_uniform_arg :: (sb: *String_Builder, arg: *Code_Declaration) {
   append(sb, "constant ");
   print_metal_type(sb, arg.type_inst.result);
-  append(sb, "& ", arg.name, " [[buffer(0)]]");
+  append(sb, tprint("& % [[buffer(%)]]", arg.name, METAL_UNIFORM_BUFFER_INDEX));
 }
 
 print_metal_local_bindings :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Procedure_Header, indent: s64) {

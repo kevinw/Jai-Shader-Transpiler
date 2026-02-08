@@ -1,3 +1,4 @@
+Debug :: #import "Debug";
 #import "Basic";
 #import "Math";
 using,except(NO) SDL :: #import "SDL";
@@ -15,19 +16,9 @@ Fragment_Shader_Uniforms :: struct {
     _pad: float32;
 }
 
-log_nserror :: (label: string, error: *NSError) -> bool {
-    if error == null return false;
-    
-    log("logging error %", error);
-
-    ns_description := NSError.localizedDescription(error);
-    if ns_description {
-        log_error("%: %", label, to_string(NSString.UTF8String(ns_description)));
-    } else {
-        log_error("%: (NSError with no description)", label);
-    }
-    return true;
-}
+VERTEX_UNIFORM_BUFFER_INDEX    :: 0;
+VERTEX_ATTRIBUTE_BUFFER_INDEX  :: 1;
+FRAGMENT_UNIFORM_BUFFER_INDEX  :: 0;
 
 metal_example_with_window :: () -> (success: bool) {
     args_ok, args, is_set := parse_arguments(struct { singleframe: bool; });
@@ -126,8 +117,9 @@ metal_example_with_window :: () -> (success: bool) {
     attr0 := MTLVertexAttributeDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.attributes(vertex_desc), 0);
     MTLVertexAttributeDescriptor.setFormat(attr0, .MTLVertexFormatFloat2);
     MTLVertexAttributeDescriptor.setOffset(attr0, 0);
-    MTLVertexAttributeDescriptor.setBufferIndex(attr0, 0);
-    layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), 0);
+    // Convention: slot 0 is reserved for vertex-uniform bytes, slot 1 for vertex attributes.
+    MTLVertexAttributeDescriptor.setBufferIndex(attr0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+    layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), VERTEX_ATTRIBUTE_BUFFER_INDEX);
     MTLVertexBufferLayoutDescriptor.setStride(layout0, size_of(Vector2));
     MTLVertexBufferLayoutDescriptor.setStepFunction(layout0, .MTLVertexStepFunctionPerVertex);
     MTLVertexBufferLayoutDescriptor.setStepRate(layout0, 1);
@@ -208,9 +200,9 @@ metal_example_with_window :: () -> (success: bool) {
         command_buffer := MTLCommandQueue.commandBuffer(queue);
         encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
         MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
-        MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, 0);
-        MTLRenderCommandEncoder.setVertexBytes_length_atIndex(encoder, *dummy_uniform, 1, 0);
-        MTLRenderCommandEncoder.setFragmentBytes_length_atIndex(encoder, *uniforms, size_of(Fragment_Shader_Uniforms), 0);
+        MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+        MTLRenderCommandEncoder.setVertexBytes_length_atIndex(encoder, *dummy_uniform, 1, VERTEX_UNIFORM_BUFFER_INDEX);
+        MTLRenderCommandEncoder.setFragmentBytes_length_atIndex(encoder, *uniforms, size_of(Fragment_Shader_Uniforms), FRAGMENT_UNIFORM_BUFFER_INDEX);
         MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 6);
         MTLRenderCommandEncoder.endEncoding(encoder);
 
@@ -224,7 +216,22 @@ metal_example_with_window :: () -> (success: bool) {
     return true;
 }
 
+log_nserror :: (label: string, error: *NSError) -> bool {
+    if error == null return false;
+    
+    log("logging error %", error);
+
+    ns_description := NSError.localizedDescription(error);
+    if ns_description {
+        log_error("%: %", label, to_string(NSString.UTF8String(ns_description)));
+    } else {
+        log_error("%: (NSError with no description)", label);
+    }
+    return true;
+}
+
 main :: () {
+  Debug.init();
   if !metal_example_with_window() {
       exit(1);
   }
