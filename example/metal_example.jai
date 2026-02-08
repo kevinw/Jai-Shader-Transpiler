@@ -20,10 +20,54 @@ VERTEX_UNIFORM_BUFFER_INDEX    :: 0;
 VERTEX_ATTRIBUTE_BUFFER_INDEX  :: 1;
 FRAGMENT_UNIFORM_BUFFER_INDEX  :: 0;
 
+READBACK_SAMPLE_POINTS :: Vector2.[
+    .{ 0.5, 0.5 },
+    .{ 0.25, 0.25 },
+    .{ 0.75, 0.25 },
+    .{ 0.25, 0.75 },
+    .{ 0.75, 0.75 },
+];
+
+validate_metal_readback :: (pixels: *u8, bytes_per_row: NSUInteger, width: s32, height: s32) -> bool {
+    sample_count := READBACK_SAMPLE_POINTS.count;
+    non_black := 0;
+    min_luma: float32 = 999.0;
+    max_luma: float32 = -1.0;
+    sum_luma: float32 = 0;
+
+    for READBACK_SAMPLE_POINTS {
+        px := clamp(cast(s32) floor(it.x * xx width), 0, width-1);
+        py := clamp(cast(s32) floor(it.y * xx height), 0, height-1);
+
+        offset := cast(s64) py * cast(s64) bytes_per_row + cast(s64) px * 4;
+        p := pixels + offset;
+        r := xx p[0] / 255.0;
+        g := xx p[1] / 255.0;
+        b := xx p[2] / 255.0;
+        luma := cast(float32) (0.2126 * r + 0.7152 * g + 0.0722 * b);
+
+        if luma > 0.02 non_black += 1;
+        min_luma = min(min_luma, luma);
+        max_luma = max(max_luma, luma);
+        sum_luma += luma;
+    }
+
+    avg_luma := sum_luma / xx sample_count;
+    log("READBACK_SUMMARY backend=metal samples=% non_black=% avg_luma=% min_luma=% max_luma=%",
+        sample_count, non_black, avg_luma, min_luma, max_luma);
+
+    ok := (non_black >= 2) && (max_luma > 0.05) && ((max_luma - min_luma) > 0.02);
+    if !ok {
+        log_error("READBACK_FAIL backend=metal");
+    }
+    return ok;
+}
+
 metal_example_with_window :: () -> (success: bool) {
-    args_ok, args, is_set := parse_arguments(struct { singleframe: bool; });
+    args_ok, args, is_set := parse_arguments(struct { singleframe: bool; test_readback: bool; });
     singleframe := args_ok && is_set.singleframe;
-    max_frames := ifx singleframe then 1 else 0x7FFF_FFFF_FFFF_FFFF;
+    test_readback := args_ok && is_set.test_readback;
+    max_frames := ifx (singleframe || test_readback) then 1 else 0x7FFF_FFFF_FFFF_FFFF;
   
     init_objective_c();
     init_metal();
@@ -165,6 +209,7 @@ metal_example_with_window :: () -> (success: bool) {
         dt := to_float64_seconds(end - start);
         start = current_time_consensus();
         time_value += xx dt;
+        if test_readback time_value = 1.0;
 
         event: SDL_Event;
         while SDL_PollEvent(*event) {
@@ -206,8 +251,36 @@ metal_example_with_window :: () -> (success: bool) {
         MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 6);
         MTLRenderCommandEncoder.endEncoding(encoder);
 
+        readback_pixels: *void = null;
+        readback_size: s64 = 0;
+        readback_bytes_per_row: NSUInteger = 0;
+        readback_width: s32 = 0;
+        readback_height: s32 = 0;
+        if test_readback {
+            readback_width = cast(s32) drawable_size.width;
+            readback_height = cast(s32) drawable_size.height;
+            readback_bytes_per_row = cast(NSUInteger) readback_width * 4;
+            readback_size = cast(s64) readback_bytes_per_row * readback_height;
+            readback_pixels = alloc(readback_size);
+            if !readback_pixels {
+                log_error("Failed to allocate Metal readback pixels");
+                return false;
+            }
+            defer free(readback_pixels);
+        }
+
         MTLCommandBuffer.presentDrawable(command_buffer, xx drawable);
         MTLCommandBuffer.commit(command_buffer);
+        if test_readback {
+            MTLCommandBuffer.waitUntilCompleted(command_buffer);
+            tex := cast(*MTLTexture) CAMetalDrawable.texture(drawable);
+            region := MTLRegionMake2D(0, 0, cast(NSUInteger) readback_width, cast(NSUInteger) readback_height);
+            MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(tex, readback_pixels, readback_bytes_per_row, region, 0);
+            pixel_data := cast(*u8) readback_pixels;
+            if !validate_metal_readback(pixel_data, readback_bytes_per_row, readback_width, readback_height) {
+                return false;
+            }
+        }
         end = current_time_consensus();
         
         frame_index += 1;

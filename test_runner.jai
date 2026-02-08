@@ -30,8 +30,8 @@ run_all_tests :: () {
   compile_generated_glsl_shaders();
   
   // run example programs with the generated shaders to check they work at runtime (not just compile time).
-  run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe"]);
-  run_command_checked("Run Metal example", .["./metal_example", "-singleframe"]);
+  run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe", "-test_readback"]);
+  run_command_checked("Run Metal example", .["./metal_example", "-singleframe", "-test_readback"]);
 
   log("Array shader checks passed. Metal and GLSL files compile.");
 }
