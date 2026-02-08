@@ -14,7 +14,7 @@ tiles_vertex_shader_vk :: (using in: VertexShaderVk_In, using un: VertexShaderVk
   using out: VertexShaderVk_Out;
   gl_Position = Vector4.{ a_pos.x, a_pos.y, 0.0, 1.0 };
   return out;
-} @vulkan @vertex_shader
+} @vertex_shader
 
 FragmentShaderVk_Uniforms :: struct {
   u_resolution: Vector2;
@@ -47,7 +47,7 @@ tiles_fragment_shader_vk :: (using in: VertexShaderVk_Out, using un: FragmentSha
   out_color = Vector4.{ pow(value, 2.0), pow(value, 1.5), pow(value, 1.2), 1.0 };
 
   return out;
-} @vulkan @fragment_shader
+} @fragment_shader
 
 ComputeVk_In :: struct {
   thread_id: UVector3; @thread_position_in_grid
@@ -57,4 +57,4 @@ compute_write_indices_vk :: (using in: ComputeVk_In, values: *u32) {
   if thread_id.x < 64 {
     values[thread_id.x] = thread_id.x;
   }
-} @vulkan @compute_shader
+} @compute_shader

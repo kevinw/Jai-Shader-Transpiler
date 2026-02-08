@@ -6,4 +6,4 @@ compute_write_indices :: (using in: Compute_Test_In, values: *u32) {
   if thread_id.x < 64 {
     values[thread_id.x] = thread_id.x;
   }
-} @metal @glsl @compute_shader
+} @compute_shader

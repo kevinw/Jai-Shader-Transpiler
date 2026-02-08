@@ -11,6 +11,10 @@ using Vulkan;
 #load "vulkan_shaders.jai";
 #load "example_common.jai";
 
+_request_tiles_vertex_vulkan :: tiles_vertex_shader_vk; @shader_to_vulkan
+_request_tiles_fragment_vulkan :: tiles_fragment_shader_vk; @shader_to_vulkan
+_request_compute_vulkan :: compute_write_indices_vk; @shader_to_vulkan
+
 SDL_Vulkan_LoadLibrary :: (path: *u8) -> s32 #foreign SDL2;
 SDL_Vulkan_UnloadLibrary :: () #foreign SDL2;
 SDL_Vulkan_GetInstanceExtensions :: (window: *SDL_Window, pCount: *u32, pNames: **u8) -> SDL_bool #foreign SDL2;

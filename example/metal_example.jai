@@ -12,6 +12,12 @@ Debug :: #import "Debug";
 #load "compute_shader_tests.jai";
 #load "example_common.jai";
 
+_request_tiles_vertex_metal :: tiles_vertex_shader; @shader_to_metal
+_request_tiles_fragment_metal :: tiles_fragment_shader; @shader_to_metal
+_request_array_vertex_metal :: array_support_vertex_shader; @shader_to_metal
+_request_array_fragment_metal :: array_support_fragment_shader; @shader_to_metal
+_request_compute_metal :: compute_write_indices; @shader_to_metal
+
 Fragment_Shader_Uniforms :: struct {
     u_resolution: Vector2;
     u_time: float32;
@@ -158,8 +164,6 @@ metal_example_with_window :: () -> (success: bool) {
     // Force array support test shaders to typecheck and generate.
     _ := array_support_vertex_shader(.{}, .{});
     _ = array_support_fragment_shader(.{}, .{});
-    _ = array_support_vertex_shader_string;
-    _ = array_support_fragment_shader_string;
     _ = array_support_vertex_shader_metal_string;
     _ = array_support_fragment_shader_metal_string;
 

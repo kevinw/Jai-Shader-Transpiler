@@ -25,7 +25,7 @@ array_support_vertex_shader :: (using in: Array_Test_Vertex_In, using un: Array_
   sample_offset = positions[0] + u_offsets[1];
   gl_Position = Vector4.{ a_pos.x + positions[2].x, a_pos.y + u_offsets[2].y, 0.0, 1.0 };
   return out;
-} @glsl @metal @vertex_shader
+} @vertex_shader
 
 
 Array_Test_Fragment_Uniforms :: struct {
@@ -46,4 +46,4 @@ array_support_fragment_shader :: (using in: Array_Test_Vertex_Out, using un: Arr
 
   out_color = local_palette[0] * (sample_offset.x + 0.5) + u_palette[1] * 0.5;
   return out;
-} @glsl @metal @fragment_shader
+} @fragment_shader

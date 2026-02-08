@@ -13,6 +13,12 @@ Input :: #import "Input";
 #load "example_gl_backend.jai";
 #load "example_common.jai";
 
+_request_tiles_vertex_glsl :: tiles_vertex_shader; @shader_to_glsl
+_request_tiles_fragment_glsl :: tiles_fragment_shader; @shader_to_glsl
+_request_array_vertex_glsl :: array_support_vertex_shader; @shader_to_glsl
+_request_array_fragment_glsl :: array_support_fragment_shader; @shader_to_glsl
+_request_compute_glsl :: compute_write_indices; @shader_to_glsl
+
 run_gl_compute_sanity_check :: () -> bool {
   #if OS == .MACOS {
     log("Skipping GLSL compute runtime check on macOS (OpenGL 4.1 does not support compute shaders).");

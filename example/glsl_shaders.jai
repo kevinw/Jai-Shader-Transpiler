@@ -19,7 +19,7 @@ tiles_vertex_shader :: (using in : VertexShader_In, using un : VertexShader_Unif
   gl_Position = Vector4.{ a_pos.x, a_pos.y, 0.0, 1.0 };
   
   return out;
-} @glsl @metal @vertex_shader
+} @vertex_shader
 
 
 //~ Fragment Shader
@@ -55,4 +55,4 @@ tiles_fragment_shader :: (using in : VertexShader_Out, using un : FragmentShader
   out_color = Vector4.{ pow(value, 2.0), pow(value, 1.5), pow(value, 1.2), 1.0 };
 
   return out;
-} @glsl @metal @fragment_shader
+} @fragment_shader

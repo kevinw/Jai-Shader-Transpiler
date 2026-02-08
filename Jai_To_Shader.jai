@@ -22,6 +22,7 @@ Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
     output_shaders: bool;
     currently_waiting_contexts: [..] Shader_Write_Context;
+    pending_request_declarations: [..] *Code_Declaration;
 }
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
@@ -38,33 +39,14 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
   if message.kind == {
     case .TYPECHECKED; {
       tc := cast(*Message_Typechecked) message;
-      for tc.procedure_bodies {
-        // Has a @glsl or @vulkan Note
-        if proc_has_note(it.expression.header, "glsl") || proc_has_note(it.expression.header, "vulkan") {
-          array_add(*plugin.currently_waiting_contexts, create_shader_write_context(.GLSL, it.expression));
-        }
-        
-        // Has a @hlsl Note
-        if proc_has_note(it.expression.header, "hlsl") {
-          array_add(*plugin.currently_waiting_contexts, create_shader_write_context(.HLSL, it.expression));
-        }
+      for tc.declarations {
+        resolved := collect_shader_requests_from_declaration(plugin, it.expression, tc.procedure_bodies);
+        if !resolved add_pending_request_declaration(plugin, it.expression);
+      }
 
-        // Has a @metal Note
-        if proc_has_note(it.expression.header, "metal") {
-          array_add(*plugin.currently_waiting_contexts, create_shader_write_context(.METAL, it.expression));
-        }
-
-        // Has no language note, but has a shader-stage note.
-        if !(proc_has_note(it.expression.header, "glsl") ||
-             proc_has_note(it.expression.header, "vulkan") ||
-             proc_has_note(it.expression.header, "hlsl") ||
-             proc_has_note(it.expression.header, "metal")) {
-          if proc_has_note(it.expression.header, "vertex_shader") ||
-             proc_has_note(it.expression.header, "fragment_shader") ||
-             proc_has_note(it.expression.header, "compute_shader") {
-            compiler_report("Jai Shader Transpiler: No Tag that maps to a language. Add @glsl/@vulkan, @hlsl, or @metal to specify the language",
-                            make_location(it.expression.header));
-          }
+      for plugin.pending_request_declarations {
+        if collect_shader_requests_from_declaration(plugin, it, tc.procedure_bodies) {
+          remove it;
         }
       }
     }
@@ -109,8 +91,95 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
         compiler_report("Jai Shader Transpiler: Something went wrong while converting Jai Shaders to shader code.\nThere's some functions that have not yet been transpiled, that a shader is waiting on. This is not good.");
       }
       array_reset(*plugin.currently_waiting_contexts);
+      array_reset(*plugin.pending_request_declarations);
     }
   }
+}
+
+shader_request_name_to_language :: (name: string) -> (Shader_Language, GLSL_Target, bool) {
+  if name == {
+    case "shader_to_glsl";   return .GLSL, .OPENGL, true;
+    case "shader_to_vulkan"; return .GLSL, .VULKAN, true;
+    case "shader_to_hlsl";   return .HLSL, .OPENGL, true;
+    case "shader_to_metal";  return .METAL, .OPENGL, true;
+    case; return .NONE, .OPENGL, false;
+  }
+}
+
+context_already_queued :: (plugin: *Jai_To_Shader_Plugin, language: Shader_Language, proc: *Code_Procedure_Body, glsl_target: GLSL_Target) -> bool {
+  for *plugin.currently_waiting_contexts {
+    if it.main_fn != proc continue;
+    if it.language != language continue;
+    if it.glsl_target != glsl_target continue;
+    return true;
+  }
+  return false;
+}
+
+add_pending_request_declaration :: (plugin: *Jai_To_Shader_Plugin, decl: *Code_Declaration) {
+  if !decl return;
+  for plugin.pending_request_declarations if it == decl return;
+  array_add(*plugin.pending_request_declarations, decl);
+}
+
+resolve_shader_request_target :: (arg: *Code_Node, procedure_bodies: [] Typechecked(Code_Procedure_Body)) -> *Code_Procedure_Body {
+  if !arg return null;
+  if arg.kind == {
+    case .PROCEDURE_BODY;
+      return cast(*Code_Procedure_Body) arg;
+    case .PROCEDURE_HEADER; {
+      header := cast(*Code_Procedure_Header) arg;
+      return header.body_or_null;
+    }
+    case .IDENT; {
+      ident := cast(*Code_Ident) arg;
+      if ident.resolved_declaration {
+        if ident.resolved_declaration.expression && ident.resolved_declaration.expression.kind == .PROCEDURE_HEADER {
+          header := cast(*Code_Procedure_Header) ident.resolved_declaration.expression;
+          if header.body_or_null return header.body_or_null;
+        }
+
+        if ident.resolved_declaration.expression && ident.resolved_declaration.expression.kind == .PROCEDURE_BODY
+          return cast(*Code_Procedure_Body) ident.resolved_declaration.expression;
+      }
+
+      // Some top-level declarations can be visited before ident.resolved_declaration is available.
+      for procedure_bodies {
+        if it.expression.header.name == ident.name return it.expression;
+      }
+    }
+    case;
+      return null;
+  }
+  return null;
+}
+
+collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl: *Code_Declaration, procedure_bodies: [] Typechecked(Code_Procedure_Body)) -> bool {
+  if !decl return true;
+
+  requested_languages: [..] Shader_Language;
+  requested_glsl_targets: [..] GLSL_Target;
+  for decl.notes {
+    language, glsl_target, is_shader_request := shader_request_name_to_language(it.text);
+    if !is_shader_request continue;
+    array_add(*requested_languages, language);
+    array_add(*requested_glsl_targets, glsl_target);
+  }
+  if requested_languages.count == 0 return true;
+
+  proc := resolve_shader_request_target(decl.expression, procedure_bodies);
+  if !proc {
+    // Declarations can typecheck before the target procedure body is available in early passes.
+    return false;
+  }
+
+  for requested_languages {
+    language := it;
+    glsl_target := requested_glsl_targets[it_index];
+    if context_already_queued(plugin, language, proc, glsl_target) continue;
+    array_add(*plugin.currently_waiting_contexts, create_shader_write_context(language, proc, glsl_target));
+  }
+  return true;
 }
 
 write_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
@@ -383,9 +452,8 @@ proc_has_note :: (node: *Code_Procedure_Header, note: string) -> bool {
   return false;
 }
 
-create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure_Body) -> Shader_Write_Context {
+create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure_Body, glsl_target: GLSL_Target = .OPENGL) -> Shader_Write_Context {
     shader_type: Shader_Type;
-    glsl_target: GLSL_Target = ifx proc_has_note(proc.header, "vulkan") then .VULKAN else .OPENGL;
     if      proc_has_note(proc.header, "vertex_shader")    shader_type = .Vertex;
     else if proc_has_note(proc.header, "fragment_shader")  shader_type = .Fragment;
     else if proc_has_note(proc.header, "compute_shader")   shader_type = .Compute;

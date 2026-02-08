@@ -4,6 +4,8 @@
 // This should be an import for actual apps
 #load "../Jai_To_Shader.jai";
 
+_request_testing_vertex_hlsl :: testing_vertex_shader; @shader_to_hlsl
+
 main :: () {
   print("Vertex Shader:\n%\n\n=========\n\n", testing_vertex_shader_string);
   // print("Fragment Shader:\n%\n", testing_fragment_shader_string);
@@ -30,4 +32,4 @@ testing_vertex_shader :: (in: VertexShader_In, cbuf: VertexShader_CBuffer) -> Ve
   out: VertexShader_Out;
   out.f_pos = in.a_pos;
   return out;
-} @hlsl @vertex_shader
+} @vertex_shader
