@@ -4,7 +4,7 @@
 #import "Hash_Table";
 #import "Process";
 #import "Metaprogram_Plugins";
-#import,dir "."; // #import "Jai-Shader-Transpiler" in your code.
+#import,file "./module.jai"; // #import "Jai-Shader-Transpiler" in your code.
 
 #run,stallable {
   command_line_opts := get_build_options();

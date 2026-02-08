@@ -5,7 +5,7 @@ Input :: #import "Input";
 #import "GL";
 #import "Command_Line";
 
-#import,dir ".."; // #import "Jai-Shader-Transpiler" in your code.
+#import,file "../module.jai"; // #import "Jai-Shader-Transpiler" in your code.
 
 #load "glsl_shaders.jai";
 #load "array_shader_tests.jai";
