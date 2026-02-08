@@ -7,8 +7,8 @@ Array_Test_Vertex_In :: struct {
 }
 
 Array_Test_Vertex_Out :: struct {
-  gl_Position: Vector4; @inbuilt
-  gl_FragCoord: Vector4; @inbuilt
+  gl_Position: Vector4; @position
+  gl_FragCoord: Vector4; @frag_coord
   sample_offset: Vector2;
 }
 

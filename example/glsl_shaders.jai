@@ -8,8 +8,8 @@ VertexShader_In :: struct {
   a_pos : Vector2;
 }
 VertexShader_Out :: struct {
-  gl_Position: Vector4; @inbuilt
-  gl_FragCoord: Vector4; @inbuilt
+  gl_Position: Vector4; @position
+  gl_FragCoord: Vector4; @frag_coord
 }
 
 tiles_vertex_shader :: (using in : VertexShader_In, using un : VertexShader_Uniforms)

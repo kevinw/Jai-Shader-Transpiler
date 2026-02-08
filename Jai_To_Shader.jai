@@ -39,8 +39,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     case .TYPECHECKED; {
       tc := cast(*Message_Typechecked) message;
       for tc.procedure_bodies {
-        // Has a @glsl Note
-        if proc_has_note(it.expression.header, "glsl") {
+        // Has a @glsl or @vulkan Note
+        if proc_has_note(it.expression.header, "glsl") || proc_has_note(it.expression.header, "vulkan") {
           array_add(*plugin.currently_waiting_contexts, create_shader_write_context(.GLSL, it.expression));
         }
         
@@ -56,12 +56,13 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 
         // Has no language note, but has a shader-stage note.
         if !(proc_has_note(it.expression.header, "glsl") ||
+             proc_has_note(it.expression.header, "vulkan") ||
              proc_has_note(it.expression.header, "hlsl") ||
              proc_has_note(it.expression.header, "metal")) {
           if proc_has_note(it.expression.header, "vertex_shader") ||
              proc_has_note(it.expression.header, "fragment_shader") ||
              proc_has_note(it.expression.header, "compute_shader") {
-            compiler_report("Jai Shader Transpiler: No Tag that maps to a language. Add @glsl, @hlsl, or @metal to specify the language",
+            compiler_report("Jai Shader Transpiler: No Tag that maps to a language. Add @glsl/@vulkan, @hlsl, or @metal to specify the language",
                             make_location(it.expression.header));
           }
         }
@@ -262,6 +263,11 @@ Shader_Language :: enum {
   METAL;
 }
 
+GLSL_Target :: enum {
+  OPENGL;
+  VULKAN;
+}
+
 Shader_Function :: struct {
   prototype: *Code_Procedure_Header;
   name: string; // @Cleanup This doesn't have to be here
@@ -274,6 +280,7 @@ Shader_Write_Context :: struct {
   language: Shader_Language;
   main_fn: *Code_Procedure_Body;
   functions: [..] Shader_Function;
+  glsl_target: GLSL_Target;
   metal_use_jai_radians: bool;
   metal_use_jai_degrees: bool;
 }
@@ -286,6 +293,41 @@ node_is_fragment_shader :: (node: *Code_Procedure_Header) -> bool {
 member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
   for member.notes if it == note return true;
   return false;
+}
+
+member_has_note_contains :: (member: *Type_Info_Struct_Member, note_fragment: string) -> bool {
+  for member.notes {
+    found, _ := contains(it, note_fragment);
+    if found return true;
+  }
+  return false;
+}
+
+member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
+  if member_has_note_contains(member, "position") return true;
+  if member_has_note_contains(member, "frag_coord") return true;
+  if member_has_note_contains(member, "frag_depth") return true;
+  if member_has_note_contains(member, "vertex_id") return true;
+  if member_has_note_contains(member, "instance_id") return true;
+  if member_has_note_contains(member, "front_facing") return true;
+  if member_has_note_contains(member, "point_size") return true;
+  if member_has_note_contains(member, "sample_id") return true;
+  if member_has_note_contains(member, "sample_mask") return true;
+  return false;
+}
+
+member_get_compute_builtin_note :: (member: *Type_Info_Struct_Member) -> (string, bool) {
+  for member.notes {
+    found, _ := contains(it, "thread_position_in_grid");
+    if found return "thread_position_in_grid", true;
+    found, _ = contains(it, "thread_position_in_threadgroup");
+    if found return "thread_position_in_threadgroup", true;
+    found, _ = contains(it, "threadgroup_position_in_grid");
+    if found return "threadgroup_position_in_grid", true;
+    found, _ = contains(it, "thread_index_in_threadgroup");
+    if found return "thread_index_in_threadgroup", true;
+  }
+  return "", false;
 }
 
 member_get_note_suffix :: (member: *Type_Info_Struct_Member, prefix_check: string) -> (string, bool) {
@@ -343,6 +385,7 @@ proc_has_note :: (node: *Code_Procedure_Header, note: string) -> bool {
 
 create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure_Body) -> Shader_Write_Context {
     shader_type: Shader_Type;
+    glsl_target: GLSL_Target = ifx proc_has_note(proc.header, "vulkan") then .VULKAN else .OPENGL;
     if      proc_has_note(proc.header, "vertex_shader")    shader_type = .Vertex;
     else if proc_has_note(proc.header, "fragment_shader")  shader_type = .Fragment;
     else if proc_has_note(proc.header, "compute_shader")   shader_type = .Compute;
@@ -354,6 +397,7 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
         type = shader_type,
         language = language,
         main_fn = proc,
+        glsl_target = glsl_target,
         metal_use_jai_radians = false,
         metal_use_jai_degrees = false,
     };

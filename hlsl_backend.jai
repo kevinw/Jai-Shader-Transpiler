@@ -111,7 +111,7 @@ print_hlsl_in_vars :: (sb: *String_Builder, node: *Code_Procedure_Header) {
   
   append(sb, tprint("struct % {\n", struct_type.name));
   for * struct_type.members {
-    if member_has_note(it, "inbuilt") continue;
+    if member_is_stage_builtin(it) continue;
     
     append(sb, "    ");
     print_hlsl_member_with_typename(sb, it);
@@ -161,7 +161,7 @@ print_hlsl_out_vars :: (sb: *String_Builder, node: *Code_Procedure_Header) {
   
   append(sb, tprint("struct % {\n", struct_type.name));
   for * struct_type.members {
-    if member_has_note(it, "inbuilt") continue;
+    if member_is_stage_builtin(it) continue;
     
     append(sb, "    ");
     print_hlsl_member_with_typename(sb, it);

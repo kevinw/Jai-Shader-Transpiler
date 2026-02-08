@@ -1,5 +1,5 @@
 Compute_Test_In :: struct {
-  thread_id: UVector3; @inbuilt_thread_position_in_grid
+  thread_id: UVector3; @thread_position_in_grid
 }
 
 compute_write_indices :: (using in: Compute_Test_In, values: *u32) {

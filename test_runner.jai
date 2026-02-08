@@ -21,6 +21,11 @@ run_all_tests :: () {
   check_file_contains(debug_path("compute_write_indices.glsl"), "#version 430 core");
   check_file_contains(debug_path("compute_write_indices.glsl"), "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;");
   check_file_contains(debug_path("compute_write_indices.glsl"), "gl_GlobalInvocationID");
+  check_file_contains(debug_path("tiles_vertex_shader_vk.glsl"), "#version 450 core");
+  check_file_contains(debug_path("tiles_vertex_shader_vk.glsl"), "layout (location=0) in");
+  check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout (location=0) out");
+  check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout(set = 0, binding = 0) uniform");
+  check_file_contains(debug_path("compute_write_indices_vk.glsl"), "layout(std430, set = 0, binding = 0) buffer");
   check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
 
   check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
@@ -34,11 +39,12 @@ run_all_tests :: () {
   
   // run example programs with the generated shaders to check they work at runtime (not just compile time).
   run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe", "-test_readback"]);
+  run_command_checked("Run Vulkan example", .["./vulkan_example"]);
   
   #if OS == .MACOS 
     run_command_checked("Run Metal example", .["./metal_example", "-singleframe", "-test_readback"]);
 
-  log("Array shader checks passed. Metal and GLSL files compile.");
+  log("Array shader checks passed. Metal, GLSL, and Vulkan transpile checks succeeded.");
 }
 
 fail :: (message: string, args: .. Any) {

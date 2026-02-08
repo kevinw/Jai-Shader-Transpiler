@@ -15,6 +15,7 @@
 
   build("example/glsl_example.jai", "glsl_example");
   build("example/hlsl_example.jai", "hlsl_example");
+  build("example/vulkan_example.jai", "vulkan_example");
   #if OS == .MACOS {
     build("example/metal_example.jai", "metal_example");
   }

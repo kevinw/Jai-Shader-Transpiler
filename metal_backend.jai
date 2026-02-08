@@ -102,9 +102,9 @@ print_metal_in_struct :: (sb: *String_Builder, node: *Code_Procedure_Header) {
     append(sb, "    ");
     print_metal_member_with_typename(sb, it);
 
-    if member_has_note(it, "inbuilt") {
-      if it.name == "gl_FragCoord" append(sb, " [[position]]");
-      else if it.name == "gl_Position" append(sb, " [[position]]");
+    if member_is_stage_builtin(it) {
+      if member_has_note_contains(it, "frag_coord") append(sb, " [[position]]");
+      else if member_has_note_contains(it, "position") append(sb, " [[position]]");
     } else {
       if node_is_fragment_shader(node) append(sb, tprint(" [[user(%)]]", it.name));
       else append(sb, tprint(" [[attribute(%)]]", attribute_i));
@@ -145,8 +145,9 @@ print_metal_out_struct :: (sb: *String_Builder, node: *Code_Procedure_Header, sh
 
     append(sb, "    ");
     print_metal_member_with_typename(sb, it);
-    if member_has_note(it, "inbuilt") {
-      if it.name == "gl_Position" append(sb, " [[position]]");
+    if member_is_stage_builtin(it) {
+      if member_has_note_contains(it, "position") append(sb, " [[position]]");
+      else if member_has_note_contains(it, "frag_depth") append(sb, " [[depth(any)]]");
     } else if shader_type == .Fragment {
       append(sb, tprint(" [[color(%)]]", color_i));
       color_i += 1;
@@ -182,9 +183,9 @@ print_metal_compute_main_args :: (sb: *String_Builder, header: *Code_Procedure_H
     if declaration_is_parameter_using(header, it) && arg_type.type == .STRUCT {
       struct_type := cast(*Type_Info_Struct) arg_type;
       for * struct_type.members {
-        builtin_name, found := member_get_note_suffix(member=it, prefix_check="inbuilt_");
+        builtin_name, found := member_get_compute_builtin_note(it);
         if !found
-          compiler_report("Metal Backend: Compute using-struct members must have @inbuilt_* notes", make_location(header));
+          compiler_report("Metal Backend: Compute using-struct members must have a supported @thread_* note", make_location(header));
 
         next_arg();
         print_metal_type(sb, it.type);

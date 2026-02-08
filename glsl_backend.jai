@@ -1,6 +1,8 @@
 
 GLSL_GRAPHICS_VERSION :: "#version 330 core\n";
 GLSL_COMPUTE_VERSION  :: "#version 430 core\n";
+GLSL_VULKAN_GRAPHICS_VERSION :: "#version 450 core\n";
+GLSL_VULKAN_COMPUTE_VERSION  :: "#version 450 core\n";
 GLSL_DEFAULT_LOCAL_SIZE_X :: 64;
 GLSL_DEFAULT_LOCAL_SIZE_Y :: 1;
 GLSL_DEFAULT_LOCAL_SIZE_Z :: 1;
@@ -20,6 +22,9 @@ write_glsl_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, sh
   // main function string builder
   main_sb: String_Builder;
   append(*main_sb, "void main() {\n");
+  if ctx.glsl_target == .VULKAN {
+    print_glsl_vulkan_uniform_local_bindings(*main_sb, node.header, indent=1);
+  }
   print_glsl_stmt(ctx, *main_sb, node.block, is_main=true);
   append(*main_sb, "}\n");
   array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
@@ -43,16 +48,21 @@ write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bod
   if as_jai_string {
     append(*sb, tprint("%_string", node.header.name), " :: #string END\n");
   }
-  if ctx.type == .Compute append(*sb, GLSL_COMPUTE_VERSION);
-  else append(*sb, GLSL_GRAPHICS_VERSION);
+  if ctx.type == .Compute {
+    if ctx.glsl_target == .VULKAN append(*sb, GLSL_VULKAN_COMPUTE_VERSION);
+    else append(*sb, GLSL_COMPUTE_VERSION);
+  } else {
+    if ctx.glsl_target == .VULKAN append(*sb, GLSL_VULKAN_GRAPHICS_VERSION);
+    else append(*sb, GLSL_GRAPHICS_VERSION);
+  }
   print_glsl_global_constants(*sb, node.header);
   if ctx.type == .Compute {
     print_glsl_compute_layout(*sb);
-    print_glsl_compute_ssbo_bindings(*sb, node.header);
+    print_glsl_compute_ssbo_bindings(*sb, node.header, use_vulkan_sets=ctx.glsl_target == .VULKAN);
   } else {
-    print_glsl_in_vars(*sb, node.header, output_layout=false);
-    print_glsl_uniforms(*sb, node.header);
-    print_glsl_out_vars(*sb, node.header);
+    print_glsl_in_vars(*sb, node.header, output_layout=ctx.glsl_target == .VULKAN);
+    print_glsl_uniforms(*sb, node.header, use_vulkan_ubo=ctx.glsl_target == .VULKAN);
+    print_glsl_out_vars(*sb, node.header, output_layout=ctx.glsl_target == .VULKAN);
   }
   // Output prototypes for "late binding"
   for ctx.functions {
@@ -74,7 +84,7 @@ print_glsl_compute_layout :: (sb: *String_Builder) {
                     GLSL_DEFAULT_LOCAL_SIZE_X, GLSL_DEFAULT_LOCAL_SIZE_Y, GLSL_DEFAULT_LOCAL_SIZE_Z));
 }
 
-print_glsl_compute_ssbo_bindings :: (sb: *String_Builder, header: *Code_Procedure_Header) {
+print_glsl_compute_ssbo_bindings :: (sb: *String_Builder, header: *Code_Procedure_Header, use_vulkan_sets := false) {
   next_binding: s64 = 0;
   for header.arguments {
     arg_type := ifx it.type_inst then it.type_inst.result else it.expression.type;
@@ -87,7 +97,10 @@ print_glsl_compute_ssbo_bindings :: (sb: *String_Builder, header: *Code_Procedur
     if pointer.pointer_to.type == .ARRAY
       compiler_report("GLSL Backend: Compute pointers to arrays are not supported. Use a pointer to element type.", make_location(it));
 
-    append(sb, tprint("layout(std430, binding = %) buffer %_Buffer {\n    ", next_binding, it.name));
+    if use_vulkan_sets
+      append(sb, tprint("layout(std430, set = 0, binding = %) buffer %_Buffer {\n    ", next_binding, it.name));
+    else
+      append(sb, tprint("layout(std430, binding = %) buffer %_Buffer {\n    ", next_binding, it.name));
     print_glsl_type(sb, pointer.pointer_to);
     append(sb, tprint(" %[];\n};\n", it.name));
     next_binding += 1;
@@ -96,9 +109,9 @@ print_glsl_compute_ssbo_bindings :: (sb: *String_Builder, header: *Code_Procedur
 }
 
 glsl_compute_builtin_name :: (member: *Type_Info_Struct_Member, header: *Code_Procedure_Header) -> string {
-  note_suffix, found := member_get_note_suffix(member, "inbuilt_");
+  note_suffix, found := member_get_compute_builtin_note(member);
   if !found
-    compiler_report("GLSL Backend: Compute using-struct members must have @inbuilt_* notes", make_location(header));
+    compiler_report("GLSL Backend: Compute using-struct members must have a supported @thread_* note", make_location(header));
 
   if note_suffix == {
     case "thread_position_in_grid"; return "gl_GlobalInvocationID";
@@ -107,7 +120,7 @@ glsl_compute_builtin_name :: (member: *Type_Info_Struct_Member, header: *Code_Pr
     case "thread_index_in_threadgroup"; return "gl_LocalInvocationIndex";
   }
 
-  compiler_report(tprint("GLSL Backend: Unsupported compute builtin note @inbuilt_%", note_suffix), make_location(header));
+  compiler_report(tprint("GLSL Backend: Unsupported compute builtin note @%", note_suffix), make_location(header));
   return "";
 }
 
@@ -138,7 +151,7 @@ print_glsl_in_vars :: (sb: *String_Builder, node: *Code_Procedure_Header, output
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
   
   for * struct_type.members {
-    if member_has_note(it, "inbuilt") continue;
+    if member_is_stage_builtin(it) continue;
     
     if output_layout
       append(sb, tprint("layout (location=%) in ", it_index));
@@ -151,34 +164,69 @@ print_glsl_in_vars :: (sb: *String_Builder, node: *Code_Procedure_Header, output
   append(sb, "\n");
 }
 
-print_glsl_out_vars :: (sb : *String_Builder, node : *Code_Procedure_Header) {
+print_glsl_out_vars :: (sb : *String_Builder, node : *Code_Procedure_Header, output_layout := false) {
   struct_type_generic := node.returns[0].type_inst.result;
   if struct_type_generic.type != .STRUCT
     compiler_report("GLSL Backend: Shader Output is not a struct\n", make_location(node.returns[0]));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
   
   for * struct_type.members {
-    if member_has_note(it, "inbuilt") continue;
-    
-    append(sb, "out ");
+    if member_is_stage_builtin(it) continue;
+
+    if output_layout
+      append(sb, tprint("layout (location=%) out ", it_index));
+    else
+      append(sb, "out ");
     print_glsl_member_with_typename(sb, it);
     append(sb, ";\n");
   }
   append(sb, "\n");
 }
 
-print_glsl_uniforms :: (sb: *String_Builder, node: *Code_Procedure_Header) {
+print_glsl_uniforms :: (sb: *String_Builder, node: *Code_Procedure_Header, use_vulkan_ubo := false) {
   struct_type_generic := node.arguments[1].type_inst.result;
   if struct_type_generic.type != .STRUCT
     compiler_report("GLSL Backend: Shader Input is not a struct\n", make_location(node.arguments[1]));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
-  
-  for * struct_type.members {
-    append(sb, "uniform ");
-    print_glsl_member_with_typename(sb, it);
-    append(sb, ";\n");
+
+  if use_vulkan_ubo {
+    if struct_type.members.count == 0 {
+      append(sb, "\n");
+      return;
+    }
+
+    arg_name := node.arguments[1].name;
+    append(sb, "layout(set = 0, binding = 0) uniform ", struct_type.name, "_Block {\n");
+    for * struct_type.members {
+      append(sb, "    ");
+      print_glsl_member_with_typename(sb, it);
+      append(sb, ";\n");
+    }
+    append(sb, "} ", arg_name, ";\n");
+  } else {
+    for * struct_type.members {
+      append(sb, "uniform ");
+      print_glsl_member_with_typename(sb, it);
+      append(sb, ";\n");
+    }
   }
   append(sb, "\n");
+}
+
+print_glsl_vulkan_uniform_local_bindings :: (sb: *String_Builder, header: *Code_Procedure_Header, indent: s64) {
+  if header.arguments.count < 2 return;
+  arg_name := header.arguments[1].name;
+
+  struct_type_generic := header.arguments[1].type_inst.result;
+  if struct_type_generic.type != .STRUCT
+    compiler_report("GLSL Backend: Shader Input is not a struct\n", make_location(header.arguments[1]));
+  struct_type := cast(*Type_Info_Struct) struct_type_generic;
+
+  for * struct_type.members {
+    add_indents(sb, indent);
+    print_glsl_typed_name(sb, it.type, it.name);
+    append(sb, " = ", arg_name, ".", it.name, ";\n");
+  }
 }
 
 print_glsl_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
