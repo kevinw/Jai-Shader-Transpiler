@@ -108,9 +108,9 @@ write_vertex_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) 
   log("Converting Vertex Shader: %", node.header.name);
   
   if ctx.language == {
-    case .GLSL; return write_glsl_vertex_shader(ctx, node);
+    case .GLSL; return write_glsl_shader(ctx, node, .Vertex);
     case .HLSL; return write_hlsl_vertex_shader(ctx, node);
-    case .METAL; return write_metal_vertex_shader(ctx, node);
+    case .METAL; return write_metal_shader(ctx, node, .Vertex);
   }
   
   return "";
@@ -120,9 +120,9 @@ write_fragment_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body
   log("Converting Fragment Shader: %", node.header.name);
   
   if ctx.language == {
-    case .GLSL;  return write_glsl_fragment_shader(ctx, node);
+    case .GLSL;  return write_glsl_shader(ctx, node, .Fragment);
     case .HLSL;  return write_hlsl_fragment_shader(ctx, node);
-    case .METAL; return write_metal_fragment_shader(ctx, node);
+    case .METAL; return write_metal_shader(ctx, node, .Fragment);
   }
   
   return "";
@@ -132,9 +132,9 @@ write_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body)
   log("Converting Compute Shader: %", node.header.name);
   
   if ctx.language == {
-    case .GLSL;  return write_glsl_compute_shader(ctx, node);
+    case .GLSL;  return write_glsl_shader(ctx, node, .Compute);
     case .HLSL;  return write_hlsl_compute_shader(ctx, node);
-    case .METAL; return write_metal_compute_shader(ctx, node);
+    case .METAL; return write_metal_shader(ctx, node, .Compute);
   }
   
   return "";

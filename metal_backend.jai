@@ -1,14 +1,14 @@
 METAL_HEADER :: "#include <metal_stdlib>\nusing namespace metal;\n\n";
 
-write_metal_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  if node.header.returns.count != 1
-    compiler_report("Metal Backend: Jai Compute Shader must return a structure", make_location(node.header));
-  if node.header.arguments.count == 0
-    compiler_report("Metal Backend: Jai Compute Shader must get AT LEAST 1 structure as an argument", make_location(node.header));
-  if node.header.arguments[0].type_inst.result.type != .STRUCT
-    compiler_report("Metal Backend: Jai Compute Shader must have a structure as the input", make_location(node.header));
+write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, shader_type: Shader_Type) -> string {
+  check_arguments(node.header, shader_type);
 
   main_sb: String_Builder;
+  if shader_type == {
+  case .Vertex; append(*main_sb, "vertex ");
+  case .Fragment; append(*main_sb, "fragment ");
+  case .Compute; // nothing
+  }
   append(*main_sb, (cast(*Type_Info_Struct) node.header.returns[0].type_inst.result).name);
   append(*main_sb, " main(");
   print_metal_stage_in_arg(*main_sb, node.header.arguments[0]);
@@ -26,59 +26,12 @@ write_metal_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure
   return write_metal_shader_code(ctx, node);
 }
 
-write_metal_vertex_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  if node.header.returns.count != 1
-    compiler_report("Metal Backend: Jai Vertex Shader must return a structure", make_location(node.header));
-  if node.header.arguments.count != 2
-    compiler_report("Metal Backend: Jai Vertex Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(node.header));
-  if node.header.parameter_usings.count != 2
-    compiler_report("Metal Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(node.header));
-
-  main_sb: String_Builder;
-  append(*main_sb, "vertex ");
-  append(*main_sb, (cast(*Type_Info_Struct) node.header.returns[0].type_inst.result).name);
-  append(*main_sb, " main(");
-  print_metal_stage_in_arg(*main_sb, node.header.arguments[0]);
-  append(*main_sb, ", ");
-  print_metal_uniform_arg(*main_sb, node.header.arguments[1]);
-  append(*main_sb, ") {\n");
-  print_metal_local_bindings(ctx, *main_sb, node.header, indent=1);
-  print_metal_stmt(ctx, *main_sb, node.block, is_main=true);
-  print_metal_output_return(ctx, *main_sb, node.header, indent=1);
-  append(*main_sb, "}\n");
-  array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
-
-  return write_metal_shader_code(ctx, node);
-}
-
-write_metal_fragment_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  if node.header.returns.count != 1
-    compiler_report("Metal Backend: Jai Fragment Shader must return a structure", make_location(node.header));
-  if node.header.arguments.count != 2
-    compiler_report("Metal Backend: Jai Fragment Shader must get two structures as arguments (Vertex output and Uniforms)", make_location(node.header));
-  if node.header.parameter_usings.count != 2
-    compiler_report("Metal Backend: The struct arguments to a Jai Fragment Shader must be marked 'using'", make_location(node.header));
-
-  main_sb: String_Builder;
-  append(*main_sb, "fragment ");
-  append(*main_sb, (cast(*Type_Info_Struct) node.header.returns[0].type_inst.result).name);
-  append(*main_sb, " main(");
-  print_metal_stage_in_arg(*main_sb, node.header.arguments[0]);
-  append(*main_sb, ", ");
-  print_metal_uniform_arg(*main_sb, node.header.arguments[1]);
-  append(*main_sb, ") {\n");
-  print_metal_local_bindings(ctx, *main_sb, node.header, indent=1);
-  print_metal_stmt(ctx, *main_sb, node.block, is_main=true);
-  print_metal_output_return(ctx, *main_sb, node.header, indent=1);
-  append(*main_sb, "}\n");
-  array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
-
-  return write_metal_shader_code(ctx, node);
-}
-
-write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, as_jai_string := true) -> string {
   sb: String_Builder;
-  append(*sb, tprint("%_metal_string", node.header.name), " :: #string END\n", METAL_HEADER);
+  if as_jai_string {
+    append(*sb, tprint("%_metal_string", node.header.name), " :: #string END\n");
+  }
+  append(*sb, METAL_HEADER);
   print_metal_in_struct(*sb, node.header);
   if node.header.arguments.count >= 2 print_metal_uniform_struct(*sb, node.header);
   print_metal_out_struct(*sb, node.header, ctx.type);
@@ -89,7 +42,9 @@ write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bo
   for ctx.functions {
     append(*sb, it.code, "\n");
   }
-  append(*sb, "\nEND");
+  if as_jai_string {
+    append(*sb, "\nEND");
+  }
 
   return builder_to_string(*sb);
 }
@@ -528,6 +483,33 @@ print_metal_type :: (sb: *String_Builder, type: *Type_Info) {
 }
 
 #scope_file
+
+check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
+  if shader_type == {
+  case .Compute;
+    if returns.count != 1
+      compiler_report("Metal Backend: Jai Compute Shader must return a structure", make_location(header));
+    if arguments.count == 0
+      compiler_report("Metal Backend: Jai Compute Shader must get AT LEAST 1 structure as an argument", make_location(header));
+    if arguments[0].type_inst.result.type != .STRUCT
+      compiler_report("Metal Backend: Jai Compute Shader must have a structure as the input", make_location(header));
+  case .Vertex;
+    if returns.count != 1
+      compiler_report("Metal Backend: Jai Vertex Shader must return a structure", make_location(header));
+    if arguments.count != 2
+      compiler_report("Metal Backend: Jai Vertex Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(header));
+    if parameter_usings.count != 2
+      compiler_report("Metal Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(header));
+  case .Fragment;
+    if returns.count != 1
+      compiler_report("Metal Backend: Jai Fragment Shader must return a structure", make_location(header));
+    if arguments.count != 2
+      compiler_report("Metal Backend: Jai Fragment Shader must get two structures as arguments (Vertex output and Uniforms)", make_location(header));
+    if parameter_usings.count != 2
+      compiler_report("Metal Backend: The struct arguments to a Jai Fragment Shader must be marked 'using'", make_location(header));
+  }
+}
+
 
 node_is_fragment_shader :: (node: *Code_Procedure_Header) -> bool {
   for node.notes if it.text == "fragment_shader" return true;

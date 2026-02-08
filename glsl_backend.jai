@@ -6,35 +6,8 @@ GLSL_VERSION :: "#version 330 core\n";
 // The functions are appended onto the functions list, and then the for loop runs to push onto
 // the main builder
 
-check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
-  if #complete shader_type == {
-  case .Compute;
-    if returns.count != 1
-      compiler_report("GLSL Backend: Jai Compute Shader must return a structure with at least a Vector4 gl_Position field", make_location(header));
-    if arguments.count != 2
-      compiler_report("GLSL Backend: Jai Compute Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(header));
-    if parameter_usings.count != 2
-      compiler_report("GLSL Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(header));
-  case .Vertex;
-    if returns.count != 1
-      compiler_report("GLSL Backend: Jai Vertex Shader must return a structure with at least a Vector4 gl_Position field", make_location(header));
-    if arguments.count != 2
-      compiler_report("GLSL Backend: Jai Vertex Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(header));
-    if parameter_usings.count != 2
-      compiler_report("GLSL Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(header));
-  case .Fragment;
-    if returns.count != 1
-      compiler_report("GLSL Backend: Jai Fragment Shader must return a structure with at least one Vector4", make_location(header));
-    if arguments.count != 2
-      compiler_report("GLSL Backend: Jai Fragment Shader must get two structures as arguments (Vertex output and Uniforms)", make_location(header));
-    if parameter_usings.count != 2
-      compiler_report("GLSL Backend: The struct arguments to a Jai Fragment Shader must be marked 'using'", make_location(header));
-  }
-  
-}
-
-write_glsl_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  check_arguments(node.header, .Compute);
+write_glsl_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, shader_type: Shader_Type) -> string {
+  check_arguments(node.header, shader_type);
 
   // main function string builder
   main_sb: String_Builder;
@@ -43,33 +16,6 @@ write_glsl_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_
   append(*main_sb, "}\n");
   array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
   
-  return write_glsl_shader_code(ctx, node);
-}
-
-
-write_glsl_vertex_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  check_arguments(node.header, .Vertex);
-
-  // main function string builder
-  main_sb: String_Builder;
-  append(*main_sb, "void main() {\n");
-  print_glsl_stmt(ctx, *main_sb, node.block, is_main=true);
-  append(*main_sb, "}\n");
-  array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
-  
-  return write_glsl_shader_code(ctx, node);
-}
-
-write_glsl_fragment_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  check_arguments(node.header, .Fragment);
-
-  // main function string builder
-  main_sb: String_Builder;
-  append(*main_sb, "void main() {\n");
-  print_glsl_stmt(ctx, *main_sb, node.block, is_main=true);
-  append(*main_sb, "}\n");
-  array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
-
   return write_glsl_shader_code(ctx, node);
 }
 
@@ -718,6 +664,34 @@ texture :: (sampler: $T, point: $S, bias: float = 0) -> Vector4 {
 
 
 #scope_file
+
+check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
+  if #complete shader_type == {
+  case .Compute;
+    if returns.count != 1
+      compiler_report("GLSL Backend: Jai Compute Shader must return a structure with at least a Vector4 gl_Position field", make_location(header));
+    if arguments.count != 2
+      compiler_report("GLSL Backend: Jai Compute Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(header));
+    if parameter_usings.count != 2
+      compiler_report("GLSL Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(header));
+  case .Vertex;
+    if returns.count != 1
+      compiler_report("GLSL Backend: Jai Vertex Shader must return a structure with at least a Vector4 gl_Position field", make_location(header));
+    if arguments.count != 2
+      compiler_report("GLSL Backend: Jai Vertex Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(header));
+    if parameter_usings.count != 2
+      compiler_report("GLSL Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(header));
+  case .Fragment;
+    if returns.count != 1
+      compiler_report("GLSL Backend: Jai Fragment Shader must return a structure with at least one Vector4", make_location(header));
+    if arguments.count != 2
+      compiler_report("GLSL Backend: Jai Fragment Shader must get two structures as arguments (Vertex output and Uniforms)", make_location(header));
+    if parameter_usings.count != 2
+      compiler_report("GLSL Backend: The struct arguments to a Jai Fragment Shader must be marked 'using'", make_location(header));
+  }
+  
+}
+
 
 is_number :: (T: Type) -> bool {
   return T == float ||
