@@ -3,15 +3,15 @@
 #import "String";
 #import "Hash_Table";
 #import "Process";
-
 #import "Metaprogram_Plugins";
-
-#import,file "Jai_To_Shader.jai";
-
+#import,dir "."; // #import "Jai-Shader-Transpiler" in your code.
 
 #run,stallable {
-  build("src/glsl_example.jai", "Shaders");
-  build("src/hlsl_example.jai", "hlsl_example");
+  build("example/glsl_example.jai", "Shaders");
+  build("example/hlsl_example.jai", "hlsl_example");
+  #if OS == .MACOS {
+    build("example/metal_example.jai", "metal_example");
+  }
 }
 
 build :: (build_file: string, output_exe_name: string) {
@@ -25,6 +25,9 @@ build :: (build_file: string, output_exe_name: string) {
   options := get_build_options(w);
   options.output_executable_name = output_exe_name;
   options.text_output_flags = text_output_flags;
+  if text_output_flags == 0 {
+    log("Building '%'...", output_exe_name);
+  }
   set_build_options(options, w);
 
   jai_to_shader_plugin := get_plugin();

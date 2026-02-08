@@ -4,7 +4,7 @@ Input :: #import "Input";
 #import "Window_Creation";
 #import "GL";
 
-#import,file "../Jai_To_Shader.jai";
+#import,dir ".."; // #import "Jai-Shader-Transpiler" in your code.
 
 #load "glsl_shaders.jai";
 #load "example_gl_backend.jai";

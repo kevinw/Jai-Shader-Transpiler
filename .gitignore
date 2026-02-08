@@ -4,3 +4,4 @@ project.4coder
 Shaders
 *.dSYM
 hlsl_example
+metal_example
