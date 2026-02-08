@@ -45,11 +45,19 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           array_add(*currently_waiting_contexts, create_shader_write_context(.HLSL, it.expression));
         }
 
-        // Has neither GLSL nor HLSL Notes, but has a vertex_shader or fragment_shader note
-        if !(proc_has_note(it.expression.header, "glsl") || proc_has_note(it.expression.header, "hlsl")) {
+        // Has a @metal Note
+        if proc_has_note(it.expression.header, "metal") {
+          array_add(*currently_waiting_contexts, create_shader_write_context(.METAL, it.expression));
+        }
+
+        // Has no language note, but has a shader-stage note.
+        if !(proc_has_note(it.expression.header, "glsl") ||
+             proc_has_note(it.expression.header, "hlsl") ||
+             proc_has_note(it.expression.header, "metal")) {
           if proc_has_note(it.expression.header, "vertex_shader") ||
-             proc_has_note(it.expression.header, "fragment_shader") {
-            compiler_report("Jai Shader Transpiler: No Tag that maps to a language. Add @glsl or @hlsl to specify the language",
+             proc_has_note(it.expression.header, "fragment_shader") ||
+             proc_has_note(it.expression.header, "compute_shader") {
+            compiler_report("Jai Shader Transpiler: No Tag that maps to a language. Add @glsl, @hlsl, or @metal to specify the language",
                             make_location(it.expression.header));
           }
         }
@@ -74,7 +82,13 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           if plugin.output_shaders {
             ext := tprint("%", ctx.language);
             to_lower_in_place(ext);
-            write_entire_file(tprint("output_%.%", ctx.name, ext), s);
+            filename := tprint("output_%.%", ctx.name, ext);
+            ok := write_entire_file(filename, s);
+            if !ok {
+              log_error("Error writing file to '%'", filename);
+            } else {
+              log("Transpiled Jai to %", filename);
+            }
           }
           remove ctx;
         }
@@ -96,6 +110,7 @@ write_vertex_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) 
   if ctx.language == {
     case .GLSL; return write_glsl_vertex_shader(ctx, node);
     case .HLSL; return write_hlsl_vertex_shader(ctx, node);
+    case .METAL; return write_metal_vertex_shader(ctx, node);
   }
   
   return "";
@@ -293,6 +308,8 @@ append :: inline (builder: *String_Builder, strings: ..string) {
 }
 
 #scope_file
+
+#import "File";
 
 proc_has_note :: (node: *Code_Procedure_Header, note: string) -> bool {
   for node.notes if it.text == note return true;

@@ -3,6 +3,7 @@
 //~ Vertex Shader
 
 VertexShader_Uniforms :: struct {}
+
 VertexShader_In :: struct {
   a_pos : Vector2;
 }
@@ -18,7 +19,7 @@ tiles_vertex_shader :: (using in : VertexShader_In, using un : VertexShader_Unif
   gl_Position = Vector4.{ a_pos.x, a_pos.y, 0.0, 1.0 };
   
   return out;
-} @glsl @vertex_shader
+} @glsl @metal @vertex_shader
 
 
 //~ Fragment Shader
@@ -34,12 +35,6 @@ FragmentShader_Out :: struct {
 tiles_fragment_shader :: (using in : VertexShader_Out, using un : FragmentShader_Uniforms) -> FragmentShader_Out {
   using out: FragmentShader_Out;
   
-  positions := Vector2.[
-      { 0.0,  0.5},
-      {-0.5, -0.5},
-      { 0.5, -0.5}
-  ];
-
   aspect_ratio := u_resolution.y / u_resolution.x;
   uv := Vector2.{ gl_FragCoord.x, gl_FragCoord.y } / u_resolution.x;
   uv -= Vector2.{ 0.5, 0.5 * aspect_ratio };
@@ -60,4 +55,4 @@ tiles_fragment_shader :: (using in : VertexShader_Out, using un : FragmentShader
   out_color = Vector4.{ pow(value, 2.0), pow(value, 1.5), pow(value, 1.2), 1.0 };
 
   return out;
-} @glsl @fragment_shader
+} @glsl @metal @fragment_shader
