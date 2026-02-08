@@ -30,7 +30,7 @@ fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], const
      float2 uv = float2(gl_FragCoord.x, gl_FragCoord.y) / u_resolution.x;
      uv -= float2(0.5, 0.5 * aspect_ratio);
      float rot = jai_radians(-30 - u_time);
-     float2x2 rotation_matrix = float2x2(cos(rot), -sin(rot), sin(rot), cos(rot));
+     float2x2 rotation_matrix = float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)));
      uv = rotation_matrix * uv;
      float2 scaled_uv = 20 * uv;
      float2 tile = fract(scaled_uv);

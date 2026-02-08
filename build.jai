@@ -20,19 +20,20 @@
   }
 
   if run_tests {
-    log("Running tests.jai...");
-    result, output, error, timeout_reached := run_command("jai", "tests.jai", "+Autorun", capture_and_return_output=true);
+    TEST_RUNNER :: "test_runner.jai";
+    log("Running %...", TEST_RUNNER);
+    result, output, error, timeout_reached := run_command("jai", TEST_RUNNER, "+Autorun", capture_and_return_output=true);
     if output.count != 0 log("%", output);
     if error.count != 0 log_error("%", error);
 
     if timeout_reached {
-      compiler_report("tests.jai timed out.");
+      compiler_report(tprint("% timed out.", TEST_RUNNER));
     }
     if result.type == .FAILED_TO_LAUNCH {
-      compiler_report("Failed to launch tests.jai.");
+      compiler_report(tprint("Failed to launch %.", TEST_RUNNER));
     }
     if result.type != .EXITED || result.exit_code != 0 {
-      compiler_report(tprint("tests.jai failed with exit code %.", result.exit_code));
+      compiler_report(tprint("% failed with exit code %.", TEST_RUNNER, result.exit_code));
     }
   }
 }

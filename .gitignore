@@ -6,3 +6,4 @@ Shaders
 hlsl_example
 metal_example
 glsl_example
+test_runner

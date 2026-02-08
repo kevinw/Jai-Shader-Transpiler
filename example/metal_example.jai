@@ -98,7 +98,6 @@ metal_example_with_window :: () -> (success: bool) {
         return false;
     }
     defer release(lib_vertex);
-    log("main %", error);
 
     error = null;
     lib_fragment := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(tiles_fragment_shader_metal_string), compile_options, *error);

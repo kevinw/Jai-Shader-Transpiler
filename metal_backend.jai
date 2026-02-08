@@ -576,17 +576,25 @@ print_metal_array_member_expr :: (ctx: *Shader_Write_Context, sb: *String_Builde
 }
 
 print_metal_struct_literal :: (ctx: *Shader_Write_Context, sb: *String_Builder, lit: *Code_Literal, expected_type: *Type_Info = null) {
+  constructor_name: string;
   if lit.struct_literal_info.type_expression {
     name := cast(*Code_Ident) lit.struct_literal_info.type_expression.type_valued_expression;
-    append(sb, jai_to_metal_type_name(name.name));
+    constructor_name = jai_to_metal_type_name(name.name);
   } else if expected_type && expected_type.type == .STRUCT {
     struct_type := cast(*Type_Info_Struct) expected_type;
-    append(sb, jai_to_metal_type_name(struct_type.name));
+    constructor_name = jai_to_metal_type_name(struct_type.name);
   } else if lit.type.type == .STRUCT {
     struct_type := cast(*Type_Info_Struct) lit.type;
-    append(sb, jai_to_metal_type_name(struct_type.name));
+    constructor_name = jai_to_metal_type_name(struct_type.name);
   } else {
     compiler_report("Unfortunately, we can't easily know enough about types without the explicit name here.", make_location(lit));
+    return;
+  }
+
+  append(sb, constructor_name);
+  matrix_dim, matrix_scalar_type := metal_matrix_info_from_constructor_name(constructor_name);
+  if matrix_dim != 0 {
+    print_metal_matrix_literal_args(ctx, sb, lit, matrix_dim, matrix_scalar_type);
     return;
   }
 
@@ -594,6 +602,44 @@ print_metal_struct_literal :: (ctx: *Shader_Write_Context, sb: *String_Builder, 
   for lit.struct_literal_info.arguments {
     if it_index != 0 append(sb, ", ");
     print_metal_expr(ctx, sb, it);
+  }
+  append(sb, ")");
+}
+
+metal_matrix_info_from_constructor_name :: (name: string) -> (dim: s64, scalar_type: string) {
+  if ends_with(name, "2x2") {
+    return 2, slice(name, 0, name.count-3);
+  }
+  if ends_with(name, "3x3") {
+    return 3, slice(name, 0, name.count-3);
+  }
+  if ends_with(name, "4x4") {
+    return 4, slice(name, 0, name.count-3);
+  }
+
+  return 0, "";
+}
+
+print_metal_matrix_literal_args :: (ctx: *Shader_Write_Context, sb: *String_Builder, lit: *Code_Literal, dim: s64, scalar_type: string) {
+  needed := dim * dim;
+  if lit.struct_literal_info.arguments.count != needed {
+    compiler_report(
+      tprint("Metal Backend: Matrix literal '%' requires exactly % scalar arguments (got %)",
+             scalar_type, needed, lit.struct_literal_info.arguments.count),
+      make_location(lit));
+    return;
+  }
+
+  append(sb, "(");
+  for col: 0..dim-1 {
+    if col != 0 append(sb, ", ");
+    append(sb, tprint("%%(", scalar_type, dim));
+    for row: 0..dim-1 {
+      if row != 0 append(sb, ", ");
+      arg_index := col * dim + row;
+      print_metal_expr(ctx, sb, lit.struct_literal_info.arguments[arg_index]);
+    }
+    append(sb, ")");
   }
   append(sb, ")");
 }

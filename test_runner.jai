@@ -11,7 +11,7 @@ fail :: (message: string, args: .. Any) {
 
 run_command_checked :: (description: string, args: [] string, timeout_ms := -1) {
     command := Process.get_quoted_command_string(args);
-    result, output, error, timeout_reached := Process.run_command(..args, capture_and_return_output=true, timeout_ms=timeout_ms);
+    result, output, error, timeout_reached := Process.run_command(..args, timeout_ms=timeout_ms);
 
     if timeout_reached {
         fail("% timed out. Command: %", description, command);
@@ -22,8 +22,6 @@ run_command_checked :: (description: string, args: [] string, timeout_ms := -1) 
     }
 
     if result.type != .EXITED || result.exit_code != 0 {
-        if output.count != 0 log("stdout:\n%", output);
-        if error.count != 0 log_error("stderr:\n%", error);
         fail("% failed with exit code %. Command: %", description, result.exit_code, command);
     }
 }
@@ -131,12 +129,15 @@ compile_generated_metal_shaders :: () {
 }
 
 main :: () {
+    log("Running tests...");
     run_command_checked("Build shaders", .["jai", "-quiet", "build.jai", "-", "-output_shaders"]);
 
     check_file_contains("output_array_support_vertex_shader.glsl", "vec2 positions[3] = vec2[](");
     check_file_contains("output_array_support_vertex_shader.metal", "float2 positions[3] = {");
     check_file_contains("output_array_support_fragment_shader.glsl", "uniform vec4 u_palette[2];");
     check_file_contains("output_array_support_fragment_shader.metal", "float4 u_palette[2];");
+    check_file_contains("output_tiles_fragment_shader.metal",
+        "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
 
     check_file_not_contains("output_array_support_vertex_shader.glsl", "<operator_not_supported>");
     check_file_not_contains("output_array_support_vertex_shader.metal", "<operator_not_supported>");
