@@ -71,9 +71,11 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           
           s: string;
           if ctx.type == {
-            case .Vertex;   s = write_vertex_shader  (ctx, ctx.main_fn);
-            case .Fragment; s = write_fragment_shader(ctx, ctx.main_fn);
-            case .Compute;  s = write_compute_shader (ctx, ctx.main_fn);
+            case .Vertex;   #through;
+            case .Fragment; #through;
+            case .Compute;
+              s = write_shader(ctx, ctx.main_fn);
+              
             case; compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader",
                             make_location(ctx.main_fn.header));
           }
@@ -104,37 +106,13 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
   }
 }
 
-write_vertex_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  log("Converting Vertex Shader: %", node.header.name);
+write_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+  log("Converting % Shader: %", ctx.type, node.header.name);
   
   if ctx.language == {
-    case .GLSL; return write_glsl_shader(ctx, node, .Vertex);
-    case .HLSL; return write_hlsl_vertex_shader(ctx, node);
-    case .METAL; return write_metal_shader(ctx, node, .Vertex);
-  }
-  
-  return "";
-}
-
-write_fragment_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  log("Converting Fragment Shader: %", node.header.name);
-  
-  if ctx.language == {
-    case .GLSL;  return write_glsl_shader(ctx, node, .Fragment);
-    case .HLSL;  return write_hlsl_fragment_shader(ctx, node);
-    case .METAL; return write_metal_shader(ctx, node, .Fragment);
-  }
-  
-  return "";
-}
-
-write_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  log("Converting Compute Shader: %", node.header.name);
-  
-  if ctx.language == {
-    case .GLSL;  return write_glsl_shader(ctx, node, .Compute);
-    case .HLSL;  return write_hlsl_compute_shader(ctx, node);
-    case .METAL; return write_metal_shader(ctx, node, .Compute);
+    case .GLSL;  return write_glsl_shader (ctx, node, ctx.type);
+    case .HLSL;  return write_hlsl_shader (ctx, node, ctx.type);
+    case .METAL; return write_metal_shader(ctx, node, ctx.type);
   }
   
   return "";
