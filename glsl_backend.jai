@@ -751,28 +751,23 @@ print_glsl_global_constants :: (sb: *String_Builder, header: *Code_Procedure_Hea
 }
 
 check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
-  if #complete shader_type == {
-  case .Compute;
-    if returns.count != 1
-      compiler_report("GLSL Backend: Jai Compute Shader must return a structure with at least a Vector4 gl_Position field", make_location(header));
-    if arguments.count != 2
-      compiler_report("GLSL Backend: Jai Compute Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(header));
-    if parameter_usings.count != 2
-      compiler_report("GLSL Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(header));
-  case .Vertex;
-    if returns.count != 1
-      compiler_report("GLSL Backend: Jai Vertex Shader must return a structure with at least a Vector4 gl_Position field", make_location(header));
-    if arguments.count != 2
-      compiler_report("GLSL Backend: Jai Vertex Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(header));
-    if parameter_usings.count != 2
-      compiler_report("GLSL Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(header));
-  case .Fragment;
-    if returns.count != 1
-      compiler_report("GLSL Backend: Jai Fragment Shader must return a structure with at least one Vector4", make_location(header));
-    if arguments.count != 2
-      compiler_report("GLSL Backend: Jai Fragment Shader must get two structures as arguments (Vertex output and Uniforms)", make_location(header));
-    if parameter_usings.count != 2
-      compiler_report("GLSL Backend: The struct arguments to a Jai Fragment Shader must be marked 'using'", make_location(header));
+  err :: (msg: string) #expand {
+    compiler_report(tprint("GLSL Backend: Jai % Shader %", shader_type, msg), make_location(header));
+  }
+
+  if returns.count != 1 {
+    if shader_type == .Fragment err("must return a structure with at least one Vector4");
+    else err("must return a structure with at least a Vector4 gl_Position field");
+  }
+
+  if arguments.count != 2 {
+    if shader_type == .Fragment err("must get two structures as arguments (Vertex output and Uniforms)");
+    else err("must get two structures as arguments (Vertex Input and Uniforms)");
+  }
+
+  if parameter_usings.count != 2 {
+    if shader_type == .Fragment err("must have struct arguments marked 'using'");
+    else err("must have struct arguments marked 'using'");
   }
 
   check_array_signature_support("GLSL", header);

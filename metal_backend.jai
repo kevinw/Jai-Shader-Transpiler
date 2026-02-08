@@ -679,28 +679,22 @@ print_metal_global_constants :: (sb: *String_Builder, header: *Code_Procedure_He
 }
 
 check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
-  if shader_type == {
-  case .Compute;
-    if returns.count != 1
-      compiler_report("Metal Backend: Jai Compute Shader must return a structure", make_location(header));
-    if arguments.count == 0
-      compiler_report("Metal Backend: Jai Compute Shader must get AT LEAST 1 structure as an argument", make_location(header));
-    if arguments[0].type_inst.result.type != .STRUCT
-      compiler_report("Metal Backend: Jai Compute Shader must have a structure as the input", make_location(header));
-  case .Vertex;
-    if returns.count != 1
-      compiler_report("Metal Backend: Jai Vertex Shader must return a structure", make_location(header));
-    if arguments.count != 2
-      compiler_report("Metal Backend: Jai Vertex Shader must get two structures as arguments (Vertex Input and Uniforms)", make_location(header));
-    if parameter_usings.count != 2
-      compiler_report("Metal Backend: The struct arguments to a Jai Vertex Shader must be marked 'using'", make_location(header));
-  case .Fragment;
-    if returns.count != 1
-      compiler_report("Metal Backend: Jai Fragment Shader must return a structure", make_location(header));
-    if arguments.count != 2
-      compiler_report("Metal Backend: Jai Fragment Shader must get two structures as arguments (Vertex output and Uniforms)", make_location(header));
-    if parameter_usings.count != 2
-      compiler_report("Metal Backend: The struct arguments to a Jai Fragment Shader must be marked 'using'", make_location(header));
+  err :: (msg: string) #expand {
+    compiler_report(tprint("Metal Backend: Jai % Shader %", shader_type, msg), make_location(header));
+  }
+
+  if returns.count != 1 err("must return a structure");
+
+  if shader_type == .Compute {
+    if arguments.count == 0 err("must get AT LEAST 1 structure as an argument");
+    if arguments.count != 0 && arguments[0].type_inst.result.type != .STRUCT
+      err("must have a structure as the input");
+  } else {
+    if arguments.count != 2 {
+      if shader_type == .Fragment err("must get two structures as arguments (Vertex output and Uniforms)");
+      else err("must get two structures as arguments (Vertex Input and Uniforms)");
+    }
+    if parameter_usings.count != 2 err("must have struct arguments marked 'using'");
   }
 
   check_array_signature_support("Metal", header);
