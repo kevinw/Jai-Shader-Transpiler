@@ -92,6 +92,8 @@ run_compute_sanity_check :: (device: *MTLDevice, queue: *MTLCommandQueue, compil
             return false;
         }
     }
+    
+    log("Compute shader validation succeeded.");
 
     return true;
 }

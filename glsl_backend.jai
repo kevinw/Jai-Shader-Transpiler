@@ -1,5 +1,9 @@
 
-GLSL_VERSION :: "#version 330 core\n";
+GLSL_GRAPHICS_VERSION :: "#version 330 core\n";
+GLSL_COMPUTE_VERSION  :: "#version 430 core\n";
+GLSL_DEFAULT_LOCAL_SIZE_X :: 64;
+GLSL_DEFAULT_LOCAL_SIZE_Y :: 1;
+GLSL_DEFAULT_LOCAL_SIZE_Z :: 1;
 
 // Short explanation...
 // Every function is dumped to a separate string, which the Shader_Write_Context holds a list of
@@ -8,6 +12,10 @@ GLSL_VERSION :: "#version 330 core\n";
 
 write_glsl_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, shader_type: Shader_Type) -> string {
   check_arguments(node.header, shader_type);
+
+  if shader_type == .Compute {
+    return write_glsl_compute_shader(ctx, node);
+  }
 
   // main function string builder
   main_sb: String_Builder;
@@ -19,16 +27,33 @@ write_glsl_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, sh
   return write_glsl_shader_code(ctx, node);
 }
 
+write_glsl_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+  main_sb: String_Builder;
+  append(*main_sb, "void main() {\n");
+  print_glsl_compute_local_bindings(*main_sb, node.header, indent=1);
+  print_glsl_stmt(ctx, *main_sb, node.block, is_main=true);
+  append(*main_sb, "}\n");
+  array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
+
+  return write_glsl_shader_code(ctx, node);
+}
+
 write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, as_jai_string := true) -> string {
   sb: String_Builder;
   if as_jai_string {
     append(*sb, tprint("%_string", node.header.name), " :: #string END\n");
   }
-  append(*sb, GLSL_VERSION);
+  if ctx.type == .Compute append(*sb, GLSL_COMPUTE_VERSION);
+  else append(*sb, GLSL_GRAPHICS_VERSION);
   print_glsl_global_constants(*sb, node.header);
-  print_glsl_in_vars(*sb, node.header, output_layout=false);
-  print_glsl_uniforms(*sb, node.header);
-  print_glsl_out_vars(*sb, node.header);
+  if ctx.type == .Compute {
+    print_glsl_compute_layout(*sb);
+    print_glsl_compute_ssbo_bindings(*sb, node.header);
+  } else {
+    print_glsl_in_vars(*sb, node.header, output_layout=false);
+    print_glsl_uniforms(*sb, node.header);
+    print_glsl_out_vars(*sb, node.header);
+  }
   // Output prototypes for "late binding"
   for ctx.functions {
     if it.name != "main" print_glsl_prototype(*sb, it.prototype);
@@ -42,6 +67,65 @@ write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bod
     append(*sb, "\nEND");
   }
   return builder_to_string(*sb);
+}
+
+print_glsl_compute_layout :: (sb: *String_Builder) {
+  append(sb, tprint("layout(local_size_x = %, local_size_y = %, local_size_z = %) in;\n\n",
+                    GLSL_DEFAULT_LOCAL_SIZE_X, GLSL_DEFAULT_LOCAL_SIZE_Y, GLSL_DEFAULT_LOCAL_SIZE_Z));
+}
+
+print_glsl_compute_ssbo_bindings :: (sb: *String_Builder, header: *Code_Procedure_Header) {
+  next_binding: s64 = 0;
+  for header.arguments {
+    arg_type := ifx it.type_inst then it.type_inst.result else it.expression.type;
+    if declaration_is_parameter_using(header, it) continue;
+
+    if arg_type.type != .POINTER
+      compiler_report("GLSL Backend: Compute non-using arguments must currently be pointers (bound as SSBOs)", make_location(it));
+
+    pointer := cast(*Type_Info_Pointer) arg_type;
+    if pointer.pointer_to.type == .ARRAY
+      compiler_report("GLSL Backend: Compute pointers to arrays are not supported. Use a pointer to element type.", make_location(it));
+
+    append(sb, tprint("layout(std430, binding = %) buffer %_Buffer {\n    ", next_binding, it.name));
+    print_glsl_type(sb, pointer.pointer_to);
+    append(sb, tprint(" %[];\n};\n", it.name));
+    next_binding += 1;
+  }
+  if next_binding != 0 append(sb, "\n");
+}
+
+glsl_compute_builtin_name :: (member: *Type_Info_Struct_Member, header: *Code_Procedure_Header) -> string {
+  note_suffix, found := member_get_note_suffix(member, "inbuilt_");
+  if !found
+    compiler_report("GLSL Backend: Compute using-struct members must have @inbuilt_* notes", make_location(header));
+
+  if note_suffix == {
+    case "thread_position_in_grid"; return "gl_GlobalInvocationID";
+    case "thread_position_in_threadgroup"; return "gl_LocalInvocationID";
+    case "threadgroup_position_in_grid"; return "gl_WorkGroupID";
+    case "thread_index_in_threadgroup"; return "gl_LocalInvocationIndex";
+  }
+
+  compiler_report(tprint("GLSL Backend: Unsupported compute builtin note @inbuilt_%", note_suffix), make_location(header));
+  return "";
+}
+
+print_glsl_compute_local_bindings :: (sb: *String_Builder, header: *Code_Procedure_Header, indent: s64) {
+  for header.arguments {
+    arg_type := ifx it.type_inst then it.type_inst.result else it.expression.type;
+    if !declaration_is_parameter_using(header, it) continue;
+
+    if arg_type.type != .STRUCT
+      compiler_report("GLSL Backend: Compute using arguments must be structs", make_location(it));
+
+    struct_type := cast(*Type_Info_Struct) arg_type;
+    for * struct_type.members {
+      add_indents(sb, indent);
+      print_glsl_typed_name(sb, it.type, it.name);
+      append(sb, " = ", glsl_compute_builtin_name(it, header), ";\n");
+    }
+  }
 }
 
 
@@ -753,6 +837,34 @@ print_glsl_global_constants :: (sb: *String_Builder, header: *Code_Procedure_Hea
 check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
   err :: (msg: string) #expand {
     compiler_report(tprint("GLSL Backend: Jai % Shader %", shader_type, msg), make_location(header));
+  }
+
+  if shader_type == .Compute {
+    if returns.count != 0 {
+      err("must return no values");
+    }
+
+    if arguments.count < 1 {
+      err("must have at least one argument (using input struct + optional pointer buffers)");
+    }
+
+    if parameter_usings.count < 1 {
+      err("must have a using struct argument for compute builtins");
+    }
+
+    for arguments {
+      arg_type := ifx it.type_inst then it.type_inst.result else it.expression.type;
+      if declaration_is_parameter_using(header, it) {
+        if arg_type.type != .STRUCT
+          err("using arguments must be structs");
+      } else {
+        if arg_type.type != .POINTER
+          err("non-using arguments must currently be pointers");
+      }
+    }
+
+    check_array_signature_support("GLSL", header);
+    return;
   }
 
   if returns.count != 1 {

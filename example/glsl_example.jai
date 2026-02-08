@@ -9,6 +9,7 @@ Input :: #import "Input";
 
 #load "glsl_shaders.jai";
 #load "array_shader_tests.jai";
+#load "compute_shader_tests.jai";
 #load "example_gl_backend.jai";
 
 READBACK_SAMPLE_POINTS :: Vector2.[
@@ -54,6 +55,79 @@ validate_gl_readback :: (width: s32, height: s32) -> bool {
   return ok;
 }
 
+run_gl_compute_sanity_check :: () -> bool {
+  #if OS == .MACOS {
+    log("Skipping GLSL compute runtime check on macOS (OpenGL 4.1 does not support compute shaders).");
+    return true;
+  }
+
+  _ = compute_write_indices;
+  _ = compute_write_indices_string;
+
+  program := glCreateProgram();
+  compute_module := glCreateShader(GL_COMPUTE_SHADER);
+  defer glDeleteProgram(program);
+  defer glDeleteShader(compute_module);
+
+  source := compute_write_indices_string;
+  glShaderSource(compute_module, 1, *source.data, xx *source.count);
+  glCompileShader(compute_module);
+
+  err: s32;
+  glGetShaderiv(compute_module, GL_COMPILE_STATUS, *err);
+  if xx err == GL_FALSE {
+    log_error("Compute Shader Compilation Failed:");
+    length: u32;
+    glGetShaderiv(compute_module, GL_INFO_LOG_LENGTH, xx *length);
+    info: *GLchar = alloc(length * size_of(GLchar));
+    glGetShaderInfoLog(compute_module, length, xx 0, info);
+    log_error("%", string.{ length, info });
+    free(info);
+    return false;
+  }
+
+  glAttachShader(program, compute_module);
+  glLinkProgram(program);
+  glGetProgramiv(program, GL_LINK_STATUS, *err);
+  if xx err == GL_FALSE {
+    log_error("Compute Program Linking Failed:");
+    length: u32;
+    glGetProgramiv(program, GL_INFO_LOG_LENGTH, xx *length);
+    info: *GLchar = alloc(length * size_of(GLchar));
+    glGetProgramInfoLog(program, length, xx 0, info);
+    log_error("%", string.{ length, info });
+    free(info);
+    return false;
+  }
+
+  ELEMENT_COUNT :: 64;
+  ssbo_data: [ELEMENT_COUNT] u32;
+  for i: 0..ELEMENT_COUNT-1 ssbo_data[i] = 0xFFFF_FFFF;
+
+  ssbo: u32;
+  glGenBuffers(1, *ssbo);
+  defer glDeleteBuffers(1, *ssbo);
+  glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo);
+  glBufferData(GL_SHADER_STORAGE_BUFFER, ELEMENT_COUNT * size_of(u32), *ssbo_data, GL_STATIC_DRAW);
+  glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, ssbo);
+
+  glUseProgram(program);
+  glDispatchCompute(1, 1, 1);
+  glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+  glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, ELEMENT_COUNT * size_of(u32), *ssbo_data);
+  glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+  for i: 0..ELEMENT_COUNT-1 {
+    if ssbo_data[i] != cast(u32) i {
+      log_error("GLSL compute validation failed: out[%] = %, expected %", i, ssbo_data[i], i);
+      return false;
+    }
+  }
+
+  log("GLSL compute validation succeeded.");
+  return true;
+}
+
 main :: () {
   args_ok, args, is_set := parse_arguments(struct { singleframe: bool; test_readback: bool; });
   singleframe := args_ok && is_set.singleframe;
@@ -62,6 +136,7 @@ main :: () {
   
   window := create_window(1080, 720, "FancyTiles");
   load_gl(window);
+  if !run_gl_compute_sanity_check() exit(1);
 
   //log("Vertex Shader:\n%\n\n=========\n", tiles_vertex_shader_string);
   //log("Fragment Shader:\n%", tiles_fragment_shader_string);

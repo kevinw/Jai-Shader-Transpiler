@@ -18,6 +18,9 @@ run_all_tests :: () {
   check_file_contains(debug_path("array_support_vertex_shader.metal"), "float2 positions[3] = {");
   check_file_contains(debug_path("array_support_fragment_shader.glsl"), "uniform vec4 u_palette[2];");
   check_file_contains(debug_path("array_support_fragment_shader.metal"), "float4 u_palette[2];");
+  check_file_contains(debug_path("compute_write_indices.glsl"), "#version 430 core");
+  check_file_contains(debug_path("compute_write_indices.glsl"), "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;");
+  check_file_contains(debug_path("compute_write_indices.glsl"), "gl_GlobalInvocationID");
   check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
 
   check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
