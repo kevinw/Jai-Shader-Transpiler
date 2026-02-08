@@ -9,6 +9,7 @@ using Vulkan;
 
 #import,file "../module.jai";
 #load "vulkan_shaders.jai";
+#load "example_common.jai";
 
 SDL_Vulkan_LoadLibrary :: (path: *u8) -> s32 #foreign SDL2;
 SDL_Vulkan_UnloadLibrary :: () #foreign SDL2;
@@ -26,6 +27,7 @@ Fragment_Uniforms :: struct {
     u_time: float32;
     _pad: float32;
 }
+
 
 fail :: (message: string, args: .. Any) {
     log_error(message, ..args);
@@ -135,8 +137,9 @@ choose_present_mode :: (modes: [] VkPresentModeKHR) -> VkPresentModeKHR {
 }
 
 main :: () {
-    args_ok, args, is_set := parse_arguments(struct { single_frame: bool; });
+    args_ok, args, is_set := parse_arguments(struct { single_frame: bool; test_readback: bool; });
     single_frame := args_ok && is_set.single_frame;
+    test_readback := args_ok && is_set.test_readback;
     max_frames: s64 = ifx single_frame then 1 else 0x7FFF_FFFF_FFFF_FFFF;
 
     _ := tiles_vertex_shader_vk(.{}, .{});
@@ -315,6 +318,16 @@ main :: () {
         image_count = surface_caps.maxImageCount;
     }
 
+    swapchain_usage := VkImageUsageFlags.COLOR_ATTACHMENT_BIT;
+    if test_readback {
+        if (surface_caps.supportedUsageFlags & .TRANSFER_SRC_BIT) != 0 {
+            swapchain_usage |= .TRANSFER_SRC_BIT;
+        } else {
+            log("Vulkan readback requested but swapchain doesn't support TRANSFER_SRC usage; disabling readback.");
+            test_readback = false;
+        }
+    }
+
     swapchain_info := VkSwapchainCreateInfoKHR.{
         surface = surface,
         minImageCount = image_count,
@@ -322,7 +335,7 @@ main :: () {
         imageColorSpace = surface_format.colorSpace,
         imageExtent = extent,
         imageArrayLayers = 1,
-        imageUsage = .COLOR_ATTACHMENT_BIT,
+        imageUsage = swapchain_usage,
         imageSharingMode = .EXCLUSIVE,
         preTransform = surface_caps.currentTransform,
         compositeAlpha = .OPAQUE_BIT_KHR,
@@ -580,6 +593,19 @@ main :: () {
         vkFreeMemory(device, uniform_memory, null);
     }
 
+    readback_num_bytes: u64 = cast(u64) extent.width * extent.height * 4;
+    readback_buffer: VkBuffer = null;
+    readback_memory: VkDeviceMemory = null;
+    if test_readback {
+        readback_buffer, readback_memory = create_buffer(device, *mem_props,
+            readback_num_bytes, .TRANSFER_DST_BIT,
+            .HOST_VISIBLE_BIT | .HOST_COHERENT_BIT);
+    }
+    defer if readback_buffer != null {
+        vkDestroyBuffer(device, readback_buffer, null);
+        vkFreeMemory(device, readback_memory, null);
+    };
+
     pool_size := VkDescriptorPoolSize.{
         type = .UNIFORM_BUFFER,
         descriptorCount = 1,
@@ -691,6 +717,60 @@ main :: () {
         vkCmdDrawIndexed(command_buffer, indices.count, 1, 0, 0, 0);
         vkCmdEndRenderPass(command_buffer);
 
+        if test_readback {
+            to_transfer := VkImageMemoryBarrier.{
+                srcAccessMask = .COLOR_ATTACHMENT_WRITE_BIT,
+                dstAccessMask = .TRANSFER_READ_BIT,
+                oldLayout = .PRESENT_SRC_KHR,
+                newLayout = .TRANSFER_SRC_OPTIMAL,
+                srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                image = swap_images[image_index],
+                subresourceRange = .{
+                    aspectMask = .COLOR_BIT,
+                    baseMipLevel = 0,
+                    levelCount = 1,
+                    baseArrayLayer = 0,
+                    layerCount = 1,
+                },
+            };
+            vkCmdPipelineBarrier(command_buffer,
+                .COLOR_ATTACHMENT_OUTPUT_BIT, .TRANSFER_BIT, 0,
+                0, null, 0, null, 1, *to_transfer);
+
+            copy_region := VkBufferImageCopy.{
+                bufferOffset = 0,
+                imageSubresource = .{
+                    aspectMask = .COLOR_BIT,
+                    mipLevel = 0,
+                    baseArrayLayer = 0,
+                    layerCount = 1,
+                },
+                imageExtent = .{ extent.width, extent.height, 1 },
+            };
+            vkCmdCopyImageToBuffer(command_buffer, swap_images[image_index], .TRANSFER_SRC_OPTIMAL, readback_buffer, 1, *copy_region);
+
+            to_present := VkImageMemoryBarrier.{
+                srcAccessMask = .TRANSFER_READ_BIT,
+                dstAccessMask = xx 0,
+                oldLayout = .TRANSFER_SRC_OPTIMAL,
+                newLayout = .PRESENT_SRC_KHR,
+                srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                image = swap_images[image_index],
+                subresourceRange = .{
+                    aspectMask = .COLOR_BIT,
+                    baseMipLevel = 0,
+                    levelCount = 1,
+                    baseArrayLayer = 0,
+                    layerCount = 1,
+                },
+            };
+            vkCmdPipelineBarrier(command_buffer,
+                .TRANSFER_BIT, .BOTTOM_OF_PIPE_BIT, 0,
+                0, null, 0, null, 1, *to_present);
+        }
+
         check_vk(vkEndCommandBuffer(command_buffer), "vkEndCommandBuffer");
 
         wait_stage := VkPipelineStageFlags.[.COLOR_ATTACHMENT_OUTPUT_BIT];
@@ -714,6 +794,20 @@ main :: () {
             pImageIndices = *image_index,
         };
         check_vk(vkQueuePresentKHR(queue, *present_info), "vkQueuePresentKHR");
+
+        if test_readback {
+            check_vk(vkWaitForFences(device, 1, *in_flight, VK_TRUE, U64_MAX), "vkWaitForFences(readback)");
+
+            mapped_readback: *void;
+            check_vk(vkMapMemory(device, readback_memory, 0, readback_num_bytes, 0, *mapped_readback), "vkMapMemory(readback)");
+            readback_pixels: [] u8;
+            readback_pixels.data = cast(*u8) mapped_readback;
+            readback_pixels.count = cast(s64) readback_num_bytes;
+            ok := validate_readback_samples("vulkan", readback_pixels, cast(s32) extent.width, cast(s32) extent.height, cast(s64) extent.width * 4, is_bgra=true);
+            vkUnmapMemory(device, readback_memory);
+            if !ok exit(1);
+            test_readback = false;
+        }
 
         frame_index += 1;
     }

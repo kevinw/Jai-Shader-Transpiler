@@ -11,49 +11,7 @@ Input :: #import "Input";
 #load "array_shader_tests.jai";
 #load "compute_shader_tests.jai";
 #load "example_gl_backend.jai";
-
-READBACK_SAMPLE_POINTS :: Vector2.[
-  .{ 0.5, 0.5 },
-  .{ 0.25, 0.25 },
-  .{ 0.75, 0.25 },
-  .{ 0.25, 0.75 },
-  .{ 0.75, 0.75 },
-];
-
-validate_gl_readback :: (width: s32, height: s32) -> bool {
-  sample_count := READBACK_SAMPLE_POINTS.count;
-  non_black := 0;
-  min_luma: float32 = 999.0;
-  max_luma: float32 = -1.0;
-  sum_luma: float32 = 0;
-
-  pixel: [4] u8;
-  for READBACK_SAMPLE_POINTS {
-    px := clamp(cast(s32) floor(it.x * xx width), 0, width-1);
-    py := clamp(cast(s32) floor(it.y * xx height), 0, height-1);
-    glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, *pixel);
-
-    r := xx pixel[0] / 255.0;
-    g := xx pixel[1] / 255.0;
-    b := xx pixel[2] / 255.0;
-    luma := cast(float32) (0.2126 * r + 0.7152 * g + 0.0722 * b);
-
-    if luma > 0.02 non_black += 1;
-    min_luma = min(min_luma, luma);
-    max_luma = max(max_luma, luma);
-    sum_luma += luma;
-  }
-
-  avg_luma := sum_luma / xx sample_count;
-  log("READBACK_SUMMARY backend=glsl samples=% non_black=% avg_luma=% min_luma=% max_luma=%",
-      sample_count, non_black, avg_luma, min_luma, max_luma);
-
-  ok := (non_black >= 2) && (max_luma > 0.05) && ((max_luma - min_luma) > 0.02);
-  if !ok {
-    log_error("READBACK_FAIL backend=glsl");
-  }
-  return ok;
-}
+#load "example_common.jai";
 
 run_gl_compute_sanity_check :: () -> bool {
   #if OS == .MACOS {
@@ -259,7 +217,10 @@ main :: () {
     glDrawArrays(GL_TRIANGLES, 0, 6);
     if test_readback {
       glFinish();
-      if !validate_gl_readback(1080, 720) exit(1);
+      readback_pixels := NewArray(cast(s64) (1080 * 720 * 4), u8);
+      defer array_free(readback_pixels);
+      glReadPixels(0, 0, 1080, 720, GL_RGBA, GL_UNSIGNED_BYTE, readback_pixels.data);
+      if !validate_readback_samples("glsl", readback_pixels, 1080, 720, 1080 * 4) exit(1);
     }
 
     swap_buffers(window);

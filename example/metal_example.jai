@@ -10,6 +10,7 @@ Debug :: #import "Debug";
 #load "glsl_shaders.jai";
 #load "array_shader_tests.jai";
 #load "compute_shader_tests.jai";
+#load "example_common.jai";
 
 Fragment_Shader_Uniforms :: struct {
     u_resolution: Vector2;
@@ -299,16 +300,15 @@ metal_example_with_window :: () -> (success: bool) {
             test_readback = false;
             MTLCommandBuffer.waitUntilCompleted(command_buffer);
             
-            using readback_info: Readback_Info;
-            bytes_per_row = cast(NSUInteger) drawable_size.width * 4;
-            width  = cast(s32) drawable_size.width;
-            height = cast(s32) drawable_size.height;
-            pixels = NewArray(cast(s64)(bytes_per_row * drawable_size.height), u8);
+            bytes_per_row := cast(NSUInteger) drawable_size.width * 4;
+            width  := cast(s32) drawable_size.width;
+            height := cast(s32) drawable_size.height;
+            pixels := NewArray(cast(s64)(bytes_per_row * drawable_size.height), u8);
             defer array_free(pixels);
             tex := cast(*MTLTexture) CAMetalDrawable.texture(drawable);
             region := MTLRegionMake2D(0, 0, xx width, xx height);
             MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(tex, pixels.data, bytes_per_row, region, 0);
-            if !validate_metal_readback(readback_info) {
+            if !validate_readback_samples("metal", pixels, width, height, cast(s64) bytes_per_row) {
                 return false;
             }
         }
@@ -332,56 +332,6 @@ log_nserror :: (label: string, error: *NSError) -> bool {
         log_error("%: (NSError with no description)", label);
     }
     return true;
-}
-
-Readback_Info :: struct {
-  pixels: []u8;
-  bytes_per_row: NSUInteger = 0;
-  width: s32;
-  height: s32;
-}
-
-READBACK_SAMPLE_POINTS :: Vector2.[
-    .{ 0.5, 0.5 },
-    .{ 0.25, 0.25 },
-    .{ 0.75, 0.25 },
-    .{ 0.25, 0.75 },
-    .{ 0.75, 0.75 },
-];
-
-validate_metal_readback :: (using readback_info: Readback_Info) -> bool {
-    sample_count := READBACK_SAMPLE_POINTS.count;
-    non_black := 0;
-    min_luma: float32 = 999.0;
-    max_luma: float32 = -1.0;
-    sum_luma: float32 = 0;
-
-    for READBACK_SAMPLE_POINTS {
-        px := clamp(cast(s32) floor(it.x * xx width), 0, width-1);
-        py := clamp(cast(s32) floor(it.y * xx height), 0, height-1);
-
-        offset := cast(s64) py * cast(s64) bytes_per_row + cast(s64) px * 4;
-        p := pixels.data + offset;
-        r := xx p[0] / 255.0;
-        g := xx p[1] / 255.0;
-        b := xx p[2] / 255.0;
-        luma := cast(float32) (0.2126 * r + 0.7152 * g + 0.0722 * b);
-
-        if luma > 0.02 non_black += 1;
-        min_luma = min(min_luma, luma);
-        max_luma = max(max_luma, luma);
-        sum_luma += luma;
-    }
-
-    avg_luma := sum_luma / xx sample_count;
-    log("READBACK_SUMMARY backend=metal samples=% non_black=% avg_luma=% min_luma=% max_luma=%",
-        sample_count, non_black, avg_luma, min_luma, max_luma);
-
-    ok := (non_black >= 2) && (max_luma > 0.05) && ((max_luma - min_luma) > 0.02);
-    if !ok {
-        log_error("READBACK_FAIL backend=metal");
-    }
-    return ok;
 }
 
 
