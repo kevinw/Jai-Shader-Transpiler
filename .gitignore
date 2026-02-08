@@ -10,3 +10,4 @@ test_runner
 .DS_Store
 *.pdb
 *.exe
+vulkan_example
