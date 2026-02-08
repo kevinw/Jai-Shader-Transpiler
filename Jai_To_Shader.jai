@@ -10,7 +10,8 @@
 // Changing GLSL version without changing module code.
 // Adding #line directive for shader debuggers to point back at the original Jai file
 
-VERBOSE :: false;
+VERBOSE      :: false;
+DEBUG_OUTDIR :: ".generated_shaders";
 
 #load "backend_shared.jai";
 #load "glsl_backend.jai";
@@ -87,7 +88,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           if plugin.output_shaders {
             ext := tprint("%", ctx.language);
             to_lower_in_place(ext);
-            filename := tprint("output_%.%", ctx.name, ext);
+            make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
+            filename := tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ext);
             file_source := write_shader_code(ctx, ctx.main_fn, as_jai_string=false);
             ok := write_entire_file(filename, file_source);
             if !ok {

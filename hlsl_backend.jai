@@ -1,32 +1,24 @@
 check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
+  err :: (msg: string) #expand {
+    compiler_report(tprint("HLSL Backend: Jai % Shader %", shader_type, msg), make_location(header));
+  }
+  
   if shader_type == {
   case .Compute;
-    if returns.count != 1
-      compiler_report("HLSL Backend: Jai Compute Shader must return a structure", make_location(header));
-    if returns[0].type_inst.result.type != .STRUCT
-      compiler_report("HLSL Backend: Jai Compute Shader must return a structure", make_location(header));
-    if arguments.count == 0
-      compiler_report("HLSL Backend: Jai Compute Shader must get AT LEAST 1 structure as an argument. (Vertex Input and (if required) additional structs as Constant Buffers)", make_location(header));
-    if arguments[0].type_inst.result.type != .STRUCT
-      compiler_report("HLSL Backend: Jai Compute Shader must have a structure as the input", make_location(header));
+    if returns.count != 1 err("must return a structure");
+    if returns[0].type_inst.result.type != .STRUCT err("must return a structure");
+    if arguments.count == 0 err("must get AT LEAST 1 structure as an argument. (Vertex Input and (if required) additional structs as Constant Buffers)");
+    if arguments[0].type_inst.result.type != .STRUCT err("must have a structure as the input");
   case .Vertex;
-    if returns.count != 1
-      compiler_report("HLSL Backend: Jai Vertex Shader must return a structure", make_location(header));
-    if returns[0].type_inst.result.type != .STRUCT
-      compiler_report("HLSL Backend: Jai Vertex Shader must return a structure", make_location(header));
-    if arguments.count == 0
-      compiler_report("HLSL Backend: Jai Vertex Shader must get AT LEAST 1 structure as an argument. (Vertex Input and (if required) additional structs as Constant Buffers)", make_location(header));
-    if arguments[0].type_inst.result.type != .STRUCT
-      compiler_report("HLSL Backend: Jai Vertex Shader must have a structure as the input", make_location(header));
+    if returns.count != 1 err("must return a structure");
+    if returns[0].type_inst.result.type != .STRUCT err("must return a structure");
+    if arguments.count == 0 err("must get AT LEAST 1 structure as an argument. (Vertex Input and (if required) additional structs as Constant Buffers)");
+    if arguments[0].type_inst.result.type != .STRUCT err("must have a structure as the input");
   case .Fragment;
-    if returns.count != 1
-      compiler_report("HLSL Backend: Jai Fragment Shader must return a structure", make_location(header));
-    if returns[0].type_inst.result.type != .STRUCT
-      compiler_report("HLSL Backend: Jai Fragment Shader must return a structure", make_location(header));
-    if arguments.count >= 1
-      compiler_report("HLSL Backend: Jai Fragment Shader must get AT LEAST 1 structure as an argument. (Fragment Input and (if required) additional structs as Constant Buffers)", make_location(header));
-    if arguments[0].type_inst.result.type != .STRUCT
-      compiler_report("HLSL Backend: Jai Fragment Shader must have a structure as the input", make_location(header));
+    if returns.count != 1 err("must return a structure");
+    if returns[0].type_inst.result.type != .STRUCT err("must return a structure");
+    if arguments.count >= 1 err("must get AT LEAST 1 structure as an argument. (Fragment Input and (if required) additional structs as Constant Buffers)");
+    if arguments[0].type_inst.result.type != .STRUCT err("must have a structure as the input");
   }
 }
 

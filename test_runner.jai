@@ -4,6 +4,8 @@
 #import "File_Utilities";
 Process :: #import "Process";
 
+DEBUG_OUTDIR :: ".generated_shaders";
+
 fail :: (message: string, args: .. Any) {
     log_error(message, ..args);
     exit(1);
@@ -62,12 +64,11 @@ collect_generated_files :: (extension: string) -> [..] string {
     args.files = *files;
 
     visitor :: (info: *File_Visit_Info, args: *Args) {
-        if !begins_with(info.short_name, "output_") return;
         if !ends_with(info.short_name, args.extension) return;
-        array_add(args.files, copy_string(info.short_name));
+        array_add(args.files, copy_string(tprint("%/%", DEBUG_OUTDIR, info.short_name)));
     }
 
-    ok := visit_files(".", recursive=false, *args, visitor, visit_files=true, visit_directories=false);
+    ok := visit_files(DEBUG_OUTDIR, recursive=false, *args, visitor, visit_files=true, visit_directories=false);
     if !ok {
         fail("Failed while listing generated shader files.");
     }
@@ -115,7 +116,7 @@ compile_generated_metal_shaders :: () {
     }
 
     for metal_files {
-        stem := it;
+        stem := path_filename(it);
         stem.count -= ".metal".count;
 
         air := tprint(".build/tests/%.air", stem);
@@ -131,16 +132,19 @@ compile_generated_metal_shaders :: () {
 main :: () {
     log("Running tests...");
     run_command_checked("Build shaders", .["jai", "-quiet", "build.jai", "-", "-output_shaders"]);
+    
+    debug_path :: (name: string) -> string {
+        return tprint("%/%", DEBUG_OUTDIR, name);
+    }
+    
+    check_file_contains(debug_path("array_support_vertex_shader.glsl"), "vec2 positions[3] = vec2[](");
+    check_file_contains(debug_path("array_support_vertex_shader.metal"), "float2 positions[3] = {");
+    check_file_contains(debug_path("array_support_fragment_shader.glsl"), "uniform vec4 u_palette[2];");
+    check_file_contains(debug_path("array_support_fragment_shader.metal"), "float4 u_palette[2];");
+    check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
 
-    check_file_contains("output_array_support_vertex_shader.glsl", "vec2 positions[3] = vec2[](");
-    check_file_contains("output_array_support_vertex_shader.metal", "float2 positions[3] = {");
-    check_file_contains("output_array_support_fragment_shader.glsl", "uniform vec4 u_palette[2];");
-    check_file_contains("output_array_support_fragment_shader.metal", "float4 u_palette[2];");
-    check_file_contains("output_tiles_fragment_shader.metal",
-        "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
-
-    check_file_not_contains("output_array_support_vertex_shader.glsl", "<operator_not_supported>");
-    check_file_not_contains("output_array_support_vertex_shader.metal", "<operator_not_supported>");
+    check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
+    check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "<operator_not_supported>");
 
     for collect_generated_files(".glsl") check_file_not_contains(it, "#string END");
     for collect_generated_files(".metal") check_file_not_contains(it, "#string END");
