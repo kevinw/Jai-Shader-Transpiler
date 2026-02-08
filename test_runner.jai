@@ -31,7 +31,9 @@ run_all_tests :: () {
   
   // run example programs with the generated shaders to check they work at runtime (not just compile time).
   run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe", "-test_readback"]);
-  run_command_checked("Run Metal example", .["./metal_example", "-singleframe", "-test_readback"]);
+  
+  #if OS == .MACOS 
+    run_command_checked("Run Metal example", .["./metal_example", "-singleframe", "-test_readback"]);
 
   log("Array shader checks passed. Metal and GLSL files compile.");
 }
@@ -136,26 +138,30 @@ compile_generated_metal_shaders :: () {
         return;
     }
 
-    metal_files := collect_generated_files(".metal");
-    if metal_files.count == 0 {
-        fail("No generated Metal shader files found (expected output_*.metal).");
+    #if OS == .MACOS {
+      metal_files := collect_generated_files(".metal");
+      if metal_files.count == 0 {
+          fail("No generated Metal shader files found (expected output_*.metal).");
+      }
     }
 
     if !make_directory_if_it_does_not_exist(".build/tests", recursive=true) {
         fail("Could not create .build/tests output directory for Metal compiler artifacts.");
     }
 
-    for metal_files {
-        stem := path_filename(it);
-        stem.count -= ".metal".count;
-
-        air := tprint(".build/tests/%.air", stem);
-        metallib := tprint(".build/tests/%.metallib", stem);
-
-        run_command_checked(tprint("Compile Metal %", it),
-            .["xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-c", it, "-o", air]);
-        run_command_checked(tprint("Link Metal library %", it),
-            .["xcrun", "-sdk", "macosx", "metallib", air, "-o", metallib]);
+    #if OS == .MACOS {
+      for metal_files {
+          stem := path_filename(it);
+          stem.count -= ".metal".count;
+  
+          air := tprint(".build/tests/%.air", stem);
+          metallib := tprint(".build/tests/%.metallib", stem);
+  
+          run_command_checked(tprint("Compile Metal %", it),
+              .["xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-c", it, "-o", air]);
+          run_command_checked(tprint("Link Metal library %", it),
+              .["xcrun", "-sdk", "macosx", "metallib", air, "-o", metallib]);
+      }
     }
 }
 
