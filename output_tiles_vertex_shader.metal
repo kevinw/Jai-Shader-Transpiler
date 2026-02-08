@@ -14,7 +14,7 @@ struct VertexShader_Out {
 };
 
 
-vertex VertexShader_Out main(VertexShader_In in [[stage_in]], constant VertexShader_Uniforms& un [[buffer(0)]]) {
+vertex VertexShader_Out VertexMain(VertexShader_In in [[stage_in]], constant VertexShader_Uniforms& un [[buffer(0)]]) {
      float2 a_pos = in.a_pos;
      float4 gl_Position;
 

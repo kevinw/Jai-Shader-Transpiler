@@ -2,6 +2,8 @@ METAL_HEADER :: "#include <metal_stdlib>\nusing namespace metal;\n\n";
 
 write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, shader_type: Shader_Type) -> string {
   check_arguments(node.header, shader_type);
+  
+  main_function_name := tprint("%Main", shader_type);
 
   main_sb: String_Builder;
   if shader_type == {
@@ -10,7 +12,7 @@ write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, s
   case .Compute; // nothing
   }
   append(*main_sb, (cast(*Type_Info_Struct) node.header.returns[0].type_inst.result).name);
-  append(*main_sb, " main(");
+  append(*main_sb, " ", main_function_name, "(");
   print_metal_stage_in_arg(*main_sb, node.header.arguments[0]);
   if node.header.arguments.count >= 2 {
     append(*main_sb, ", ");

@@ -16,7 +16,7 @@ struct FragmentShader_Out {
 };
 
 
-fragment FragmentShader_Out main(VertexShader_Out in [[stage_in]], constant FragmentShader_Uniforms& un [[buffer(0)]]) {
+fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], constant FragmentShader_Uniforms& un [[buffer(0)]]) {
      float4 gl_FragCoord = in.gl_FragCoord;
      float2 u_resolution = un.u_resolution;
      float u_time = un.u_time;

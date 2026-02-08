@@ -1,0 +1,14 @@
+[
+  {
+    "label": "debug transpiler metal_example",
+    "build": {
+      "command": "jai",
+      "args": ["-very_debug", "build.jai"],
+      "cwd": "$ZED_WORKTREE_ROOT/modules/Jai-Shader-Transpiler",
+    },
+    "request": "launch",
+    "mode": "debug",
+    "program": "$ZED_WORKTREE_ROOT/modules/Jai-Shader-Transpiler/metal_example",
+    "adapter": "CodeLLDB",
+  },
+]

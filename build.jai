@@ -7,8 +7,8 @@
 #import,dir "."; // #import "Jai-Shader-Transpiler" in your code.
 
 #run,stallable {
-  build("example/glsl_example.jai", "Shaders");
-  build("example/hlsl_example.jai", "hlsl_example");
+  //build("example/glsl_example.jai", "Shaders");
+  //build("example/hlsl_example.jai", "hlsl_example");
   #if OS == .MACOS {
     build("example/metal_example.jai", "metal_example");
   }
