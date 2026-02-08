@@ -17,13 +17,13 @@
 Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
     output_shaders: bool;
+    currently_waiting_contexts: [..] Shader_Write_Context;
 }
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
   p := New(Jai_To_Shader_Plugin);
 
   p.message = convert_procs;
-  p.shutdown = p => { free(p); };
 
   return p;
 }
@@ -37,17 +37,17 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       for tc.procedure_bodies {
         // Has a @glsl Note
         if proc_has_note(it.expression.header, "glsl") {
-          array_add(*currently_waiting_contexts, create_shader_write_context(.GLSL, it.expression));
+          array_add(*plugin.currently_waiting_contexts, create_shader_write_context(.GLSL, it.expression));
         }
         
         // Has a @hlsl Note
         if proc_has_note(it.expression.header, "hlsl") {
-          array_add(*currently_waiting_contexts, create_shader_write_context(.HLSL, it.expression));
+          array_add(*plugin.currently_waiting_contexts, create_shader_write_context(.HLSL, it.expression));
         }
 
         // Has a @metal Note
         if proc_has_note(it.expression.header, "metal") {
-          array_add(*currently_waiting_contexts, create_shader_write_context(.METAL, it.expression));
+          array_add(*plugin.currently_waiting_contexts, create_shader_write_context(.METAL, it.expression));
         }
 
         // Has no language note, but has a shader-stage note.
@@ -67,7 +67,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     case .PHASE; {
       phase := cast(*Message_Phase) message;
       if phase.phase == .TYPECHECKED_ALL_WE_CAN {
-        for * ctx: currently_waiting_contexts {
+        for * ctx: plugin.currently_waiting_contexts {
           
           s: string;
           if ctx.type == {
@@ -96,10 +96,10 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     }
     
     case .COMPLETE; {
-      if currently_waiting_contexts.count != 0 {
+      if plugin.currently_waiting_contexts.count != 0 {
         compiler_report("Jai Shader Transpiler: Something went wrong while converting Jai Shaders to shader code.\nThere's some functions that have not yet been transpiled, that a shader is waiting on. This is not good.");
       }
-      array_free(currently_waiting_contexts);
+      array_reset(*plugin.currently_waiting_contexts);
     }
   }
 }
@@ -292,7 +292,6 @@ Shader_Write_Context :: struct {
   functions: [..] Shader_Function;
 }
 
-currently_waiting_contexts: [..] Shader_Write_Context;
 
 #import "Basic";
 #import "Compiler";

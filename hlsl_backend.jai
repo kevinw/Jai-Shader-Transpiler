@@ -1,12 +1,19 @@
+check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
+  if shader_type == {
+  case .Compute;
+    if returns.count != 1
+      compiler_report("HLSL Backend: Jai Compute Shader must return a structure", make_location(header));
+    if returns[0].type_inst.result.type != .STRUCT
+      compiler_report("HLSL Backend: Jai Compute Shader must return a structure", make_location(header));
+    if arguments.count == 0
+      compiler_report("HLSL Backend: Jai Compute Shader must get AT LEAST 1 structure as an argument. (Vertex Input and (if required) additional structs as Constant Buffers)", make_location(header));
+    if arguments[0].type_inst.result.type != .STRUCT
+      compiler_report("HLSL Backend: Jai Compute Shader must have a structure as the input", make_location(header));
+  }
+}
+
 write_hlsl_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  if node.header.returns.count != 1
-    compiler_report("HLSL Backend: Jai Compute Shader must return a structure", make_location(node.header));
-  if node.header.returns[0].type_inst.result.type != .STRUCT
-    compiler_report("HLSL Backend: Jai Compute Shader must return a structure", make_location(node.header));
-  if node.header.arguments.count == 0
-    compiler_report("HLSL Backend: Jai Compute Shader must get AT LEAST 1 structure as an argument. (Vertex Input and (if required) additional structs as Constant Buffers)", make_location(node.header));
-  if node.header.arguments[0].type_inst.result.type != .STRUCT
-    compiler_report("HLSL Backend: Jai Compute Shader must have a structure as the input", make_location(node.header));
+  check_arguments(node.header, .Compute);
   
   main_sb: String_Builder;
   append(*main_sb, (cast(*Type_Info_Struct)node.header.returns[0].type_inst.result).name);
