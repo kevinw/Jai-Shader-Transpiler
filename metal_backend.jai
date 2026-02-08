@@ -1,5 +1,8 @@
 METAL_HEADER :: "#include <metal_stdlib>\nusing namespace metal;\n\n";
 
+METAL_RADIANS_HELPERS :: "inline float jai_radians(float v) { return v * 0.01745329251994329577f; }\ninline float2 jai_radians(float2 v) { return v * 0.01745329251994329577f; }\ninline float3 jai_radians(float3 v) { return v * 0.01745329251994329577f; }\ninline float4 jai_radians(float4 v) { return v * 0.01745329251994329577f; }\n\n";
+METAL_DEGREES_HELPERS :: "inline float jai_degrees(float v) { return v * 57.29577951308232088f; }\ninline float2 jai_degrees(float2 v) { return v * 57.29577951308232088f; }\ninline float3 jai_degrees(float3 v) { return v * 57.29577951308232088f; }\ninline float4 jai_degrees(float4 v) { return v * 57.29577951308232088f; }\n\n";
+
 write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, shader_type: Shader_Type) -> string {
   check_arguments(node.header, shader_type);
   
@@ -30,10 +33,15 @@ write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, s
 
 write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, as_jai_string := true) -> string {
   sb: String_Builder;
+  use_jai_radians := metal_shader_uses_function(ctx, "jai_radians(");
+  use_jai_degrees := metal_shader_uses_function(ctx, "jai_degrees(");
   if as_jai_string {
     append(*sb, tprint("%_metal_string", node.header.name), " :: #string END\n");
   }
   append(*sb, METAL_HEADER);
+  if use_jai_radians append(*sb, METAL_RADIANS_HELPERS);
+  if use_jai_degrees append(*sb, METAL_DEGREES_HELPERS);
+  print_metal_global_constants(*sb, node.header);
   print_metal_in_struct(*sb, node.header);
   if node.header.arguments.count >= 2 print_metal_uniform_struct(*sb, node.header);
   print_metal_out_struct(*sb, node.header, ctx.type);
@@ -51,6 +59,14 @@ write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bo
   return builder_to_string(*sb);
 }
 
+metal_shader_uses_function :: (ctx: *Shader_Write_Context, needle: string) -> bool {
+  for ctx.functions {
+    found, _ := contains(it.code, needle);
+    if found return true;
+  }
+  return false;
+}
+
 print_metal_in_struct :: (sb: *String_Builder, node: *Code_Procedure_Header) {
   struct_type_generic := node.arguments[0].type_inst.result;
   if struct_type_generic.type != .STRUCT
@@ -61,6 +77,8 @@ print_metal_in_struct :: (sb: *String_Builder, node: *Code_Procedure_Header) {
   attribute_i := 0;
   for * struct_type.members {
     if node_is_fragment_shader(node) && it.name == "gl_Position" continue;
+    if type_contains_array(it.type)
+      compiler_report("Metal Backend: Array members are not supported in stage input/output structs. Use non-array varyings for now.", make_location(node.arguments[0]));
 
     append(sb, "    ");
     print_metal_member_with_typename(sb, it);
@@ -103,6 +121,8 @@ print_metal_out_struct :: (sb: *String_Builder, node: *Code_Procedure_Header, sh
   color_i := 0;
   for * struct_type.members {
     if shader_type == .Vertex && it.name == "gl_FragCoord" continue;
+    if type_contains_array(it.type)
+      compiler_report("Metal Backend: Array members are not supported in stage input/output structs. Use non-array varyings for now.", make_location(node.returns[0]));
 
     append(sb, "    ");
     print_metal_member_with_typename(sb, it);
@@ -135,17 +155,13 @@ print_metal_local_bindings :: (ctx: *Shader_Write_Context, sb: *String_Builder, 
   for * in_struct_type.members {
     if node_is_fragment_shader(node) && it.name == "gl_Position" continue;
 
-    add_indents(sb, indent);
-    print_metal_type(sb, it.type);
-    append(sb, " ", it.name, " = ", node.arguments[0].name, ".", it.name, ";\n");
+    print_metal_local_binding(sb, it.type, it.name, tprint("%.%", node.arguments[0].name, it.name), indent);
   }
 
   if node.arguments.count >= 2 {
     un_struct_type := cast(*Type_Info_Struct) node.arguments[1].type_inst.result;
     for * un_struct_type.members {
-      add_indents(sb, indent);
-      print_metal_type(sb, it.type);
-      append(sb, " ", it.name, " = ", node.arguments[1].name, ".", it.name, ";\n");
+      print_metal_local_binding(sb, it.type, it.name, tprint("%.%", node.arguments[1].name, it.name), indent);
     }
   }
 
@@ -154,10 +170,39 @@ print_metal_local_bindings :: (ctx: *Shader_Write_Context, sb: *String_Builder, 
     if ctx.type == .Vertex && it.name == "gl_FragCoord" continue;
 
     add_indents(sb, indent);
-    print_metal_type(sb, it.type);
-    append(sb, " ", it.name, ";\n");
+    print_metal_typed_name(sb, it.type, it.name);
+    append(sb, ";\n");
   }
   append(sb, "\n");
+}
+
+print_metal_local_binding :: (sb: *String_Builder, type: *Type_Info, local_name: string, source_expr: string, indent: s64) {
+  add_indents(sb, indent);
+  print_metal_typed_name(sb, type, local_name);
+  if type.type == .ARRAY {
+    append(sb, ";\n");
+    print_metal_array_copy(sb, type, local_name, source_expr, indent);
+  } else {
+    append(sb, " = ", source_expr, ";\n");
+  }
+}
+
+print_metal_array_copy :: (sb: *String_Builder, type: *Type_Info, dst_expr: string, src_expr: string, indent: s64) {
+  if type.type != .ARRAY {
+    add_indents(sb, indent);
+    append(sb, dst_expr, " = ", src_expr, ";\n");
+    return;
+  }
+
+  array_type := cast(*Type_Info_Array) type;
+  if array_type.array_type != .FIXED
+    compiler_report("Metal Backend: Only fixed-size arrays are currently supported in Jai Shaders");
+
+  for i: 0..array_type.array_count-1 {
+    dst_member := tprint("%[%]", dst_expr, i);
+    src_member := tprint("%[%]", src_expr, i);
+    print_metal_array_copy(sb, array_type.element_type, dst_member, src_member, indent);
+  }
 }
 
 print_metal_output_return :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Procedure_Header, indent: s64) {
@@ -177,6 +222,7 @@ print_metal_output_return :: (ctx: *Shader_Write_Context, sb: *String_Builder, n
 print_metal_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: *Code_Procedure_Header) {
   if fn.returns.count != 0 {
     ret := fn.returns[0];
+    report_array_return_not_supported("Metal", ret);
     if ret.type_inst
       print_metal_type(sb, ret.type_inst.result);
     else
@@ -187,6 +233,7 @@ print_metal_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: *C
 
   append(sb, tprint(" %(", fn.name));
   for fn.arguments {
+    report_array_parameter_not_supported("Metal", it);
     if it.type_inst
       print_metal_type(sb, it.type_inst.result);
     else
@@ -204,6 +251,7 @@ print_metal_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: *C
 print_metal_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
   if header.returns.count != 0 {
     ret := header.returns[0];
+    report_array_return_not_supported("Metal", ret);
     if ret.type_inst
       print_metal_type(sb, ret.type_inst.result);
     else
@@ -214,6 +262,7 @@ print_metal_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
 
   append(sb, tprint(" %(", header.name));
   for header.arguments {
+    report_array_parameter_not_supported("Metal", it);
     if it.type_inst
       print_metal_type(sb, it.type_inst.result);
     else
@@ -233,10 +282,9 @@ print_metal_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
         op := cast(*Code_Declaration) it;
 
         if op.type_inst
-          print_metal_type(sb, op.type_inst.result);
+          print_metal_typed_name(sb, op.type_inst.result, op.name);
         else
-          print_metal_type(sb, op.expression.type);
-        append(sb, " ", op.name);
+          print_metal_typed_name(sb, op.expression.type, op.name);
 
         if op.expression {
           append(sb, " = ");
@@ -402,19 +450,9 @@ print_metal_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node
     case .LITERAL; {
       lit := cast(*Code_Literal) node;
       if lit.value_type == .STRUCT {
-        if !lit.struct_literal_info.type_expression {
-          compiler_report("Unfortunately, we can't easily know enough about types without the explicit name here.", make_location(lit));
-          return;
-        }
-
-        name := cast(*Code_Ident) lit.struct_literal_info.type_expression.type_valued_expression;
-        append(sb, jai_to_metal_type_name(name.name));
-        append(sb, "(");
-        for lit.struct_literal_info.arguments {
-          if it_index != 0 append(sb, ", ");
-          print_metal_expr(ctx, sb, it);
-        }
-        append(sb, ")");
+        print_metal_struct_literal(ctx, sb, lit);
+      } else if lit.value_type == .ARRAY {
+        print_metal_array_literal(ctx, sb, lit);
       } else PP.print_expression(sb, node);
     }
 
@@ -445,14 +483,29 @@ print_metal_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node
 }
 
 print_metal_binary_operator :: (ctx: *Shader_Write_Context, sb: *String_Builder, bn: *Code_Binary_Operator) {
+  if bn.operator_type == .ARRAY_SUBSCRIPT {
+    print_metal_expr(ctx, sb, bn.left);
+    append(sb, "[");
+    print_metal_subscript_index_expr(ctx, sb, bn.right);
+    append(sb, "]");
+    return;
+  }
+
   print_metal_expr(ctx, sb, bn.left);
-  space: string = ifx cast(u8) bn.operator_type == "." then "" else " ";
+  space := " ";
+  if bn.operator_type == cast(Operator_Type) #char "." space = "";
   append(sb, space, operator_string(bn.operator_type), space);
   print_metal_expr(ctx, sb, bn.right);
 }
 
 print_metal_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder, pc: *Code_Procedure_Call) {
-  PP.print_expression(sb, pc.procedure_expression);
+  if pc.procedure_expression.kind == .IDENT {
+    name := cast(*Code_Ident) pc.procedure_expression;
+    update_metal_helper_usage(ctx, name.name);
+    append(sb, map_metal_procedure_name(name.name));
+  } else {
+    PP.print_expression(sb, pc.procedure_expression);
+  }
   append(sb, "(");
   for pc.arguments_sorted {
     print_metal_expr(ctx, sb, it);
@@ -461,9 +514,20 @@ print_metal_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder, 
   append(sb, ")");
 }
 
+map_metal_procedure_name :: (name: string) -> string {
+  if name == "mod" return "fmod";
+  if name == "radians" return "jai_radians";
+  if name == "degrees" return "jai_degrees";
+  return name;
+}
+
+update_metal_helper_usage :: (ctx: *Shader_Write_Context, name: string) {
+  if name == "radians" ctx.metal_use_jai_radians = true;
+  if name == "degrees" ctx.metal_use_jai_degrees = true;
+}
+
 print_metal_member_with_typename :: (sb: *String_Builder, thing: *Type_Info_Struct_Member) {
-  print_metal_type(sb, thing.type);
-  append(sb, " ", thing.name);
+  print_metal_typed_name(sb, thing.type, thing.name);
 }
 
 print_metal_type :: (sb: *String_Builder, type: *Type_Info) {
@@ -484,7 +548,88 @@ print_metal_type :: (sb: *String_Builder, type: *Type_Info) {
   }
 }
 
+print_metal_typed_name :: (sb: *String_Builder, type: *Type_Info, name: string) {
+  base_type, array_suffix := split_array_type_and_suffix("Metal", type);
+  print_metal_type(sb, base_type);
+  append(sb, " ", name, array_suffix);
+}
+
+print_metal_array_literal :: (ctx: *Shader_Write_Context, sb: *String_Builder, lit: *Code_Literal) {
+  info := lit.array_literal_info;
+  append(sb, "{");
+  for info.array_members {
+    if it_index != 0 append(sb, ", ");
+    print_metal_array_member_expr(ctx, sb, it, info.element_type.result);
+  }
+  append(sb, "}");
+}
+
+print_metal_array_member_expr :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Node, expected_type: *Type_Info) {
+  if node.kind == .LITERAL {
+    lit := cast(*Code_Literal) node;
+    if lit.value_type == .STRUCT {
+      print_metal_struct_literal(ctx, sb, lit, expected_type);
+      return;
+    }
+  }
+  print_metal_expr(ctx, sb, node);
+}
+
+print_metal_struct_literal :: (ctx: *Shader_Write_Context, sb: *String_Builder, lit: *Code_Literal, expected_type: *Type_Info = null) {
+  if lit.struct_literal_info.type_expression {
+    name := cast(*Code_Ident) lit.struct_literal_info.type_expression.type_valued_expression;
+    append(sb, jai_to_metal_type_name(name.name));
+  } else if expected_type && expected_type.type == .STRUCT {
+    struct_type := cast(*Type_Info_Struct) expected_type;
+    append(sb, jai_to_metal_type_name(struct_type.name));
+  } else if lit.type.type == .STRUCT {
+    struct_type := cast(*Type_Info_Struct) lit.type;
+    append(sb, jai_to_metal_type_name(struct_type.name));
+  } else {
+    compiler_report("Unfortunately, we can't easily know enough about types without the explicit name here.", make_location(lit));
+    return;
+  }
+
+  append(sb, "(");
+  for lit.struct_literal_info.arguments {
+    if it_index != 0 append(sb, ", ");
+    print_metal_expr(ctx, sb, it);
+  }
+  append(sb, ")");
+}
+
+print_metal_subscript_index_expr :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Node) {
+  inner: String_Builder;
+  print_metal_expr(ctx, *inner, node);
+  expr := strip_redundant_outer_parens(builder_to_string(*inner));
+  append(sb, expr);
+}
+
 #scope_file
+
+print_metal_global_constants :: (sb: *String_Builder, header: *Code_Procedure_Header) {
+  if !header.constants_block return;
+  for header.constants_block.statements {
+    if it.kind != .DECLARATION continue;
+    decl := cast(*Code_Declaration) it;
+    if !(decl.flags & .IS_GLOBAL) continue;
+    if !(decl.flags & .IS_CONSTANT)
+      compiler_report("Metal Backend: Only global constant declarations are currently supported in Jai Shaders", make_location(decl));
+
+    append(sb, "constant ");
+    if decl.type_inst
+      print_metal_typed_name(sb, decl.type_inst.result, decl.name);
+    else
+      print_metal_typed_name(sb, decl.expression.type, decl.name);
+
+    if decl.expression {
+      append(sb, " = ");
+      print_metal_expr(xx null, sb, decl.expression);
+    }
+    append(sb, ";\n");
+  }
+  if header.constants_block.statements.count != 0 append(sb, "\n");
+}
 
 check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
   if shader_type == {
@@ -510,6 +655,8 @@ check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Ty
     if parameter_usings.count != 2
       compiler_report("Metal Backend: The struct arguments to a Jai Fragment Shader must be marked 'using'", make_location(header));
   }
+
+  check_array_signature_support("Metal", header);
 }
 
 

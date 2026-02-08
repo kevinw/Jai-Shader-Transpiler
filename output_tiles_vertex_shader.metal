@@ -1,4 +1,3 @@
-tiles_vertex_shader_metal_string :: #string END
 #include <metal_stdlib>
 using namespace metal;
 
@@ -24,5 +23,3 @@ vertex VertexShader_Out VertexMain(VertexShader_In in [[stage_in]], constant Ver
      return out;
 }
 
-
-END

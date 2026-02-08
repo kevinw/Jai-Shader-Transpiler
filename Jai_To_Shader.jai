@@ -10,6 +10,9 @@
 // Changing GLSL version without changing module code.
 // Adding #line directive for shader debuggers to point back at the original Jai file
 
+VERBOSE :: false;
+
+#load "backend_shared.jai";
 #load "glsl_backend.jai";
 #load "hlsl_backend.jai";
 #load "metal_backend.jai";
@@ -85,11 +88,12 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             ext := tprint("%", ctx.language);
             to_lower_in_place(ext);
             filename := tprint("output_%.%", ctx.name, ext);
-            ok := write_entire_file(filename, s);
+            file_source := write_shader_code(ctx, ctx.main_fn, as_jai_string=false);
+            ok := write_entire_file(filename, file_source);
             if !ok {
               log_error("Error writing file to '%'", filename);
             } else {
-              log("Transpiled Jai to %", filename);
+              #if VERBOSE log("Transpiled Jai to %", filename);
             }
           }
           remove ctx;
@@ -107,7 +111,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 }
 
 write_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  log("Converting % Shader: %", ctx.type, node.header.name);
+  // log("Converting % Shader: %", ctx.type, node.header.name);
   
   if ctx.language == {
     case .GLSL;  return write_glsl_shader (ctx, node, ctx.type);
@@ -134,11 +138,11 @@ write_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, called_fn: *
   }
 }
 
-write_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+write_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, as_jai_string := true) -> string {
   if ctx.language == {
-    case .GLSL;  return write_glsl_shader_code (ctx, node);
-    case .HLSL;  return write_hlsl_shader_code (ctx, node);
-    case .METAL; return write_metal_shader_code(ctx, node);
+    case .GLSL;  return write_glsl_shader_code (ctx, node, as_jai_string=as_jai_string);
+    case .HLSL;  return write_hlsl_shader_code (ctx, node, as_jai_string=as_jai_string);
+    case .METAL; return write_metal_shader_code(ctx, node, as_jai_string=as_jai_string);
   }
 
   return "";
@@ -172,19 +176,19 @@ handle_custom_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder
 // @whatthefuckisthis im 99% sure there's a simpler way of converting an int to a string directly.
 // or atleast printing it as a character, because the first switch is.... yikes
 operator_string :: (op: Operator_Type) -> string {
-  if cast(u8)op == {
-    case #char "="; return "=";
-    case #char "<"; return "<";
-    case #char "?"; return "?";
-    case #char ">"; return ">";
-    case #char "!"; return "!";
-    case #char "+"; return "+";
-    case #char "-"; return "-";
-    case #char "*"; return "*";
-    case #char "/"; return "/";
-    case #char "%"; return "%";
-    case #char "~"; return "~";
-    case #char "."; return ".";
+  if op == {
+    case cast(Operator_Type) #char "="; return "=";
+    case cast(Operator_Type) #char "<"; return "<";
+    case cast(Operator_Type) #char "?"; return "?";
+    case cast(Operator_Type) #char ">"; return ">";
+    case cast(Operator_Type) #char "!"; return "!";
+    case cast(Operator_Type) #char "+"; return "+";
+    case cast(Operator_Type) #char "-"; return "-";
+    case cast(Operator_Type) #char "*"; return "*";
+    case cast(Operator_Type) #char "/"; return "/";
+    case cast(Operator_Type) #char "%"; return "%";
+    case cast(Operator_Type) #char "~"; return "~";
+    case cast(Operator_Type) #char "."; return ".";
   }
 
   if op == {
@@ -202,6 +206,7 @@ operator_string :: (op: Operator_Type) -> string {
     
     case .SHIFT_LEFT; return "<<";
     case .SHIFT_RIGHT; return ">>";
+    case .ARRAY_SUBSCRIPT; return "[]";
     
     // I don't think operators below this are supported in glsl
     // But this can stay just incase...
@@ -217,7 +222,6 @@ operator_string :: (op: Operator_Type) -> string {
     // case .LOGICAL_AND_ASSIGN; return "&&=";
     // case .LOGICAL_OR_ASSIGN; return "||=";
     
-    //case ARRAY_SUBSCRIPT; return "[]";
     case; return "<operator_not_supported>";
   }
 }
@@ -268,6 +272,8 @@ Shader_Write_Context :: struct {
   language: Shader_Language;
   main_fn: *Code_Procedure_Body;
   functions: [..] Shader_Function;
+  metal_use_jai_radians: bool;
+  metal_use_jai_degrees: bool;
 }
 
 node_is_fragment_shader :: (node: *Code_Procedure_Header) -> bool {
@@ -316,5 +322,7 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
         type = shader_type,
         language = language,
         main_fn = proc,
+        metal_use_jai_radians = false,
+        metal_use_jai_degrees = false,
     };
 }

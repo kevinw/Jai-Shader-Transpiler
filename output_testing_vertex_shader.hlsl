@@ -1,4 +1,3 @@
-testing_vertex_shader_string :: #string END
 struct VertexShader_In {
     float2 a_pos : A_POS;
 }
@@ -16,5 +15,3 @@ VertexShader_Out main(VertexShader_In in) {
      out.f_pos=in.a_pos;
 }
 
-
-END

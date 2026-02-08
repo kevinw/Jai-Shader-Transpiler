@@ -2,10 +2,12 @@
 #import "Math";
 using,except(NO) SDL :: #import "SDL";
 #import "Metal";
+#import "Command_Line";
 #import "Objective_C";
 
 #import,dir "..";
 #load "glsl_shaders.jai";
+#load "array_shader_tests.jai";
 
 Fragment_Shader_Uniforms :: struct {
     u_resolution: Vector2;
@@ -27,7 +29,11 @@ log_nserror :: (label: string, error: *NSError) -> bool {
     return true;
 }
 
-main :: () {
+metal_example_with_window :: () -> (success: bool) {
+    args_ok, args, is_set := parse_arguments(struct { singleframe: bool; });
+    singleframe := args_ok && is_set.singleframe;
+    max_frames := ifx singleframe then 1 else 0x7FFF_FFFF_FFFF_FFFF;
+  
     init_objective_c();
     init_metal();
 
@@ -38,27 +44,27 @@ main :: () {
     window := SDL_CreateWindow("FancyTiles (Metal)", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1080, 720, SDL_WINDOW_ALLOW_HIGHDPI);
     if !window {
         log_error("Could not create window: %", to_string(SDL_GetError()));
-        return;
+        return false;
     }
     defer SDL_DestroyWindow(window);
 
     renderer := SDL_CreateRenderer(window, -1, .PRESENTVSYNC);
     if !renderer {
         log_error("Could not create renderer: %", to_string(SDL_GetError()));
-        return;
+        return false;
     }
     defer SDL_DestroyRenderer(renderer);
 
     swapchain := cast(*CAMetalLayer) SDL_RenderGetMetalLayer(renderer);
     if !swapchain {
         log_error("Could not get CAMetalLayer from SDL renderer");
-        return;
+        return false;
     }
 
     device := CAMetalLayer.device(swapchain);
     if !device {
         log_error("Could not get Metal device from CAMetalLayer");
-        return;
+        return false;
     }
 
     pixel_format := CAMetalLayer.pixelFormat(swapchain);
@@ -70,7 +76,7 @@ main :: () {
     queue := MTLDevice.newCommandQueue(device);
     if !queue {
         log_error("Failed to create Metal command queue");
-        return;
+        return false;
     }
     defer release(queue);
 
@@ -78,10 +84,18 @@ main :: () {
     compile_options := objc_init(objc_alloc(MTLCompileOptions));
     defer release(compile_options);
 
+    // Force array support test shaders to typecheck and generate.
+    _ := array_support_vertex_shader(.{}, .{});
+    _ = array_support_fragment_shader(.{}, .{});
+    _ = array_support_vertex_shader_string;
+    _ = array_support_fragment_shader_string;
+    _ = array_support_vertex_shader_metal_string;
+    _ = array_support_fragment_shader_metal_string;
+
     lib_vertex := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(tiles_vertex_shader_metal_string), compile_options, *error);
     if log_nserror("Failed to compile vertex shader library", error) || !lib_vertex {
         if !lib_vertex && error == null log_error("Failed to compile vertex shader library");
-        return;
+        return false;
     }
     defer release(lib_vertex);
     log("main %", error);
@@ -90,21 +104,21 @@ main :: () {
     lib_fragment := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(tiles_fragment_shader_metal_string), compile_options, *error);
     if log_nserror("Failed to compile fragment shader library", error) || !lib_fragment {
         if !lib_fragment && error == null log_error("Failed to compile fragment shader library");
-        return;
+        return false;
     }
     defer release(lib_fragment);
 
     fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(lib_vertex, NSString.getTempString("VertexMain"));
     if !fn_vertex {
         log_error("Failed to find vertex entry point 'main'");
-        return;
+        return false;
     }
     defer release(fn_vertex);
 
     fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(lib_fragment, NSString.getTempString("FragmentMain"));
     if !fn_fragment {
         log_error("Failed to find fragment entry point 'main'");
-        return;
+        return false;
     }
     defer release(fn_fragment);
 
@@ -131,7 +145,7 @@ main :: () {
     pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
     if !pipeline || log_nserror("Failed to create Metal render pipeline", error) {
         if !pipeline && error == null log_error("Failed to create Metal render pipeline");
-        return;
+        return false;
     }
     defer release(pipeline);
 
@@ -146,7 +160,7 @@ main :: () {
     vertex_buffer := MTLDevice.newBufferWithBytes_length_options(device, *fs_triangle, fs_triangle.count * size_of(Vector2), .MTLResourceStorageModeShared);
     if !vertex_buffer {
         log_error("Failed to create Metal vertex buffer");
-        return;
+        return false;
     }
     defer release(vertex_buffer);
 
@@ -155,8 +169,8 @@ main :: () {
     start := current_time_consensus();
     end := start;
     time_value: float32;
-    log("startin loop");
-    while !quit {
+    frame_index := 0;
+    while !quit && frame_index < max_frames {
         dt := to_float64_seconds(end - start);
         start = current_time_consensus();
         time_value += xx dt;
@@ -204,5 +218,15 @@ main :: () {
         MTLCommandBuffer.presentDrawable(command_buffer, xx drawable);
         MTLCommandBuffer.commit(command_buffer);
         end = current_time_consensus();
+        
+        frame_index += 1;
     }
+    
+    return true;
+}
+
+main :: () {
+  if !metal_example_with_window() {
+      exit(1);
+  }
 }

@@ -3,18 +3,30 @@
 Input :: #import "Input";
 #import "Window_Creation";
 #import "GL";
+#import "Command_Line";
 
 #import,dir ".."; // #import "Jai-Shader-Transpiler" in your code.
 
 #load "glsl_shaders.jai";
+#load "array_shader_tests.jai";
 #load "example_gl_backend.jai";
 
 main :: () {
+  args_ok, args, is_set := parse_arguments(struct { singleframe: bool; });
+  singleframe := args_ok && is_set.singleframe;
+  max_frames := ifx singleframe then 1 else 0x7FFF_FFFF_FFFF_FFFF;
+  
   window := create_window(1080, 720, "FancyTiles");
   load_gl(window);
 
-  log("Vertex Shader:\n%\n\n=========\n", tiles_vertex_shader_string);
-  log("Fragment Shader:\n%", tiles_fragment_shader_string);
+  //log("Vertex Shader:\n%\n\n=========\n", tiles_vertex_shader_string);
+  //log("Fragment Shader:\n%", tiles_fragment_shader_string);
+  
+  // Force array support test shaders to typecheck and generate.
+  _ := array_support_vertex_shader(.{}, .{});
+  _ = array_support_fragment_shader(.{}, .{});
+  _ = array_support_vertex_shader_string;
+  _ = array_support_fragment_shader_string;
 
   vao: u32;
   buffer: u32;
@@ -104,8 +116,10 @@ main :: () {
   end : Apollo_Time;
   dt : float64 = ---;
   time_value : float32;
+  frame_index := 0;
+  
 
-  while !quit {
+  while !quit && frame_index < max_frames {
     dt = to_float64_seconds(end - start);
     start = current_time_consensus();
     
@@ -126,6 +140,7 @@ main :: () {
 
     swap_buffers(window);
     end = current_time_consensus();
+    frame_index += 1;
   }
 
   glDeleteBuffers(1, *buffer);

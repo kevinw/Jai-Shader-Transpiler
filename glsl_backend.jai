@@ -25,6 +25,7 @@ write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bod
     append(*sb, tprint("%_string", node.header.name), " :: #string END\n");
   }
   append(*sb, GLSL_VERSION);
+  print_glsl_global_constants(*sb, node.header);
   print_glsl_in_vars(*sb, node.header, output_layout=false);
   print_glsl_uniforms(*sb, node.header);
   print_glsl_out_vars(*sb, node.header);
@@ -99,6 +100,7 @@ print_glsl_uniforms :: (sb: *String_Builder, node: *Code_Procedure_Header) {
 print_glsl_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
   if header.returns.count != 0 {
     ret := header.returns[0];
+    report_array_return_not_supported("GLSL", ret);
     if ret.type_inst
       print_glsl_type(sb, ret.type_inst.result);
     else
@@ -109,6 +111,7 @@ print_glsl_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
   
   append(sb, tprint(" %(", header.name));
   for header.arguments {
+    report_array_parameter_not_supported("GLSL", it);
     if it.type_inst
       print_glsl_type(sb, it.type_inst.result);
     else
@@ -122,8 +125,7 @@ print_glsl_prototype :: (sb: *String_Builder, header: *Code_Procedure_Header) {
 }
 
 print_glsl_member_with_typename :: (sb: *String_Builder, thing: *Type_Info_Struct_Member) {
-  print_glsl_type(sb, thing.type);
-  append(sb, " ", thing.name);
+  print_glsl_typed_name(sb, thing.type, thing.name);
 }
 
 print_glsl_type :: (sb: *String_Builder, type: *Type_Info) {
@@ -144,10 +146,12 @@ print_glsl_type :: (sb: *String_Builder, type: *Type_Info) {
   }
 }
 
-
-add_indents :: (sb : *String_Builder, indent : s64) #expand {
-  for i: 0..indent*4 append(sb, " ");
+print_glsl_typed_name :: (sb: *String_Builder, type: *Type_Info, name: string) {
+  base_type, array_suffix := split_array_type_and_suffix("GLSL", type);
+  print_glsl_type(sb, base_type);
+  append(sb, " ", name, array_suffix);
 }
+
 
 // The big boy, statement converter
 print_glsl_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
@@ -160,10 +164,9 @@ print_glsl_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
         op := cast(*Code_Declaration) it;
         
         if op.type_inst
-          print_glsl_type(sb, op.type_inst.result);
+          print_glsl_typed_name(sb, op.type_inst.result, op.name);
         else
-          print_glsl_type(sb, op.expression.type);
-        append(sb, " ", op.name);
+          print_glsl_typed_name(sb, op.expression.type, op.name);
         
         if op.expression {
           append(sb, " = ");
@@ -336,20 +339,9 @@ print_glsl_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node:
     case .LITERAL; {
       lit := cast(*Code_Literal) node;
       if lit.value_type == .STRUCT {
-        if !lit.struct_literal_info.type_expression {
-          compiler_report("Unfortunately, we can't easily know enough about types without the explicit name here.", make_location(lit));
-          return;
-        }
-        
-        name := cast(*Code_Ident) lit.struct_literal_info.type_expression.type_valued_expression;
-        append(sb, jai_to_glsl_type_name(name.name));
-        
-        append(sb, "(");
-        for lit.struct_literal_info.arguments {
-          if it_index != 0 append(sb, ", ");
-          print_glsl_expr(ctx, sb, it);
-        }
-        append(sb, ")");
+        print_glsl_struct_literal(ctx, sb, lit);
+      } else if lit.value_type == .ARRAY {
+        print_glsl_array_literal(ctx, sb, lit);
       } else PP.print_expression(sb, node);
     }
 
@@ -380,8 +372,17 @@ print_glsl_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node:
 }
 
 print_glsl_binary_operator :: (ctx: *Shader_Write_Context, sb: *String_Builder, bn: *Code_Binary_Operator) {
+  if bn.operator_type == .ARRAY_SUBSCRIPT {
+    print_glsl_expr(ctx, sb, bn.left);
+    append(sb, "[");
+    print_glsl_subscript_index_expr(ctx, sb, bn.right);
+    append(sb, "]");
+    return;
+  }
+
   print_glsl_expr(ctx, sb, bn.left);
-  space: string = ifx cast(u8)bn.operator_type == "." then "" else " ";
+  space := " ";
+  if bn.operator_type == cast(Operator_Type) #char "." space = "";
   append(sb, space, operator_string(bn.operator_type), space);
   print_glsl_expr(ctx, sb, bn.right);
 }
@@ -400,6 +401,7 @@ print_glsl_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder, p
 print_glsl_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: Code_Procedure_Header) {
   if fn.returns.count != 0 {
     ret := fn.returns[0];
+    report_array_return_not_supported("GLSL", ret);
     if ret.type_inst
       print_glsl_type(sb, ret.type_inst.result);
     else
@@ -410,6 +412,7 @@ print_glsl_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: Cod
   
   append(sb, tprint(" %(", fn.name));
   for fn.arguments {
+    report_array_parameter_not_supported("GLSL", it);
     if it.type_inst
       print_glsl_type(sb, it.type_inst.result);
     else
@@ -422,6 +425,69 @@ print_glsl_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: Cod
   append(sb, ") {\n");
   print_glsl_stmt(ctx, sb, fn.body_or_null.block);
   append(sb, "}\n");
+}
+
+print_glsl_array_literal :: (ctx: *Shader_Write_Context, sb: *String_Builder, lit: *Code_Literal) {
+  info := lit.array_literal_info;
+  if !info.element_type {
+    compiler_report("GLSL Backend: Untyped array literals are currently unsupported in Jai Shaders", make_location(lit));
+    return;
+  }
+
+  print_glsl_array_constructor_type(sb, info.element_type.result);
+  append(sb, "[](");
+  for info.array_members {
+    if it_index != 0 append(sb, ", ");
+    print_glsl_array_member_expr(ctx, sb, it, info.element_type.result);
+  }
+  append(sb, ")");
+}
+
+print_glsl_array_constructor_type :: (sb: *String_Builder, type: *Type_Info) {
+  base_type, array_suffix := split_array_type_and_suffix("GLSL", type);
+  print_glsl_type(sb, base_type);
+  append(sb, array_suffix);
+}
+
+print_glsl_array_member_expr :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Node, expected_type: *Type_Info) {
+  if node.kind == .LITERAL {
+    lit := cast(*Code_Literal) node;
+    if lit.value_type == .STRUCT {
+      print_glsl_struct_literal(ctx, sb, lit, expected_type);
+      return;
+    }
+  }
+  print_glsl_expr(ctx, sb, node);
+}
+
+print_glsl_struct_literal :: (ctx: *Shader_Write_Context, sb: *String_Builder, lit: *Code_Literal, expected_type: *Type_Info = null) {
+  if lit.struct_literal_info.type_expression {
+    name := cast(*Code_Ident) lit.struct_literal_info.type_expression.type_valued_expression;
+    append(sb, jai_to_glsl_type_name(name.name));
+  } else if expected_type && expected_type.type == .STRUCT {
+    struct_type := cast(*Type_Info_Struct) expected_type;
+    append(sb, jai_to_glsl_type_name(struct_type.name));
+  } else if lit.type.type == .STRUCT {
+    struct_type := cast(*Type_Info_Struct) lit.type;
+    append(sb, jai_to_glsl_type_name(struct_type.name));
+  } else {
+    compiler_report("Unfortunately, we can't easily know enough about types without the explicit name here.", make_location(lit));
+    return;
+  }
+
+  append(sb, "(");
+  for lit.struct_literal_info.arguments {
+    if it_index != 0 append(sb, ", ");
+    print_glsl_expr(ctx, sb, it);
+  }
+  append(sb, ")");
+}
+
+print_glsl_subscript_index_expr :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Node) {
+  inner: String_Builder;
+  print_glsl_expr(ctx, *inner, node);
+  expr := strip_redundant_outer_parens(builder_to_string(*inner));
+  append(sb, expr);
 }
 
 #scope_file
@@ -660,6 +726,30 @@ texture :: (sampler: $T, point: $S, bias: float = 0) -> Vector4 {
 
 #scope_file
 
+print_glsl_global_constants :: (sb: *String_Builder, header: *Code_Procedure_Header) {
+  if !header.constants_block return;
+  for header.constants_block.statements {
+    if it.kind != .DECLARATION continue;
+    decl := cast(*Code_Declaration) it;
+    if !(decl.flags & .IS_GLOBAL) continue;
+    if !(decl.flags & .IS_CONSTANT)
+      compiler_report("GLSL Backend: Only global constant declarations are currently supported in Jai Shaders", make_location(decl));
+
+    append(sb, "const ");
+    if decl.type_inst
+      print_glsl_typed_name(sb, decl.type_inst.result, decl.name);
+    else
+      print_glsl_typed_name(sb, decl.expression.type, decl.name);
+
+    if decl.expression {
+      append(sb, " = ");
+      print_glsl_expr(xx null, sb, decl.expression);
+    }
+    append(sb, ";\n");
+  }
+  if header.constants_block.statements.count != 0 append(sb, "\n");
+}
+
 check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Type) {
   if #complete shader_type == {
   case .Compute;
@@ -684,6 +774,8 @@ check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Ty
     if parameter_usings.count != 2
       compiler_report("GLSL Backend: The struct arguments to a Jai Fragment Shader must be marked 'using'", make_location(header));
   }
+
+  check_array_signature_support("GLSL", header);
   
 }
 

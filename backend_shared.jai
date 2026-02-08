@@ -1,0 +1,81 @@
+#scope_module
+
+add_indents :: (sb: *String_Builder, indent: s64) #expand {
+  for i: 0..indent*4 append(sb, " ");
+}
+
+type_contains_array :: (type: *Type_Info) -> bool {
+  if !type return false;
+  if type.type != .ARRAY return false;
+  return true;
+}
+
+strip_redundant_outer_parens :: (in: string) -> string {
+  if in.count == 0 return in;
+
+  start := cast(s64) 0;
+  end := in.count - 1;
+  while start <= end && (in[start] == #char " " || in[start] == #char "\t" || in[start] == #char "\n" || in[start] == #char "\r")
+    start += 1;
+  while end >= start && (in[end] == #char " " || in[end] == #char "\t" || in[end] == #char "\n" || in[end] == #char "\r")
+    end -= 1;
+  if end - start + 1 < 2 {
+    trimmed: string;
+    trimmed.data = in.data + start;
+    trimmed.count = end - start + 1;
+    return trimmed;
+  }
+
+  trimmed: string;
+  trimmed.data = in.data + start;
+  trimmed.count = end - start + 1;
+
+  if trimmed[0] != #char "(" || trimmed[trimmed.count-1] != #char ")" return trimmed;
+
+  depth := 0;
+  for i: 0..trimmed.count-1 {
+    ch := trimmed[i];
+    if ch == #char "(" depth += 1;
+    if ch == #char ")" {
+      depth -= 1;
+      if depth == 0 && i != trimmed.count-1 return trimmed;
+      if depth < 0 return trimmed;
+    }
+  }
+  if depth != 0 return trimmed;
+
+  stripped: string;
+  stripped.data = trimmed.data + 1;
+  stripped.count = trimmed.count - 2;
+  return stripped;
+}
+
+report_array_parameter_not_supported :: (backend_name: string, decl: $T) #expand {
+  if decl.type_inst && type_contains_array(decl.type_inst.result)
+    compiler_report(tprint("% Backend: Functions with array parameters are not supported in Jai Shaders", backend_name), make_location(decl));
+}
+
+report_array_return_not_supported :: (backend_name: string, decl: $T) #expand {
+  if decl.type_inst && type_contains_array(decl.type_inst.result)
+    compiler_report(tprint("% Backend: Functions with array return types are not supported in Jai Shaders", backend_name), make_location(decl));
+}
+
+check_array_signature_support :: (backend_name: string, header: *Code_Procedure_Header) {
+  for header.arguments report_array_parameter_not_supported(backend_name, it);
+  for header.returns report_array_return_not_supported(backend_name, it);
+}
+
+split_array_type_and_suffix :: (backend_name: string, type: *Type_Info) -> (*Type_Info, string) {
+  curr := type;
+  suffix_builder: String_Builder;
+  while curr && curr.type == .ARRAY {
+    array_type := cast(*Type_Info_Array) curr;
+    if array_type.array_type != .FIXED
+      compiler_report(tprint("% Backend: Only fixed-size arrays are currently supported in Jai Shaders", backend_name));
+
+    append(*suffix_builder, tprint("[%]", array_type.array_count));
+    curr = array_type.element_type;
+  }
+
+  return curr, builder_to_string(*suffix_builder);
+}

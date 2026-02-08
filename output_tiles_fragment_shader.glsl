@@ -1,4 +1,3 @@
-tiles_fragment_shader_string :: #string END
 #version 330 core
 
 uniform vec2 u_resolution;
@@ -28,5 +27,3 @@ void main() {
      out_color = vec4(pow(value, 2), pow(value, 1.5), pow(value, 1.2), 1);
 }
 
-
-END

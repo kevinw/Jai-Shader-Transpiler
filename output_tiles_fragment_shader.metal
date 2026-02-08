@@ -1,6 +1,10 @@
-tiles_fragment_shader_metal_string :: #string END
 #include <metal_stdlib>
 using namespace metal;
+
+inline float jai_radians(float v) { return v * 0.01745329251994329577f; }
+inline float2 jai_radians(float2 v) { return v * 0.01745329251994329577f; }
+inline float3 jai_radians(float3 v) { return v * 0.01745329251994329577f; }
+inline float4 jai_radians(float4 v) { return v * 0.01745329251994329577f; }
 
 struct VertexShader_Out {
     float4 gl_FragCoord [[position]];
@@ -25,7 +29,7 @@ fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], const
      float aspect_ratio = u_resolution.y / u_resolution.x;
      float2 uv = float2(gl_FragCoord.x, gl_FragCoord.y) / u_resolution.x;
      uv -= float2(0.5, 0.5 * aspect_ratio);
-     float rot = radians(-30 - u_time);
+     float rot = jai_radians(-30 - u_time);
      float2x2 rotation_matrix = float2x2(cos(rot), -sin(rot), sin(rot), cos(rot));
      uv = rotation_matrix * uv;
      float2 scaled_uv = 20 * uv;
@@ -33,7 +37,7 @@ fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], const
      float tile_dist = min(min(tile.x, 1 - tile.x), min(tile.y, 1 - tile.y));
      float square_dist = length(floor(scaled_uv));
      float edge = sin(u_time - square_dist * 20);
-     edge = mod(edge * edge, edge / edge);
+     edge = fmod(edge * edge, edge / edge);
      float value = mix(tile_dist, 1 - tile_dist, step(1, edge));
      edge = pow(abs(1 - edge), 2.2) * 0.5;
      value = smoothstep(edge - 0.05, edge, 0.95 * value);
@@ -45,5 +49,3 @@ fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], const
      return out;
 }
 
-
-END

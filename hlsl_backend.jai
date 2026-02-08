@@ -85,10 +85,12 @@ print_hlsl_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, fn: *Co
   append(sb, "}\n");
 }
 
-write_hlsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+write_hlsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, as_jai_string := true) -> string {
   sb: String_Builder;
-  append(*sb, tprint("%_string", node.header.name));
-  append(*sb, " :: #string END\n");
+  if as_jai_string {
+    append(*sb, tprint("%_string", node.header.name));
+    append(*sb, " :: #string END\n");
+  }
   print_hlsl_in_vars(*sb, node.header);
   if node.header.arguments.count >= 2 print_hlsl_cbuffers(*sb, node.header);
   print_hlsl_out_vars(*sb, node.header);
@@ -102,7 +104,9 @@ write_hlsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bod
     append(*sb, it.code);
     append(*sb, "\n");
   }
-  append(*sb, "\nEND");
+  if as_jai_string {
+    append(*sb, "\nEND");
+  }
 
   return builder_to_string(*sb);
 }
@@ -468,13 +472,6 @@ print_hlsl_type :: (sb: *String_Builder, type: *Type_Info) {
     
     case; compiler_report(tprint("The type '%' is currently unsupported in Jai Shaders\n", type.type));
   }
-}
-
-#scope_file
-
-member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
-  for member.notes if it == note return true;
-  return false;
 }
 
 member_get_note_suffix :: (member: *Type_Info_Struct_Member, prefix_check: string) -> (string, bool) {

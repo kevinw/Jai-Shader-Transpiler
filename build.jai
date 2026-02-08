@@ -7,10 +7,33 @@
 #import,dir "."; // #import "Jai-Shader-Transpiler" in your code.
 
 #run,stallable {
-  //build("example/glsl_example.jai", "Shaders");
-  //build("example/hlsl_example.jai", "hlsl_example");
+  command_line_opts := get_build_options();
+  run_tests := false;
+  for command_line_opts.compile_time_command_line {
+    if it == "-run_tests" run_tests = true;
+  }
+
+  build("example/glsl_example.jai", "glsl_example");
+  build("example/hlsl_example.jai", "hlsl_example");
   #if OS == .MACOS {
     build("example/metal_example.jai", "metal_example");
+  }
+
+  if run_tests {
+    log("Running tests.jai...");
+    result, output, error, timeout_reached := run_command("jai", "tests.jai", "+Autorun", capture_and_return_output=true);
+    if output.count != 0 log("%", output);
+    if error.count != 0 log_error("%", error);
+
+    if timeout_reached {
+      compiler_report("tests.jai timed out.");
+    }
+    if result.type == .FAILED_TO_LAUNCH {
+      compiler_report("Failed to launch tests.jai.");
+    }
+    if result.type != .EXITED || result.exit_code != 0 {
+      compiler_report(tprint("tests.jai failed with exit code %.", result.exit_code));
+    }
   }
 }
 
