@@ -6,6 +6,36 @@ Process :: #import "Process";
 
 DEBUG_OUTDIR :: ".generated_shaders";
 
+run_all_tests :: () {
+  log("Running tests...");
+  run_command_checked("Build shaders", .["jai", "-quiet", "build.jai", "-", "-output_shaders"]);
+  
+  debug_path :: (name: string) -> string {
+      return tprint("%/%", DEBUG_OUTDIR, name);
+  }
+  
+  check_file_contains(debug_path("array_support_vertex_shader.glsl"), "vec2 positions[3] = vec2[](");
+  check_file_contains(debug_path("array_support_vertex_shader.metal"), "float2 positions[3] = {");
+  check_file_contains(debug_path("array_support_fragment_shader.glsl"), "uniform vec4 u_palette[2];");
+  check_file_contains(debug_path("array_support_fragment_shader.metal"), "float4 u_palette[2];");
+  check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
+
+  check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
+  check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "<operator_not_supported>");
+
+  for collect_generated_files(".glsl") check_file_not_contains(it, "#string END");
+  for collect_generated_files(".metal") check_file_not_contains(it, "#string END");
+
+  compile_generated_metal_shaders();
+  compile_generated_glsl_shaders();
+  
+  // run example programs with the generated shaders to check they work at runtime (not just compile time).
+  run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe"]);
+  run_command_checked("Run Metal example", .["./metal_example", "-singleframe"]);
+
+  log("Array shader checks passed. Metal and GLSL files compile.");
+}
+
 fail :: (message: string, args: .. Any) {
     log_error(message, ..args);
     exit(1);
@@ -130,31 +160,5 @@ compile_generated_metal_shaders :: () {
 }
 
 main :: () {
-    log("Running tests...");
-    run_command_checked("Build shaders", .["jai", "-quiet", "build.jai", "-", "-output_shaders"]);
-    
-    debug_path :: (name: string) -> string {
-        return tprint("%/%", DEBUG_OUTDIR, name);
-    }
-    
-    check_file_contains(debug_path("array_support_vertex_shader.glsl"), "vec2 positions[3] = vec2[](");
-    check_file_contains(debug_path("array_support_vertex_shader.metal"), "float2 positions[3] = {");
-    check_file_contains(debug_path("array_support_fragment_shader.glsl"), "uniform vec4 u_palette[2];");
-    check_file_contains(debug_path("array_support_fragment_shader.metal"), "float4 u_palette[2];");
-    check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
-
-    check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
-    check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "<operator_not_supported>");
-
-    for collect_generated_files(".glsl") check_file_not_contains(it, "#string END");
-    for collect_generated_files(".metal") check_file_not_contains(it, "#string END");
-
-    compile_generated_metal_shaders();
-    compile_generated_glsl_shaders();
-    
-    // run example programs with the generated shaders to check they work at runtime (not just compile time).
-    run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe"]);
-    run_command_checked("Run Metal example", .["./metal_example", "-singleframe"]);
-
-    log("Array shader checks passed. Metal and GLSL files compile.");
+  run_all_tests();
 }
