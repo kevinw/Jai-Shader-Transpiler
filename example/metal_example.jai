@@ -1,10 +1,10 @@
-Debug :: #import "Debug";
 #import "Basic";
 #import "Math";
-using,except(NO) SDL :: #import "SDL";
 #import "Metal";
 #import "Command_Line";
 #import "Objective_C";
+using,except(NO) SDL :: #import "SDL";
+Debug :: #import "Debug";
 
 #import,dir "..";
 #load "glsl_shaders.jai";
@@ -19,49 +19,6 @@ Fragment_Shader_Uniforms :: struct {
 VERTEX_UNIFORM_BUFFER_INDEX    :: 0;
 VERTEX_ATTRIBUTE_BUFFER_INDEX  :: 1;
 FRAGMENT_UNIFORM_BUFFER_INDEX  :: 0;
-
-READBACK_SAMPLE_POINTS :: Vector2.[
-    .{ 0.5, 0.5 },
-    .{ 0.25, 0.25 },
-    .{ 0.75, 0.25 },
-    .{ 0.25, 0.75 },
-    .{ 0.75, 0.75 },
-];
-
-validate_metal_readback :: (pixels: *u8, bytes_per_row: NSUInteger, width: s32, height: s32) -> bool {
-    sample_count := READBACK_SAMPLE_POINTS.count;
-    non_black := 0;
-    min_luma: float32 = 999.0;
-    max_luma: float32 = -1.0;
-    sum_luma: float32 = 0;
-
-    for READBACK_SAMPLE_POINTS {
-        px := clamp(cast(s32) floor(it.x * xx width), 0, width-1);
-        py := clamp(cast(s32) floor(it.y * xx height), 0, height-1);
-
-        offset := cast(s64) py * cast(s64) bytes_per_row + cast(s64) px * 4;
-        p := pixels + offset;
-        r := xx p[0] / 255.0;
-        g := xx p[1] / 255.0;
-        b := xx p[2] / 255.0;
-        luma := cast(float32) (0.2126 * r + 0.7152 * g + 0.0722 * b);
-
-        if luma > 0.02 non_black += 1;
-        min_luma = min(min_luma, luma);
-        max_luma = max(max_luma, luma);
-        sum_luma += luma;
-    }
-
-    avg_luma := sum_luma / xx sample_count;
-    log("READBACK_SUMMARY backend=metal samples=% non_black=% avg_luma=% min_luma=% max_luma=%",
-        sample_count, non_black, avg_luma, min_luma, max_luma);
-
-    ok := (non_black >= 2) && (max_luma > 0.05) && ((max_luma - min_luma) > 0.02);
-    if !ok {
-        log_error("READBACK_FAIL backend=metal");
-    }
-    return ok;
-}
 
 metal_example_with_window :: () -> (success: bool) {
     args_ok, args, is_set := parse_arguments(struct { singleframe: bool; test_readback: bool; });
@@ -205,6 +162,7 @@ metal_example_with_window :: () -> (success: bool) {
     end := start;
     time_value: float32;
     frame_index := 0;
+    
     while !quit && frame_index < max_frames {
         dt := to_float64_seconds(end - start);
         start = current_time_consensus();
@@ -224,9 +182,7 @@ metal_example_with_window :: () -> (success: bool) {
         defer NSAutoreleasePool.drain(pool);
 
         drawable := CAMetalLayer.nextDrawable(swapchain);
-        if !drawable {
-            continue;
-        }
+        if !drawable continue;
 
         drawable_size := CAMetalLayer.drawableSize(swapchain);
         uniforms := Fragment_Shader_Uniforms.{
@@ -237,52 +193,47 @@ metal_example_with_window :: () -> (success: bool) {
 
         pass := MTLRenderPassDescriptor.renderPassDescriptor();
         color_attachment := MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPassDescriptor.colorAttachments(pass), 0);
-        MTLRenderPassColorAttachmentDescriptor.setClearColor(color_attachment, clear_color);
-        MTLRenderPassAttachmentDescriptor.setLoadAction(color_attachment, .MTLLoadActionClear);
-        MTLRenderPassAttachmentDescriptor.setStoreAction(color_attachment, .MTLStoreActionStore);
-        MTLRenderPassAttachmentDescriptor.setTexture(color_attachment, CAMetalDrawable.texture(drawable));
+        {
+          using color_attachment;
+          setClearColor(color_attachment, clear_color);
+          setLoadAction(color_attachment, .MTLLoadActionClear);
+          setStoreAction(color_attachment, .MTLStoreActionStore);
+          setTexture(color_attachment, CAMetalDrawable.texture(drawable));
+        }
 
         command_buffer := MTLCommandQueue.commandBuffer(queue);
-        encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
-        MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
-        MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
-        MTLRenderCommandEncoder.setVertexBytes_length_atIndex(encoder, *dummy_uniform, 1, VERTEX_UNIFORM_BUFFER_INDEX);
-        MTLRenderCommandEncoder.setFragmentBytes_length_atIndex(encoder, *uniforms, size_of(Fragment_Shader_Uniforms), FRAGMENT_UNIFORM_BUFFER_INDEX);
-        MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 6);
-        MTLRenderCommandEncoder.endEncoding(encoder);
-
-        readback_pixels: *void = null;
-        readback_size: s64 = 0;
-        readback_bytes_per_row: NSUInteger = 0;
-        readback_width: s32 = 0;
-        readback_height: s32 = 0;
-        if test_readback {
-            readback_width = cast(s32) drawable_size.width;
-            readback_height = cast(s32) drawable_size.height;
-            readback_bytes_per_row = cast(NSUInteger) readback_width * 4;
-            readback_size = cast(s64) readback_bytes_per_row * readback_height;
-            readback_pixels = alloc(readback_size);
-            if !readback_pixels {
-                log_error("Failed to allocate Metal readback pixels");
-                return false;
-            }
-            defer free(readback_pixels);
+        {
+          using encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+          setRenderPipelineState(encoder, xx pipeline);
+          setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+          setVertexBytes_length_atIndex(encoder, *dummy_uniform, 1, VERTEX_UNIFORM_BUFFER_INDEX);
+          setFragmentBytes_length_atIndex(encoder, *uniforms, size_of(Fragment_Shader_Uniforms), FRAGMENT_UNIFORM_BUFFER_INDEX);
+          drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 6);
+          endEncoding(encoder);
         }
-
         MTLCommandBuffer.presentDrawable(command_buffer, xx drawable);
         MTLCommandBuffer.commit(command_buffer);
+        
+        // Check the values of the texture if we were called with -test_readback
         if test_readback {
+            test_readback = false;
             MTLCommandBuffer.waitUntilCompleted(command_buffer);
+            
+            using readback_info: Readback_Info;
+            bytes_per_row = cast(NSUInteger) drawable_size.width * 4;
+            width  = cast(s32) drawable_size.width;
+            height = cast(s32) drawable_size.height;
+            pixels = NewArray(cast(s64)(bytes_per_row * drawable_size.height), u8);
+            defer array_free(pixels);
             tex := cast(*MTLTexture) CAMetalDrawable.texture(drawable);
-            region := MTLRegionMake2D(0, 0, cast(NSUInteger) readback_width, cast(NSUInteger) readback_height);
-            MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(tex, readback_pixels, readback_bytes_per_row, region, 0);
-            pixel_data := cast(*u8) readback_pixels;
-            if !validate_metal_readback(pixel_data, readback_bytes_per_row, readback_width, readback_height) {
+            region := MTLRegionMake2D(0, 0, xx width, xx height);
+            MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(tex, pixels.data, bytes_per_row, region, 0);
+            if !validate_metal_readback(readback_info) {
                 return false;
             }
         }
-        end = current_time_consensus();
         
+        end = current_time_consensus();
         frame_index += 1;
     }
     
@@ -302,6 +253,57 @@ log_nserror :: (label: string, error: *NSError) -> bool {
     }
     return true;
 }
+
+Readback_Info :: struct {
+  pixels: []u8;
+  bytes_per_row: NSUInteger = 0;
+  width: s32;
+  height: s32;
+}
+
+READBACK_SAMPLE_POINTS :: Vector2.[
+    .{ 0.5, 0.5 },
+    .{ 0.25, 0.25 },
+    .{ 0.75, 0.25 },
+    .{ 0.25, 0.75 },
+    .{ 0.75, 0.75 },
+];
+
+validate_metal_readback :: (using readback_info: Readback_Info) -> bool {
+    sample_count := READBACK_SAMPLE_POINTS.count;
+    non_black := 0;
+    min_luma: float32 = 999.0;
+    max_luma: float32 = -1.0;
+    sum_luma: float32 = 0;
+
+    for READBACK_SAMPLE_POINTS {
+        px := clamp(cast(s32) floor(it.x * xx width), 0, width-1);
+        py := clamp(cast(s32) floor(it.y * xx height), 0, height-1);
+
+        offset := cast(s64) py * cast(s64) bytes_per_row + cast(s64) px * 4;
+        p := pixels.data + offset;
+        r := xx p[0] / 255.0;
+        g := xx p[1] / 255.0;
+        b := xx p[2] / 255.0;
+        luma := cast(float32) (0.2126 * r + 0.7152 * g + 0.0722 * b);
+
+        if luma > 0.02 non_black += 1;
+        min_luma = min(min_luma, luma);
+        max_luma = max(max_luma, luma);
+        sum_luma += luma;
+    }
+
+    avg_luma := sum_luma / xx sample_count;
+    log("READBACK_SUMMARY backend=metal samples=% non_black=% avg_luma=% min_luma=% max_luma=%",
+        sample_count, non_black, avg_luma, min_luma, max_luma);
+
+    ok := (non_black >= 2) && (max_luma > 0.05) && ((max_luma - min_luma) > 0.02);
+    if !ok {
+        log_error("READBACK_FAIL backend=metal");
+    }
+    return ok;
+}
+
 
 main :: () {
   Debug.init();
