@@ -466,16 +466,6 @@ print_hlsl_type :: (sb: *String_Builder, type: *Type_Info) {
   }
 }
 
-member_get_note_suffix :: (member: *Type_Info_Struct_Member, prefix_check: string) -> (string, bool) {
-  for member.notes if begins_with(it, prefix_check) {
-    ret: string;
-    ret.data = it.data + prefix_check.count;
-    ret.count = it.count - prefix_check.count;
-    return ret, true;
-  }
-  return "", false;
-}
-
 member_get_semantic :: (member: *Type_Info_Struct_Member) -> string {
   for member.notes if begins_with(it, "semantic_") {
     ret: string;

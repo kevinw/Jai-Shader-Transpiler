@@ -9,6 +9,7 @@ Debug :: #import "Debug";
 #import,dir "..";
 #load "glsl_shaders.jai";
 #load "array_shader_tests.jai";
+#load "compute_shader_tests.jai";
 
 Fragment_Shader_Uniforms :: struct {
     u_resolution: Vector2;
@@ -19,6 +20,81 @@ Fragment_Shader_Uniforms :: struct {
 VERTEX_UNIFORM_BUFFER_INDEX    :: 0;
 VERTEX_ATTRIBUTE_BUFFER_INDEX  :: 1;
 FRAGMENT_UNIFORM_BUFFER_INDEX  :: 0;
+
+run_compute_sanity_check :: (device: *MTLDevice, queue: *MTLCommandQueue, compile_options: *MTLCompileOptions) -> bool {
+    _ = compute_write_indices;
+    _ = compute_write_indices_metal_string;
+
+    error: *NSError = null;
+    lib_compute := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(compute_write_indices_metal_string), compile_options, *error);
+    if log_nserror("Failed to compile compute shader library", error) || !lib_compute {
+        if !lib_compute && error == null log_error("Failed to compile compute shader library");
+        return false;
+    }
+    defer release(lib_compute);
+
+    fn_compute := cast(*MTLFunction) MTLLibrary.newFunctionWithName(lib_compute, NSString.getTempString("ComputeMain"));
+    if !fn_compute {
+        log_error("Failed to find compute entry point 'ComputeMain'");
+        return false;
+    }
+    defer release(fn_compute);
+
+    error = null;
+    pipeline_compute := MTLDevice.newComputePipelineStateWithFunction_error(device, xx fn_compute, *error);
+    if log_nserror("Failed to create compute pipeline", error) || !pipeline_compute {
+        if !pipeline_compute && error == null log_error("Failed to create compute pipeline");
+        return false;
+    }
+    defer release(pipeline_compute);
+
+    ELEMENT_COUNT :: 64;
+    output_buffer_size := cast(NSUInteger) (ELEMENT_COUNT * size_of(u32));
+    out_buffer := MTLDevice.newBufferWithLength_options(device, output_buffer_size, .MTLResourceStorageModeShared);
+    if !out_buffer {
+        log_error("Failed to create compute output buffer");
+        return false;
+    }
+    defer release(out_buffer);
+
+    out_data := cast(*u32) MTLBuffer.contents(out_buffer);
+    if !out_data {
+        log_error("Compute output buffer had null contents");
+        return false;
+    }
+    for i: 0..ELEMENT_COUNT-1 out_data[i] = 0xFFFF_FFFF;
+
+    command_buffer := MTLCommandQueue.commandBuffer(queue);
+    if !command_buffer {
+        log_error("Failed to create compute command buffer");
+        return false;
+    }
+
+    encoder := MTLCommandBuffer.computeCommandEncoder(command_buffer);
+    if !encoder {
+        log_error("Failed to create compute command encoder");
+        return false;
+    }
+
+    MTLComputeCommandEncoder.setComputePipelineState(encoder, xx pipeline_compute);
+    MTLComputeCommandEncoder.setBuffer_offset_atIndex(encoder, xx out_buffer, 0, 0);
+    threads_per_grid := MTLSizeMake(ELEMENT_COUNT, 1, 1);
+    threads_per_group := MTLSizeMake(ELEMENT_COUNT, 1, 1);
+    MTLComputeCommandEncoder.dispatchThreads_threadsPerThreadgroup(encoder, threads_per_grid, threads_per_group);
+    MTLCommandEncoder.endEncoding(cast(*MTLCommandEncoder) encoder);
+
+    MTLCommandBuffer.commit(command_buffer);
+    MTLCommandBuffer.waitUntilCompleted(command_buffer);
+
+    for i: 0..ELEMENT_COUNT-1 {
+        if out_data[i] != cast(u32) i {
+            log_error("Compute validation failed: out[%] = %, expected %", i, out_data[i], i);
+            return false;
+        }
+    }
+
+    return true;
+}
 
 metal_example_with_window :: () -> (success: bool) {
     args_ok, args, is_set := parse_arguments(struct { singleframe: bool; test_readback: bool; });
@@ -83,6 +159,8 @@ metal_example_with_window :: () -> (success: bool) {
     _ = array_support_fragment_shader_string;
     _ = array_support_vertex_shader_metal_string;
     _ = array_support_fragment_shader_metal_string;
+
+    if !run_compute_sanity_check(device, queue, compile_options) return false;
 
     lib_vertex := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(tiles_vertex_shader_metal_string), compile_options, *error);
     if log_nserror("Failed to compile vertex shader library", error) || !lib_vertex {

@@ -6,6 +6,10 @@ METAL_DEGREES_HELPERS :: "inline float jai_degrees(float v) { return v * 57.2957
 
 write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, shader_type: Shader_Type) -> string {
   check_arguments(node.header, shader_type);
+
+  if shader_type == .Compute {
+    return write_metal_compute_shader(ctx, node);
+  }
   
   main_function_name := tprint("%Main", shader_type);
 
@@ -32,6 +36,18 @@ write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, s
   return write_metal_shader_code(ctx, node);
 }
 
+write_metal_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+  main_sb: String_Builder;
+  append(*main_sb, "kernel void ComputeMain(");
+  print_metal_compute_main_args(*main_sb, node.header);
+  append(*main_sb, ") {\n");
+  print_metal_stmt(ctx, *main_sb, node.block, is_main=true);
+  append(*main_sb, "}\n");
+  array_add(*ctx.functions, .{ prototype=node.header, name="main", code=builder_to_string(*main_sb) });
+
+  return write_metal_shader_code(ctx, node);
+}
+
 write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, as_jai_string := true) -> string {
   sb: String_Builder;
   use_jai_radians := metal_shader_uses_function(ctx, "jai_radians(");
@@ -43,9 +59,11 @@ write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bo
   if use_jai_radians append(*sb, METAL_RADIANS_HELPERS);
   if use_jai_degrees append(*sb, METAL_DEGREES_HELPERS);
   print_metal_global_constants(*sb, node.header);
-  print_metal_in_struct(*sb, node.header);
-  if node.header.arguments.count >= 2 print_metal_uniform_struct(*sb, node.header);
-  print_metal_out_struct(*sb, node.header, ctx.type);
+  if ctx.type != .Compute {
+    print_metal_in_struct(*sb, node.header);
+    if node.header.arguments.count >= 2 print_metal_uniform_struct(*sb, node.header);
+    print_metal_out_struct(*sb, node.header, ctx.type);
+  }
   for ctx.functions {
     if it.name != "main" print_metal_prototype(*sb, it.prototype);
   }
@@ -149,6 +167,42 @@ print_metal_uniform_arg :: (sb: *String_Builder, arg: *Code_Declaration) {
   append(sb, "constant ");
   print_metal_type(sb, arg.type_inst.result);
   append(sb, tprint("& % [[buffer(%)]]", arg.name, METAL_UNIFORM_BUFFER_INDEX));
+}
+
+print_metal_compute_main_args :: (sb: *String_Builder, header: *Code_Procedure_Header) {
+  first := true;
+  next_arg :: () #expand {
+    if first first = false;
+    else append(sb, ", ");
+  }
+
+  next_buffer_index: s64 = 0;
+  for header.arguments {
+    arg_type := ifx it.type_inst then it.type_inst.result else it.expression.type;
+    if declaration_is_parameter_using(header, it) && arg_type.type == .STRUCT {
+      struct_type := cast(*Type_Info_Struct) arg_type;
+      for * struct_type.members {
+        builtin_name, found := member_get_note_suffix(member=it, prefix_check="inbuilt_");
+        if !found
+          compiler_report("Metal Backend: Compute using-struct members must have @inbuilt_* notes", make_location(header));
+
+        next_arg();
+        print_metal_type(sb, it.type);
+        append(sb, tprint(" % [[%]]", it.name, builtin_name));
+      }
+      continue;
+    }
+
+    if arg_type.type != .POINTER
+      compiler_report("Metal Backend: Compute non-using arguments must currently be pointers (bound as buffers)", make_location(it));
+
+    pointer := cast(*Type_Info_Pointer) arg_type;
+    next_arg();
+    append(sb, "device ");
+    print_metal_type(sb, pointer.pointer_to);
+    append(sb, tprint("* % [[buffer(%)]]", it.name, next_buffer_index));
+    next_buffer_index += 1;
+  }
 }
 
 print_metal_local_bindings :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Procedure_Header, indent: s64) {
@@ -683,13 +737,16 @@ check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Ty
     compiler_report(tprint("Metal Backend: Jai % Shader %", shader_type, msg), make_location(header));
   }
 
-  if returns.count != 1 err("must return a structure");
-
   if shader_type == .Compute {
+    if returns.count != 0 err("must not return a value (use buffer arguments instead)");
     if arguments.count == 0 err("must get AT LEAST 1 structure as an argument");
-    if arguments.count != 0 && arguments[0].type_inst.result.type != .STRUCT
-      err("must have a structure as the input");
+    if arguments.count != 0 {
+      first_arg_type := ifx arguments[0].type_inst then arguments[0].type_inst.result else arguments[0].expression.type;
+      if first_arg_type.type != .STRUCT err("must have a structure as the first input argument");
+      if !declaration_is_parameter_using(header, arguments[0]) err("must mark the first struct input argument as 'using'");
+    }
   } else {
+    if returns.count != 1 err("must return a structure");
     if arguments.count != 2 {
       if shader_type == .Fragment err("must get two structures as arguments (Vertex output and Uniforms)");
       else err("must get two structures as arguments (Vertex Input and Uniforms)");

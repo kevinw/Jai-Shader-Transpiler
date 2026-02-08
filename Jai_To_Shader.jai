@@ -288,6 +288,36 @@ member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
   return false;
 }
 
+member_get_note_suffix :: (member: *Type_Info_Struct_Member, prefix_check: string) -> (string, bool) {
+  for member.notes if begins_with(it, prefix_check) {
+    ret: string;
+    ret.data = it.data + prefix_check.count;
+    ret.count = it.count - prefix_check.count;
+    return ret, true;
+  }
+  return "", false;
+}
+
+declaration_get_note_suffix :: (decl: *Code_Declaration, prefix_check: string) -> (string, bool) {
+  for decl.notes if begins_with(it.text, prefix_check) {
+    ret: string;
+    ret.data = it.text.data + prefix_check.count;
+    ret.count = it.text.count - prefix_check.count;
+    return ret, true;
+  }
+  return "", false;
+}
+
+declaration_is_parameter_using :: (header: *Code_Procedure_Header, decl: *Code_Declaration) -> bool {
+  for header.parameter_usings {
+    if !it.expression || it.expression.kind != .IDENT continue;
+    ident := cast(*Code_Ident) it.expression;
+    if ident.resolved_declaration == decl return true;
+    if ident.name == decl.name return true;
+  }
+  return false;
+}
+
 
 #import "Basic";
 #import "Compiler";
