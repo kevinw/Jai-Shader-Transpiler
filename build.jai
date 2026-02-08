@@ -49,6 +49,7 @@ build :: (build_file: string, output_exe_name: string) {
   options := get_build_options(w);
   options.output_executable_name = output_exe_name;
   options.text_output_flags = text_output_flags;
+  set_optimization(*options, .VERY_DEBUG);
   if text_output_flags == 0 {
     log("Building '%'...", output_exe_name);
   }

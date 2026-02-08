@@ -1,3 +1,5 @@
+GL_DEBUG_CONTEXT :: true;  // @Perf
+
 #if OS == .WINDOWS {
     the_gl_context: HGLRC;
     the_hdc_for_pixel_format_cloning: HDC;
@@ -39,7 +41,7 @@ load_gl :: (window : Window_Type) {
         do_first_time_init = true;
         
         #if OS == .WINDOWS {
-            hglrc, hdc := wgl_create_context(window, null, 4, 6);
+            hglrc, hdc := wgl_create_context(window, null, 4, 6, debug = GL_DEBUG_CONTEXT);
             the_gl_context = hglrc;
             the_hdc_for_pixel_format_cloning = hdc;
         }
