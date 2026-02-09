@@ -300,24 +300,7 @@ operator_string :: (op: Operator_Type) -> string {
 
 //~
 
-SamplerState :: #type,distinct s32;
-Texture1D :: struct { Sample: #type (sampler: SamplerState, tex_coord: float32) -> Vector4; };
-Texture2D :: struct { Sample: #type (sampler: SamplerState, tex_coord: Vector3) -> Vector4; };
-Texture3D :: struct { Sample: #type (sampler: SamplerState, tex_coord: Vector3) -> Vector4; };
 
-IVector2 :: struct { x, y: s32; }
-IVector3 :: struct { x, y, z: s32; }
-IVector4 :: struct { x, y, z, w: s32; }
-UVector2 :: struct { x, y: u32; }
-UVector3 :: struct { x, y, z: u32; }
-UVector4 :: struct { x, y, z, w: u32; }
-BVector2 :: struct { x, y: bool; }
-BVector3 :: struct { x, y, z: bool; }
-BVector4 :: struct { x, y, z, w: bool; }
-
-Sampler1D :: #type,distinct s32;
-Sampler2D :: #type,distinct s32;
-Sampler3D :: #type,distinct s32;
 
 Shader_Type :: enum {
   Vertex;

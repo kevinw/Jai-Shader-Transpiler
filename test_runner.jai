@@ -39,12 +39,13 @@ run_all_tests :: () {
   
   // run example programs with the generated shaders to check they work at runtime (not just compile time).
   run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe", "-test_readback"]);
+  run_command_checked("Run CPU example", .["./cpu_example", "-single_frame", "-test_readback"]);
   run_command_checked("Run Vulkan example", .["./vulkan_example", "-single_frame", "-test_readback"]);
   
   #if OS == .MACOS 
     run_command_checked("Run Metal example", .["./metal_example", "-singleframe", "-test_readback"]);
 
-  log("Array shader checks passed. Metal, GLSL, and Vulkan transpile checks succeeded.");
+  log("Array shader checks passed. CPU, Metal, GLSL, and Vulkan transpile checks succeeded.");
 }
 
 fail :: (message: string, args: .. Any) {

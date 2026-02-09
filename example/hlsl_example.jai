@@ -1,5 +1,6 @@
 #import "Basic";
 #import "Math";
+#import "ShaderFuncs";
 
 // This should be an import for actual apps
 #load "../Jai_To_Shader.jai";

@@ -1,3 +1,5 @@
+#import "ShaderFuncs";
+
 // Vulkan-profile GLSL variants of the sample shaders.
 
 VertexShaderVk_Uniforms :: struct {}

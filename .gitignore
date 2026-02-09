@@ -11,3 +11,4 @@ test_runner
 *.pdb
 *.exe
 vulkan_example
+cpu_example
