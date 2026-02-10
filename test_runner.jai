@@ -27,6 +27,9 @@ run_all_tests :: () {
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout(set = 0, binding = 0) uniform");
   check_file_contains(debug_path("compute_write_indices_vk.glsl"), "layout(std430, set = 0, binding = 0) buffer");
   check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
+  check_file_contains(debug_path("tiles_pair_shader.metal"), "vertex VertexShader_Out VertexMain(");
+  check_file_contains(debug_path("tiles_pair_shader.metal"), "fragment FragmentShader_Out FragmentMain(");
+  check_file_contains(debug_path("tiles_pair_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
 
   check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "<operator_not_supported>");

@@ -26,6 +26,7 @@ Jai_To_Shader_Plugin :: struct {
     
     using impl: struct {
       currently_waiting_contexts: [..] Shader_Write_Context;
+      currently_waiting_pair_contexts: [..] Shader_Write_Pair_Context;
       pending_request_declarations: [..] *Code_Declaration;
     }
 }
@@ -59,6 +60,27 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     case .PHASE; {
       phase := cast(*Message_Phase) message;
       if phase.phase == .TYPECHECKED_ALL_WE_CAN {
+        for * pair_ctx: plugin.currently_waiting_pair_contexts {
+          s := write_shader_pair(pair_ctx);
+          add_build_string(s, p.workspace);
+
+          if plugin.output_shaders {
+            ext := tprint("%", pair_ctx.language);
+            to_lower_in_place(ext);
+            make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
+            filename := tprint("%/%.%", DEBUG_OUTDIR, pair_ctx.name, ext);
+            file_source := write_shader_pair_code(pair_ctx, as_jai_string=false);
+            ok := write_entire_file(filename, file_source);
+            if !ok {
+              log_error("Error writing file to '%'", filename);
+            } else {
+              #if VERBOSE log("Transpiled Jai pair shader to %", filename);
+            }
+          }
+
+          remove pair_ctx;
+        }
+
         for * ctx: plugin.currently_waiting_contexts {
           
           s: string;
@@ -92,10 +114,11 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     }
     
     case .COMPLETE; {
-      if plugin.currently_waiting_contexts.count != 0 {
+      if plugin.currently_waiting_contexts.count != 0 || plugin.currently_waiting_pair_contexts.count != 0 {
         compiler_report("Jai Shader Transpiler: Something went wrong while converting Jai Shaders to shader code.\nThere's some functions that have not yet been transpiled, that a shader is waiting on. This is not good.");
       }
       array_reset(*plugin.currently_waiting_contexts);
+      array_reset(*plugin.currently_waiting_pair_contexts);
       array_reset(*plugin.pending_request_declarations);
     }
   }
@@ -111,9 +134,82 @@ shader_request_name_to_language :: (name: string) -> (Shader_Language, GLSL_Targ
   }
 }
 
+trim_ascii_whitespace :: (in: string) -> string {
+  if in.count == 0 return in;
+
+  start := cast(s64) 0;
+  end := in.count - 1;
+  while start <= end && (in[start] == #char " " || in[start] == #char "\t" || in[start] == #char "\n" || in[start] == #char "\r")
+    start += 1;
+  while end >= start && (in[end] == #char " " || in[end] == #char "\t" || in[end] == #char "\n" || in[end] == #char "\r")
+    end -= 1;
+
+  ret: string;
+  ret.data = in.data + start;
+  ret.count = end - start + 1;
+  return ret;
+}
+
+parse_shader_pair_note :: (note_text: string) -> (Shader_Language, GLSL_Target, string, bool, bool) {
+  prefixes := string.[
+    "shader_pair_to_glsl(",
+    "shader_pair_to_vulkan(",
+    "shader_pair_to_metal(",
+  ];
+
+  languages := Shader_Language.[.GLSL, .GLSL, .METAL];
+  targets   := GLSL_Target.[.OPENGL, .VULKAN, .OPENGL];
+
+  for prefixes {
+    prefix := it;
+    if !begins_with(note_text, prefix) continue;
+
+    rest: string;
+    rest.data = note_text.data + prefix.count;
+    rest.count = note_text.count - prefix.count;
+    if rest.count == 0 return .NONE, .OPENGL, "", true, false;
+
+    close_paren_index: s64 = -1;
+    for i: 0..rest.count-1 {
+      if rest[i] == #char ")" {
+        close_paren_index = i;
+        break;
+      }
+    }
+    if close_paren_index == -1 return .NONE, .OPENGL, "", true, false;
+
+    arg: string;
+    arg.data = rest.data;
+    arg.count = close_paren_index;
+    arg = trim_ascii_whitespace(arg);
+    if arg.count == 0 return .NONE, .OPENGL, "", true, false;
+
+    trailing: string;
+    trailing.data = rest.data + close_paren_index + 1;
+    trailing.count = rest.count - (close_paren_index + 1);
+    trailing = trim_ascii_whitespace(trailing);
+    if trailing.count != 0 return .NONE, .OPENGL, "", true, false;
+
+    return languages[it_index], targets[it_index], arg, true, true;
+  }
+
+  return .NONE, .OPENGL, "", false, false;
+}
+
 context_already_queued :: (plugin: *Jai_To_Shader_Plugin, language: Shader_Language, proc: *Code_Procedure_Body, glsl_target: GLSL_Target) -> bool {
   for *plugin.currently_waiting_contexts {
     if it.main_fn != proc continue;
+    if it.language != language continue;
+    if it.glsl_target != glsl_target continue;
+    return true;
+  }
+  return false;
+}
+
+pair_context_already_queued :: (plugin: *Jai_To_Shader_Plugin, language: Shader_Language, vertex: *Code_Procedure_Body, fragment: *Code_Procedure_Body, glsl_target: GLSL_Target) -> bool {
+  for *plugin.currently_waiting_pair_contexts {
+    if it.vertex_fn != vertex continue;
+    if it.fragment_fn != fragment continue;
     if it.language != language continue;
     if it.glsl_target != glsl_target continue;
     return true;
@@ -159,21 +255,43 @@ resolve_shader_request_target :: (arg: *Code_Node, procedure_bodies: [] Typechec
   return null;
 }
 
+resolve_shader_request_target_by_name :: (name: string, procedure_bodies: [] Typechecked(Code_Procedure_Body)) -> *Code_Procedure_Body {
+  for procedure_bodies {
+    if it.expression.header.name == name return it.expression;
+  }
+  return null;
+}
+
 collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl: *Code_Declaration, procedure_bodies: [] Typechecked(Code_Procedure_Body)) -> bool {
   if !decl return true;
 
   requested_languages: [..] Shader_Language;
   requested_glsl_targets: [..] GLSL_Target;
+  pair_requested_languages: [..] Shader_Language;
+  pair_requested_glsl_targets: [..] GLSL_Target;
+  pair_fragment_names: [..] string;
   for decl.notes {
     language, glsl_target, is_shader_request := shader_request_name_to_language(it.text);
-    if !is_shader_request continue;
-    array_add(*requested_languages, language);
-    array_add(*requested_glsl_targets, glsl_target);
-  }
-  if requested_languages.count == 0 return true;
+    if is_shader_request {
+      array_add(*requested_languages, language);
+      array_add(*requested_glsl_targets, glsl_target);
+      continue;
+    }
 
-  proc := resolve_shader_request_target(decl.expression, procedure_bodies);
-  if !proc {
+    pair_language, pair_glsl_target, fragment_name, pair_matched, pair_valid := parse_shader_pair_note(it.text);
+    if !pair_matched continue;
+    if !pair_valid {
+      compiler_report("Jai Shader Transpiler: Invalid shader pair request note format. Use @shader_pair_to_metal(fragment_fn), @shader_pair_to_glsl(fragment_fn), or @shader_pair_to_vulkan(fragment_fn).", make_location(decl));
+      continue;
+    }
+    array_add(*pair_requested_languages, pair_language);
+    array_add(*pair_requested_glsl_targets, pair_glsl_target);
+    array_add(*pair_fragment_names, fragment_name);
+  }
+  if requested_languages.count == 0 && pair_requested_languages.count == 0 return true;
+
+  vertex_proc := resolve_shader_request_target(decl.expression, procedure_bodies);
+  if !vertex_proc {
     // Declarations can typecheck before the target procedure body is available in early passes.
     return false;
   }
@@ -181,8 +299,36 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
   for requested_languages {
     language := it;
     glsl_target := requested_glsl_targets[it_index];
-    if context_already_queued(plugin, language, proc, glsl_target) continue;
-    array_add(*plugin.currently_waiting_contexts, create_shader_write_context(language, proc, glsl_target));
+    if context_already_queued(plugin, language, vertex_proc, glsl_target) continue;
+    array_add(*plugin.currently_waiting_contexts, create_shader_write_context(language, vertex_proc, glsl_target));
+  }
+
+  for pair_requested_languages {
+    language := it;
+    glsl_target := pair_requested_glsl_targets[it_index];
+    fragment_name := pair_fragment_names[it_index];
+    fragment_proc := resolve_shader_request_target_by_name(fragment_name, procedure_bodies);
+    if !fragment_proc {
+      // The fragment function can still appear later in typecheck order.
+      return false;
+    }
+
+    vertex_is_valid := proc_has_note(vertex_proc.header, "vertex_shader");
+    fragment_is_valid := proc_has_note(fragment_proc.header, "fragment_shader");
+    if !vertex_is_valid || !fragment_is_valid {
+      compiler_report("Jai Shader Transpiler: shader_pair_to_* requires the declaration expression to resolve to a @vertex_shader and the note argument to resolve to a @fragment_shader.", make_location(decl));
+      continue;
+    }
+
+    if pair_context_already_queued(plugin, language, vertex_proc, fragment_proc, glsl_target) continue;
+    pair_name := ifx decl.name.count != 0 then decl.name else tprint("%_%", vertex_proc.header.name, fragment_proc.header.name);
+    array_add(*plugin.currently_waiting_pair_contexts, .{
+      name = pair_name,
+      language = language,
+      glsl_target = glsl_target,
+      vertex_fn = vertex_proc,
+      fragment_fn = fragment_proc,
+    });
   }
   return true;
 }
@@ -221,6 +367,27 @@ write_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, as
     case .GLSL;  return write_glsl_shader_code (ctx, node, as_jai_string=as_jai_string);
     case .HLSL;  return write_hlsl_shader_code (ctx, node, as_jai_string=as_jai_string);
     case .METAL; return write_metal_shader_code(ctx, node, as_jai_string=as_jai_string);
+  }
+
+  return "";
+}
+
+write_shader_pair :: (ctx: *Shader_Write_Pair_Context) -> string {
+  reset_unnamed_struct_cache();
+  return write_shader_pair_code(ctx, as_jai_string=true);
+}
+
+write_shader_pair_code :: (ctx: *Shader_Write_Pair_Context, as_jai_string := true) -> string {
+  vertex_ctx := create_shader_write_context(ctx.language, ctx.vertex_fn, ctx.glsl_target);
+  fragment_ctx := create_shader_write_context(ctx.language, ctx.fragment_fn, ctx.glsl_target);
+
+  if ctx.language == {
+    case .GLSL;
+      return write_glsl_shader_pair(ctx.name, *vertex_ctx, *fragment_ctx, as_jai_string=as_jai_string);
+    case .METAL;
+      return write_metal_shader_pair(ctx.name, *vertex_ctx, *fragment_ctx, as_jai_string=as_jai_string);
+    case;
+      compiler_report("Jai Shader Transpiler: Pair shader emission currently supports GLSL and METAL only.", make_location(ctx.vertex_fn.header));
   }
 
   return "";
@@ -341,6 +508,15 @@ Shader_Write_Context :: struct {
   glsl_target: GLSL_Target;
   metal_use_jai_radians: bool;
   metal_use_jai_degrees: bool;
+  metal_allow_fragcoord_from_position: bool;
+}
+
+Shader_Write_Pair_Context :: struct {
+  name: string;
+  language: Shader_Language;
+  glsl_target: GLSL_Target;
+  vertex_fn: *Code_Procedure_Body;
+  fragment_fn: *Code_Procedure_Body;
 }
 
 node_is_fragment_shader :: (node: *Code_Procedure_Header) -> bool {
@@ -457,5 +633,6 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
         glsl_target = glsl_target,
         metal_use_jai_radians = false,
         metal_use_jai_degrees = false,
+        metal_allow_fragcoord_from_position = false,
     };
 }

@@ -7,6 +7,30 @@ GLSL_DEFAULT_LOCAL_SIZE_X :: 64;
 GLSL_DEFAULT_LOCAL_SIZE_Y :: 1;
 GLSL_DEFAULT_LOCAL_SIZE_Z :: 1;
 
+write_glsl_shader_pair :: (pair_name: string, vertex_ctx: *Shader_Write_Context, fragment_ctx: *Shader_Write_Context, as_jai_string := true) -> string {
+  write_glsl_shader(vertex_ctx, vertex_ctx.main_fn, .Vertex);
+  write_glsl_shader(fragment_ctx, fragment_ctx.main_fn, .Fragment);
+
+  vertex_source := write_glsl_shader_code(vertex_ctx, vertex_ctx.main_fn, as_jai_string=false);
+  fragment_source := write_glsl_shader_code(fragment_ctx, fragment_ctx.main_fn, as_jai_string=false);
+
+  sb: String_Builder;
+  if as_jai_string {
+    append(*sb, tprint("%_string", pair_name), " :: #string END\n");
+  }
+
+  append(*sb, "// Vertex Shader\n");
+  append(*sb, vertex_source);
+  append(*sb, "\n\n// Fragment Shader\n");
+  append(*sb, fragment_source);
+
+  if as_jai_string {
+    append(*sb, "\nEND");
+  }
+
+  return builder_to_string(*sb);
+}
+
 // Short explanation...
 // Every function is dumped to a separate string, which the Shader_Write_Context holds a list of
 // The functions are appended onto the functions list, and then the for loop runs to push onto

@@ -14,6 +14,7 @@ Debug :: #import "Debug";
 
 _request_tiles_vertex_metal :: tiles_vertex_shader; @shader_to_metal
 _request_tiles_fragment_metal :: tiles_fragment_shader; @shader_to_metal
+tiles_pair_shader :: tiles_vertex_shader; @shader_pair_to_metal(tiles_fragment_shader)
 _request_array_vertex_metal :: array_support_vertex_shader; @shader_to_metal
 _request_array_fragment_metal :: array_support_fragment_shader; @shader_to_metal
 _request_compute_metal :: compute_write_indices; @shader_to_metal

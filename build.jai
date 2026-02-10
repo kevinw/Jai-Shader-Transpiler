@@ -69,18 +69,23 @@ build :: (build_file: string, output_exe_name: string) {
   }
 
   compiler_begin_intercept(w);
+  defer compiler_end_intercept(w);
   add_build_file(build_file, w);
-  message_loop(w, jai_to_shader_plugin);
-  compiler_end_intercept(w);
-  if autorun {
+  compile_ok := message_loop(w, jai_to_shader_plugin);
+  if compile_ok && autorun {
     run_command(output_exe_name);
   }
 }
 
-message_loop :: (w: Workspace, plugin: *Metaprogram_Plugin) {
+message_loop :: (w: Workspace, plugin: *Metaprogram_Plugin) -> bool {
+  ok := false;
   while true {
     message := compiler_wait_for_message();
     plugin.message(plugin, message);
-    if message.kind == .COMPLETE break;
+    if message.kind == .COMPLETE {
+      ok = message.(*Message_Complete).error_code == 0;
+      break;
+    }
   }
+  return ok;
 }

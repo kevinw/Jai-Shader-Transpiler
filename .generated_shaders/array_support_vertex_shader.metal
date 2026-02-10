@@ -11,6 +11,7 @@ struct Array_Test_Vertex_Uniforms {
 
 struct Array_Test_Vertex_Out {
     float4 gl_Position [[position]];
+    float4 gl_FragCoord [[user(gl_FragCoord)]];
     float2 sample_offset [[user(sample_offset)]];
 };
 
@@ -29,6 +30,7 @@ vertex Array_Test_Vertex_Out VertexMain(Array_Test_Vertex_In in [[stage_in]], co
      gl_Position = float4(a_pos.x + positions[2].x, a_pos.y + u_offsets[2].y, 0.0, 1);
      Array_Test_Vertex_Out out;
      out.gl_Position = gl_Position;
+     out.gl_FragCoord = gl_Position;
      out.sample_offset = sample_offset;
      return out;
 }

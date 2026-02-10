@@ -4,6 +4,123 @@ METAL_UNIFORM_BUFFER_INDEX :: 0;
 METAL_RADIANS_HELPERS :: "inline float jai_radians(float v) { return v * 0.01745329251994329577f; }\ninline float2 jai_radians(float2 v) { return v * 0.01745329251994329577f; }\ninline float3 jai_radians(float3 v) { return v * 0.01745329251994329577f; }\ninline float4 jai_radians(float4 v) { return v * 0.01745329251994329577f; }\n\n";
 METAL_DEGREES_HELPERS :: "inline float jai_degrees(float v) { return v * 57.29577951308232088f; }\ninline float2 jai_degrees(float2 v) { return v * 57.29577951308232088f; }\ninline float3 jai_degrees(float3 v) { return v * 57.29577951308232088f; }\ninline float4 jai_degrees(float4 v) { return v * 57.29577951308232088f; }\n\n";
 
+write_metal_shader_pair :: (pair_name: string, vertex_ctx: *Shader_Write_Context, fragment_ctx: *Shader_Write_Context, as_jai_string := true) -> string {
+  if vertex_ctx.type != .Vertex || fragment_ctx.type != .Fragment {
+    compiler_report("Metal Backend: shader_pair_to_metal requires a @vertex_shader and @fragment_shader pair", make_location(vertex_ctx.main_fn.header));
+    return "";
+  }
+
+  fragment_ctx.metal_allow_fragcoord_from_position = true;
+
+  write_metal_shader(vertex_ctx, vertex_ctx.main_fn, .Vertex);
+  write_metal_shader(fragment_ctx, fragment_ctx.main_fn, .Fragment);
+
+  sb: String_Builder;
+  if as_jai_string {
+    append(*sb, tprint("%_metal_string", pair_name), " :: #string END\n");
+  }
+
+  append(*sb, METAL_HEADER);
+  if metal_shader_uses_function(vertex_ctx, "jai_radians(") || metal_shader_uses_function(fragment_ctx, "jai_radians(") {
+    append(*sb, METAL_RADIANS_HELPERS);
+  }
+  if metal_shader_uses_function(vertex_ctx, "jai_degrees(") || metal_shader_uses_function(fragment_ctx, "jai_degrees(") {
+    append(*sb, METAL_DEGREES_HELPERS);
+  }
+
+  append_unique_block :: (out: *String_Builder, block: string, seen: *[..] string) {
+    if block.count == 0 return;
+    for seen.* if it == block return;
+    array_add(seen, block);
+    append(out, block);
+  }
+
+  seen_blocks: [..] string;
+
+  constants_v: String_Builder;
+  print_metal_global_constants(*constants_v, vertex_ctx.main_fn.header);
+  append_unique_block(*sb, builder_to_string(*constants_v), *seen_blocks);
+
+  constants_f: String_Builder;
+  print_metal_global_constants(*constants_f, fragment_ctx.main_fn.header);
+  append_unique_block(*sb, builder_to_string(*constants_f), *seen_blocks);
+
+  vertex_in: String_Builder;
+  print_metal_in_struct(*vertex_in, vertex_ctx.main_fn.header);
+  append_unique_block(*sb, builder_to_string(*vertex_in), *seen_blocks);
+
+  bindless_decl_v, _, has_bindless_v := find_bindless_param(vertex_ctx.main_fn.header);
+  if vertex_ctx.main_fn.header.arguments.count >= 2 {
+    stage_block: String_Builder;
+    if has_bindless_v print_metal_bindless_struct(*stage_block, bindless_decl_v);
+    else print_metal_uniform_struct(*stage_block, vertex_ctx.main_fn.header);
+    append_unique_block(*sb, builder_to_string(*stage_block), *seen_blocks);
+  }
+
+  vertex_out: String_Builder;
+  print_metal_out_struct(*vertex_out, vertex_ctx.main_fn.header, .Vertex);
+  append_unique_block(*sb, builder_to_string(*vertex_out), *seen_blocks);
+
+  fragment_in_type := cast(*Type_Info_Struct) fragment_ctx.main_fn.header.arguments[0].type_inst.result;
+  vertex_out_type := cast(*Type_Info_Struct) vertex_ctx.main_fn.header.returns[0].type_inst.result;
+  if fragment_in_type != vertex_out_type {
+    if fragment_in_type.name == vertex_out_type.name {
+      compiler_report(tprint("Metal Backend: shader pair uses mismatched structs that share the same name '%'", fragment_in_type.name), make_location(fragment_ctx.main_fn.header.arguments[0]));
+    }
+
+    fragment_in: String_Builder;
+    print_metal_in_struct(*fragment_in, fragment_ctx.main_fn.header);
+    append_unique_block(*sb, builder_to_string(*fragment_in), *seen_blocks);
+  }
+
+  bindless_decl_f, _, has_bindless_f := find_bindless_param(fragment_ctx.main_fn.header);
+  if fragment_ctx.main_fn.header.arguments.count >= 2 {
+    stage_block: String_Builder;
+    if has_bindless_f print_metal_bindless_struct(*stage_block, bindless_decl_f);
+    else print_metal_uniform_struct(*stage_block, fragment_ctx.main_fn.header);
+    append_unique_block(*sb, builder_to_string(*stage_block), *seen_blocks);
+  }
+
+  fragment_out: String_Builder;
+  print_metal_out_struct(*fragment_out, fragment_ctx.main_fn.header, .Fragment);
+  append_unique_block(*sb, builder_to_string(*fragment_out), *seen_blocks);
+
+  function_decls: [..] Shader_Function;
+  for vertex_ctx.functions {
+    if it.name == "main" continue;
+    array_add(*function_decls, it);
+  }
+  for fragment_ctx.functions {
+    if it.name == "main" continue;
+    candidate := it;
+
+    already := false;
+    for function_decls {
+      existing := it;
+      if existing.name != candidate.name continue;
+      already = true;
+      if existing.code != candidate.code {
+        compiler_report(tprint("Metal Backend: helper function '%' differs between paired vertex/fragment shaders", candidate.name), make_location(fragment_ctx.main_fn.header));
+      }
+      break;
+    }
+    if !already array_add(*function_decls, candidate);
+  }
+
+  for function_decls print_metal_prototype(*sb, it.prototype);
+  append(*sb, "\n");
+
+  for function_decls append(*sb, it.code, "\n");
+  for vertex_ctx.functions if it.name == "main" append(*sb, it.code, "\n");
+  for fragment_ctx.functions if it.name == "main" append(*sb, it.code, "\n");
+
+  if as_jai_string {
+    append(*sb, "\nEND");
+  }
+
+  return builder_to_string(*sb);
+}
+
 write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, shader_type: Shader_Type) -> string {
   check_arguments(node.header, shader_type);
 
@@ -147,7 +264,6 @@ print_metal_out_struct :: (sb: *String_Builder, node: *Code_Procedure_Header, sh
   append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
   color_i := 0;
   for * struct_type.members {
-    if shader_type == .Vertex && it.name == "gl_FragCoord" continue;
     if type_contains_array(it.type)
       compiler_report("Metal Backend: Array members are not supported in stage input/output structs. Use non-array varyings for now.", make_location(node.returns[0]));
 
@@ -156,6 +272,7 @@ print_metal_out_struct :: (sb: *String_Builder, node: *Code_Procedure_Header, sh
     if member_is_stage_builtin(it) {
       if member_has_note_contains(it, "position") append(sb, " [[position]]");
       else if member_has_note_contains(it, "frag_depth") append(sb, " [[depth(any)]]");
+      else if shader_type == .Vertex && member_has_note_contains(it, "frag_coord") append(sb, tprint(" [[user(%)]]", it.name));
     } else if shader_type == .Fragment {
       append(sb, tprint(" [[color(%)]]", color_i));
       color_i += 1;
@@ -239,10 +356,27 @@ print_metal_compute_main_args :: (sb: *String_Builder, header: *Code_Procedure_H
 
 print_metal_local_bindings :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Procedure_Header, indent: s64) {
   in_struct_type := cast(*Type_Info_Struct) node.arguments[0].type_inst.result;
+  has_in_gl_position := false;
+  in_gl_position_type: *Type_Info = null;
+  has_in_gl_fragcoord := false;
   for * in_struct_type.members {
+    if it.name == "gl_Position" {
+      has_in_gl_position = true;
+      in_gl_position_type = it.type;
+    }
+    if it.name == "gl_FragCoord" {
+      has_in_gl_fragcoord = true;
+    }
+
     if node_is_fragment_shader(node) && it.name == "gl_Position" continue;
 
     print_metal_local_binding(sb, it.type, it.name, tprint("%.%", node.arguments[0].name, it.name), indent);
+  }
+
+  if node_is_fragment_shader(node) && ctx.metal_allow_fragcoord_from_position && has_in_gl_position && !has_in_gl_fragcoord {
+    // Fragment shaders often read gl_FragCoord even when the shared varyings struct only carries gl_Position.
+    // Synthesize gl_FragCoord from the stage-in position so paired vertex/fragment outputs can share one struct.
+    print_metal_local_binding(sb, in_gl_position_type, "gl_FragCoord", tprint("%.%", node.arguments[0].name, "gl_Position"), indent);
   }
 
   if node.arguments.count >= 2 {
@@ -304,7 +438,11 @@ print_metal_output_return :: (ctx: *Shader_Write_Context, sb: *String_Builder, n
   add_indents(sb, indent);
   append(sb, out_type.name, " out;\n");
   for * out_type.members {
-    if ctx.type == .Vertex && it.name == "gl_FragCoord" continue;
+    if ctx.type == .Vertex && it.name == "gl_FragCoord" {
+      add_indents(sb, indent);
+      append(sb, "out.gl_FragCoord = gl_Position;\n");
+      continue;
+    }
 
     add_indents(sb, indent);
     append(sb, "out.", it.name, " = ", it.name, ";\n");
