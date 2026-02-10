@@ -22,7 +22,11 @@ write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, s
   append(*main_sb, get_struct_type_name(cast(*Type_Info_Struct) node.header.returns[0].type_inst.result));
   append(*main_sb, " ", main_function_name, "(");
   print_metal_stage_in_arg(*main_sb, node.header.arguments[0]);
-  if node.header.arguments.count >= 2 {
+  bindless_decl, binding, has_bindless := find_bindless_param(node.header);
+  if has_bindless {
+    append(*main_sb, ", ");
+    print_metal_bindless_arg(*main_sb, bindless_decl, binding);
+  } else if node.header.arguments.count >= 2 {
     append(*main_sb, ", ");
     print_metal_uniform_arg(*main_sb, node.header.arguments[1]);
   }
@@ -61,7 +65,11 @@ write_metal_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bo
   print_metal_global_constants(*sb, node.header);
   if ctx.type != .Compute {
     print_metal_in_struct(*sb, node.header);
-    if node.header.arguments.count >= 2 print_metal_uniform_struct(*sb, node.header);
+    bindless_decl, _, has_bindless := find_bindless_param(node.header);
+    if node.header.arguments.count >= 2 {
+      if has_bindless print_metal_bindless_struct(*sb, bindless_decl);
+      else print_metal_uniform_struct(*sb, node.header);
+    }
     print_metal_out_struct(*sb, node.header, ctx.type);
   }
   for ctx.functions {
@@ -170,6 +178,29 @@ print_metal_uniform_arg :: (sb: *String_Builder, arg: *Code_Declaration) {
   append(sb, tprint("& % [[buffer(%)]]", arg.name, METAL_UNIFORM_BUFFER_INDEX));
 }
 
+
+print_metal_bindless_struct :: (sb: *String_Builder, decl: *Code_Declaration) {
+  struct_type_generic := decl.type_inst.result;
+  if struct_type_generic.type != .STRUCT
+    compiler_report("Metal Backend: Bindless param is not a struct", make_location(decl));
+  struct_type := cast(*Type_Info_Struct) struct_type_generic;
+
+  append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
+  for *struct_type.members {
+    append(sb, "    ");
+    print_metal_member_with_typename(sb, it);
+    append(sb, ";\n");
+  }
+  append(sb, "};\n\n");
+}
+
+print_metal_bindless_arg :: (sb: *String_Builder, arg: *Code_Declaration, binding: s64) {
+  append(sb, "constant ");
+  print_metal_type(sb, arg.type_inst.result);
+  append(sb, tprint("* %_ptr [[buffer(%)]]", arg.name, binding));
+}
+
+
 print_metal_compute_main_args :: (sb: *String_Builder, header: *Code_Procedure_Header) {
   first := true;
   next_arg :: () #expand {
@@ -215,9 +246,16 @@ print_metal_local_bindings :: (ctx: *Shader_Write_Context, sb: *String_Builder, 
   }
 
   if node.arguments.count >= 2 {
-    un_struct_type := cast(*Type_Info_Struct) node.arguments[1].type_inst.result;
-    for * un_struct_type.members {
-      print_metal_local_binding(sb, it.type, it.name, tprint("%.%", node.arguments[1].name, it.name), indent);
+    bindless_decl, _, has_bindless := find_bindless_param(node);
+    if has_bindless {
+      add_indents(sb, indent);
+      print_metal_type(sb, bindless_decl.type_inst.result);
+      append(sb, " ", bindless_decl.name, " = *", bindless_decl.name, "_ptr;\n");
+    } else {
+      un_struct_type := cast(*Type_Info_Struct) node.arguments[1].type_inst.result;
+      for * un_struct_type.members {
+        print_metal_local_binding(sb, it.type, it.name, tprint("%.%", node.arguments[1].name, it.name), indent);
+      }
     }
   }
 
@@ -598,6 +636,12 @@ print_metal_type :: (sb: *String_Builder, type: *Type_Info) {
       structtype := cast(*Type_Info_Struct) type;
       append(sb, jai_to_metal_type_name(get_struct_type_name(structtype)));
     }
+    case .POINTER; {
+      pointer := cast(*Type_Info_Pointer) type;
+      inner: String_Builder;
+      print_metal_type(*inner, pointer.pointer_to);
+      append(sb, builder_to_string(*inner), " device*");
+    }
     case .VOID; append(sb, "void");
 
     case; compiler_report(tprint("The type '%' is currently unsupported in Jai Shaders\n", type.type));
@@ -748,11 +792,29 @@ check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Ty
     }
   } else {
     if returns.count != 1 err("must return a structure");
-    if arguments.count != 2 {
-      if shader_type == .Fragment err("must get two structures as arguments (Vertex output and Uniforms)");
-      else err("must get two structures as arguments (Vertex Input and Uniforms)");
+    bindless_decl, _, has_bindless := find_bindless_param(header);
+    if has_bindless {
+      if arguments.count != 2 {
+        if shader_type == .Fragment err("must get input struct and bindless params");
+        else err("must get input struct and bindless params");
+      }
+      if parameter_usings.count != 1 err("must have exactly one using struct argument when using bindless params");
+
+      in_arg := arguments[0];
+      if !declaration_is_parameter_using(header, in_arg) err("first argument must be a using input struct");
+      in_type := ifx in_arg.type_inst then in_arg.type_inst.result else in_arg.expression.type;
+      if in_type.type != .STRUCT err("first argument must be a struct");
+
+      bindless_type := ifx bindless_decl.type_inst then bindless_decl.type_inst.result else bindless_decl.expression.type;
+      if bindless_type.type != .STRUCT err("bindless param must be a struct");
+      if declaration_is_parameter_using(header, bindless_decl) err("bindless param must not be marked using");
+    } else {
+      if arguments.count != 2 {
+        if shader_type == .Fragment err("must get two structures as arguments (Vertex output and Uniforms)");
+        else err("must get two structures as arguments (Vertex Input and Uniforms)");
+      }
+      if parameter_usings.count != 2 err("must have struct arguments marked 'using'");
     }
-    if parameter_usings.count != 2 err("must have struct arguments marked 'using'");
   }
 
   check_array_signature_support("Metal", header);

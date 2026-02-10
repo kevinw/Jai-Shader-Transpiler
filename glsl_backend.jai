@@ -22,8 +22,18 @@ write_glsl_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, sh
   // main function string builder
   main_sb: String_Builder;
   append(*main_sb, "void main() {\n");
-  if ctx.glsl_target == .VULKAN {
+  bindless_decl, _, has_bindless := find_bindless_param(node.header);
+  if ctx.glsl_target == .VULKAN && !has_bindless {
     print_glsl_vulkan_uniform_local_bindings(*main_sb, node.header, indent=1);
+  }
+  if has_bindless {
+    struct_type := cast(*Type_Info_Struct) bindless_decl.type_inst.result;
+    add_indents(*main_sb, 1);
+    append(*main_sb, tprint("% % = %(push_constants.%_addr);\n",
+                            get_struct_type_name(struct_type),
+                            bindless_decl.name,
+                            get_struct_type_name(struct_type),
+                            bindless_decl.name));
   }
   print_glsl_stmt(ctx, *main_sb, node.block, is_main=true);
   append(*main_sb, "}\n");
@@ -31,6 +41,7 @@ write_glsl_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, sh
   
   return write_glsl_shader_code(ctx, node);
 }
+
 
 write_glsl_compute_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
   main_sb: String_Builder;
@@ -55,19 +66,28 @@ write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bod
     if ctx.glsl_target == .VULKAN append(*sb, GLSL_VULKAN_GRAPHICS_VERSION);
     else append(*sb, GLSL_GRAPHICS_VERSION);
   }
+  bindless_decl, _, has_bindless := find_bindless_param(node.header);
+  if has_bindless {
+    if ctx.glsl_target != .VULKAN
+      compiler_report("GLSL Backend: Bindless params require Vulkan target", make_location(node.header));
+    append(*sb, "#extension GL_EXT_buffer_reference : require\n");
+    append(*sb, "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require\n\n");
+  }
   print_glsl_global_constants(*sb, node.header);
   if ctx.type == .Compute {
     print_glsl_compute_layout(*sb);
     print_glsl_compute_ssbo_bindings(*sb, node.header, use_vulkan_sets=ctx.glsl_target == .VULKAN);
   } else {
+    if has_bindless print_glsl_bindless_param_definitions(*sb, node.header);
     print_glsl_in_vars(*sb, node.header, output_layout=ctx.glsl_target == .VULKAN);
-    print_glsl_uniforms(*sb, node.header, use_vulkan_ubo=ctx.glsl_target == .VULKAN);
+    if !has_bindless print_glsl_uniforms(*sb, node.header, use_vulkan_ubo=ctx.glsl_target == .VULKAN);
     print_glsl_out_vars(*sb, node.header, output_layout=ctx.glsl_target == .VULKAN);
   }
   // Output prototypes for "late binding"
   for ctx.functions {
     if it.name != "main" print_glsl_prototype(*sb, it.prototype);
   }
+
   append(*sb, "\n");
   // Output code
   for ctx.functions {
@@ -77,6 +97,46 @@ write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bod
     append(*sb, "\nEND");
   }
   return builder_to_string(*sb);
+}
+
+
+print_glsl_bindless_param_definitions :: (sb: *String_Builder, header: *Code_Procedure_Header) {
+  bindless_decl, binding, has_bindless := find_bindless_param(header);
+  if !has_bindless return;
+  if binding != 0
+    compiler_report("GLSL Backend: Only @buffer(0) is currently supported for bindless params", make_location(bindless_decl));
+
+  struct_type_generic := bindless_decl.type_inst.result;
+  if struct_type_generic.type != .STRUCT
+    compiler_report("GLSL Backend: Bindless param must be a struct", make_location(bindless_decl));
+  struct_type := cast(*Type_Info_Struct) struct_type_generic;
+
+  ptr_type_names: [..] string;
+  for *struct_type.members {
+    if it.type.type != .POINTER continue;
+    pointer := cast(*Type_Info_Pointer) it.type;
+    if pointer.pointer_to.type == .STRUCT
+      compiler_report("GLSL Backend: Bindless pointer-to-struct not yet supported", make_location(bindless_decl));
+
+    ptr_name := glsl_ptr_type_name(pointer.pointer_to);
+    already := false;
+    for ptr_type_names if it == ptr_name { already = true; break; }
+    if already continue;
+
+    array_add(*ptr_type_names, ptr_name);
+    append(sb, "layout(buffer_reference, std430) readonly buffer ", ptr_name, " {\n    ");
+    append(sb, glsl_base_type_name(pointer.pointer_to), " data[];\n};\n\n");
+  }
+
+  append(sb, "layout(buffer_reference, std430) readonly buffer ", get_struct_type_name(struct_type), " {\n");
+  for *struct_type.members {
+    append(sb, "    ");
+    print_glsl_member_with_typename(sb, it);
+    append(sb, ";\n");
+  }
+  append(sb, "};\n\n");
+
+  append(sb, "layout(push_constant) uniform PushConstants {\n    uint64_t ", bindless_decl.name, "_addr;\n} push_constants;\n\n");
 }
 
 print_glsl_compute_layout :: (sb: *String_Builder) {
@@ -260,6 +320,29 @@ print_glsl_member_with_typename :: (sb: *String_Builder, thing: *Type_Info_Struc
   print_glsl_typed_name(sb, thing.type, thing.name);
 }
 
+
+
+glsl_base_type_name :: (type: *Type_Info) -> string {
+  if type.type == {
+    case .INTEGER; {
+      inttype := cast(*Type_Info_Integer) type;
+      return ifx inttype.signed then "int" else "uint";
+    }
+    case .FLOAT; return ifx type.runtime_size == 64 then "double" else "float";
+    case .BOOL; return "bool";
+    case .STRUCT; {
+      structtype := cast(*Type_Info_Struct) type;
+      return jai_to_glsl_type_name(get_struct_type_name(structtype));
+    }
+    case .VOID; return "void";
+  }
+  compiler_report(tprint("The type '%' is currently unsupported in Jai Shaders\n", type.type));
+  return "<unsupported>";
+}
+
+glsl_ptr_type_name :: (element_type: *Type_Info) -> string {
+  return tprint("Ptr_%", glsl_base_type_name(element_type));
+}
 print_glsl_type :: (sb: *String_Builder, type: *Type_Info) {
   if type.type == {
     case .INTEGER; {
@@ -505,10 +588,19 @@ print_glsl_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node:
 
 print_glsl_binary_operator :: (ctx: *Shader_Write_Context, sb: *String_Builder, bn: *Code_Binary_Operator) {
   if bn.operator_type == .ARRAY_SUBSCRIPT {
-    print_glsl_expr(ctx, sb, bn.left);
-    append(sb, "[");
-    print_glsl_subscript_index_expr(ctx, sb, bn.right);
-    append(sb, "]");
+    left_type := bn.left.type;
+    _, _, has_bindless := find_bindless_param(ctx.main_fn.header);
+    if has_bindless && left_type && left_type.type == .POINTER {
+      print_glsl_expr(ctx, sb, bn.left);
+      append(sb, ".data[");
+      print_glsl_subscript_index_expr(ctx, sb, bn.right);
+      append(sb, "]");
+    } else {
+      print_glsl_expr(ctx, sb, bn.left);
+      append(sb, "[");
+      print_glsl_subscript_index_expr(ctx, sb, bn.right);
+      append(sb, "]");
+    }
     return;
   }
 
@@ -724,14 +816,34 @@ check_arguments :: (using header: *Code_Procedure_Header, shader_type: Shader_Ty
     else err("must return a structure with at least a Vector4 gl_Position field");
   }
 
-  if arguments.count != 2 {
-    if shader_type == .Fragment err("must get two structures as arguments (Vertex output and Uniforms)");
-    else err("must get two structures as arguments (Vertex Input and Uniforms)");
-  }
+  bindless_decl, _, has_bindless := find_bindless_param(header);
+  if has_bindless {
+    if arguments.count != 2 {
+      if shader_type == .Fragment err("must get input struct and bindless params");
+      else err("must get input struct and bindless params");
+    }
+    if parameter_usings.count != 1 {
+      err("must have exactly one using struct argument when using bindless params");
+    }
 
-  if parameter_usings.count != 2 {
-    if shader_type == .Fragment err("must have struct arguments marked 'using'");
-    else err("must have struct arguments marked 'using'");
+    in_arg := arguments[0];
+    if !declaration_is_parameter_using(header, in_arg) err("first argument must be a using input struct");
+    in_type := ifx in_arg.type_inst then in_arg.type_inst.result else in_arg.expression.type;
+    if in_type.type != .STRUCT err("first argument must be a struct");
+
+    bindless_type := ifx bindless_decl.type_inst then bindless_decl.type_inst.result else bindless_decl.expression.type;
+    if bindless_type.type != .STRUCT err("bindless param must be a struct");
+    if declaration_is_parameter_using(header, bindless_decl) err("bindless param must not be marked using");
+  } else {
+    if arguments.count != 2 {
+      if shader_type == .Fragment err("must get two structures as arguments (Vertex output and Uniforms)");
+      else err("must get two structures as arguments (Vertex Input and Uniforms)");
+    }
+
+    if parameter_usings.count != 2 {
+      if shader_type == .Fragment err("must have struct arguments marked 'using'");
+      else err("must have struct arguments marked 'using'");
+    }
   }
 
   check_array_signature_support("GLSL", header);

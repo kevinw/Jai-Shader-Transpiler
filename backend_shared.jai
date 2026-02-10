@@ -106,3 +106,49 @@ reset_unnamed_struct_cache :: () {
   unnamed_struct_counter = 0;
   array_reset(*unnamed_struct_entries);
 }
+
+
+get_buffer_binding_from_decl :: (decl: *Code_Declaration) -> (s64, bool) {
+  suffix, found := declaration_get_note_suffix(decl, "buffer(");
+  if !found return 0, false;
+
+  value: s64 = 0;
+  any_digit := false;
+  for i: 0..suffix.count-1 {
+    ch := suffix[i];
+    if ch == #char ")" break;
+    if ch < #char "0" || ch > #char "9" return 0, false;
+    any_digit = true;
+    value = value * 10 + (ch - #char "0");
+  }
+  if !any_digit return 0, false;
+  return value, true;
+}
+
+find_buffer_param :: (header: *Code_Procedure_Header) -> (*Code_Declaration, s64, bool) {
+  for header.arguments {
+    binding, found := get_buffer_binding_from_decl(it);
+    if found return it, binding, true;
+  }
+  return null, 0, false;
+}
+
+find_implicit_bindless_param :: (header: *Code_Procedure_Header) -> (*Code_Declaration, s64, bool) {
+  candidate: *Code_Declaration = null;
+  for header.arguments {
+    if declaration_is_parameter_using(header, it) continue;
+    arg_type := ifx it.type_inst then it.type_inst.result else it.expression.type;
+    if arg_type.type != .STRUCT continue;
+    if candidate return null, 0, false;
+    candidate = it;
+  }
+  if candidate return candidate, 0, true;
+  return null, 0, false;
+}
+
+find_bindless_param :: (header: *Code_Procedure_Header) -> (*Code_Declaration, s64, bool) {
+  decl, binding, found := find_buffer_param(header);
+  if found return decl, binding, true;
+  decl2, binding2, found2 := find_implicit_bindless_param(header);
+  return decl2, binding2, found2;
+}
