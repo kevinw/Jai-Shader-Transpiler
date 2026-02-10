@@ -109,7 +109,7 @@ print_hlsl_in_vars :: (sb: *String_Builder, node: *Code_Procedure_Header) {
     compiler_report(tprint("HLSL Backend: Shader Input is not a struct, but is a %\n", struct_type_generic.type), make_location(node.arguments[0]));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
   
-  append(sb, tprint("struct % {\n", struct_type.name));
+  append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
   for * struct_type.members {
     if member_is_stage_builtin(it) continue;
     
@@ -130,7 +130,7 @@ print_hlsl_cbuffers :: (sb: *String_Builder, node: *Code_Procedure_Header) {
       compiler_report(tprint("HLSL Backend: Shader Input is not a struct, but is a %\n", struct_type_generic.type), make_location(node.arguments[0]));
     struct_type := cast(*Type_Info_Struct) struct_type_generic;
     
-    append(sb, tprint("cbuffer % {\n", struct_type.name));
+    append(sb, tprint("cbuffer % {\n", get_struct_type_name(struct_type)));
     for * struct_type.members {
       register, found := member_get_note_suffix(it, "register_");
       if found {
@@ -159,7 +159,7 @@ print_hlsl_out_vars :: (sb: *String_Builder, node: *Code_Procedure_Header) {
     compiler_report(tprint("HLSL Backend: Shader Input is not a struct, but is a %\n", struct_type_generic.type), make_location(node.arguments[0]));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
   
-  append(sb, tprint("struct % {\n", struct_type.name));
+  append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
   for * struct_type.members {
     if member_is_stage_builtin(it) continue;
     
@@ -453,7 +453,7 @@ print_hlsl_type :: (sb: *String_Builder, type: *Type_Info) {
     case .BOOL; append(sb, "bool");
     case .STRUCT; {
       structtype := cast(*Type_Info_Struct) type;
-      append(sb, jai_to_hlsl_type_name(structtype.name));
+      append(sb, jai_to_hlsl_type_name(get_struct_type_name(structtype)));
     }
     case .VOID; append(sb, "void");
     

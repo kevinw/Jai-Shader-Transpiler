@@ -79,3 +79,30 @@ split_array_type_and_suffix :: (backend_name: string, type: *Type_Info) -> (*Typ
 
   return curr, builder_to_string(*suffix_builder);
 }
+
+Unnamed_Struct_Entry :: struct {
+  ptr: *Type_Info_Struct;
+  name: string;
+}
+
+unnamed_struct_counter: s64;
+unnamed_struct_entries: [..] Unnamed_Struct_Entry;
+
+get_struct_type_name :: (struct_type: *Type_Info_Struct) -> string {
+  if struct_type.name.count != 0 return struct_type.name;
+
+  for unnamed_struct_entries {
+    if it.ptr == struct_type return it.name;
+  }
+
+  unnamed_struct_counter += 1;
+  name := tprint("UnnamedStruct%", unnamed_struct_counter);
+  array_add(*unnamed_struct_entries, .{ptr = struct_type, name = name});
+  struct_type.name = name;
+  return name;
+}
+
+reset_unnamed_struct_cache :: () {
+  unnamed_struct_counter = 0;
+  array_reset(*unnamed_struct_entries);
+}

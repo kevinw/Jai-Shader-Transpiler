@@ -196,7 +196,7 @@ print_glsl_uniforms :: (sb: *String_Builder, node: *Code_Procedure_Header, use_v
     }
 
     arg_name := node.arguments[1].name;
-    append(sb, "layout(set = 0, binding = 0) uniform ", struct_type.name, "_Block {\n");
+    append(sb, "layout(set = 0, binding = 0) uniform ", get_struct_type_name(struct_type), "_Block {\n");
     for * struct_type.members {
       append(sb, "    ");
       print_glsl_member_with_typename(sb, it);
@@ -270,7 +270,7 @@ print_glsl_type :: (sb: *String_Builder, type: *Type_Info) {
     case .BOOL; append(sb, "bool");
     case .STRUCT; {
       structtype := cast(*Type_Info_Struct) type;
-      append(sb, jai_to_glsl_type_name(structtype.name));
+      append(sb, jai_to_glsl_type_name(get_struct_type_name(structtype)));
     }
     case .VOID; append(sb, "void");
     
@@ -598,10 +598,10 @@ print_glsl_struct_literal :: (ctx: *Shader_Write_Context, sb: *String_Builder, l
     append(sb, jai_to_glsl_type_name(name.name));
   } else if expected_type && expected_type.type == .STRUCT {
     struct_type := cast(*Type_Info_Struct) expected_type;
-    append(sb, jai_to_glsl_type_name(struct_type.name));
+    append(sb, jai_to_glsl_type_name(get_struct_type_name(struct_type)));
   } else if lit.type.type == .STRUCT {
     struct_type := cast(*Type_Info_Struct) lit.type;
-    append(sb, jai_to_glsl_type_name(struct_type.name));
+    append(sb, jai_to_glsl_type_name(get_struct_type_name(struct_type)));
   } else {
     compiler_report("Unfortunately, we can't easily know enough about types without the explicit name here.", make_location(lit));
     return;

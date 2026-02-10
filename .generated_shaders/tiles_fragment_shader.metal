@@ -19,28 +19,6 @@ struct FragmentShader_Out {
     float4 out_color [[color(0)]];
 };
 
-float4 tiles_shadertoy_color(float2 frag_coord, float2 resolution, float time);
-
-float4 tiles_shadertoy_color(float2 frag_coord, float2 resolution, float time) {
-     float aspect_ratio = resolution.y / resolution.x;
-     float2 uv = frag_coord / resolution.x;
-     uv -= float2(0.5, 0.5 * aspect_ratio);
-     float rot = jai_radians(-30 - time);
-     float2x2 rotation_matrix = float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)));
-     uv = rotation_matrix * uv;
-     float2 scaled_uv = 20 * uv;
-     float2 tile = fract(scaled_uv);
-     float tile_dist = min(min(tile.x, 1 - tile.x), min(tile.y, 1 - tile.y));
-     float square_dist = length(floor(scaled_uv));
-     float edge = sin(time - square_dist * 20);
-     edge = fmod(edge * edge, edge / edge);
-     float value = mix(tile_dist, 1 - tile_dist, step(1, edge));
-     edge = pow(abs(1 - edge), 2.2) * 0.5;
-     value = smoothstep(edge - 0.05, edge, 0.95 * value);
-     value += square_dist * 0.1;
-     value *= 0.8 - 0.2;
-     return float4(pow(value, 2), pow(value, 1.5), pow(value, 1.2), 1);
-}
 
 fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], constant FragmentShader_Uniforms& un [[buffer(0)]]) {
      float4 gl_FragCoord = in.gl_FragCoord;
@@ -48,7 +26,24 @@ fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], const
      float u_time = un.u_time;
      float4 out_color;
 
-     out_color = tiles_shadertoy_color(float2(gl_FragCoord.x, gl_FragCoord.y), u_resolution, u_time);
+     float aspect_ratio = u_resolution.y / u_resolution.x;
+     float2 uv = gl_FragCoord.xy / u_resolution.x;
+     uv -= float2(0.5, 0.5 * aspect_ratio);
+     float rot = jai_radians(-30 - u_time);
+     float2x2 rotation_matrix = float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)));
+     uv = rotation_matrix * uv;
+     float2 scaled_uv = 20 * uv;
+     float2 tile = fract(scaled_uv);
+     float tile_dist = min(min(tile.x, 1 - tile.x), min(tile.y, 1 - tile.y));
+     float square_dist = length(floor(scaled_uv));
+     float edge = sin(u_time - square_dist * 20);
+     edge = fmod(edge * edge, edge / edge);
+     float value = mix(tile_dist, 1 - tile_dist, step(1, edge));
+     edge = pow(abs(1 - edge), 2.2) * 0.5;
+     value = smoothstep(edge - 0.05, edge, 0.95 * value);
+     value += square_dist * 0.1;
+     value *= 0.8 - 0.2;
+     out_color = float4(pow(value, 2), pow(value, 1.5), pow(value, 1.2), 1);
      FragmentShader_Out out;
      out.out_color = out_color;
      return out;

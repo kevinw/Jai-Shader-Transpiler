@@ -19,7 +19,7 @@ write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, s
   case .Fragment; append(*main_sb, "fragment ");
   case .Compute; // nothing
   }
-  append(*main_sb, (cast(*Type_Info_Struct) node.header.returns[0].type_inst.result).name);
+  append(*main_sb, get_struct_type_name(cast(*Type_Info_Struct) node.header.returns[0].type_inst.result));
   append(*main_sb, " ", main_function_name, "(");
   print_metal_stage_in_arg(*main_sb, node.header.arguments[0]);
   if node.header.arguments.count >= 2 {
@@ -92,7 +92,7 @@ print_metal_in_struct :: (sb: *String_Builder, node: *Code_Procedure_Header) {
     compiler_report(tprint("Metal Backend: Shader Input is not a struct, but is a %\n", struct_type_generic.type), make_location(node.arguments[0]));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
 
-  append(sb, tprint("struct % {\n", struct_type.name));
+  append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
   attribute_i := 0;
   for * struct_type.members {
     if node_is_fragment_shader(node) && it.name == "gl_Position" continue;
@@ -121,7 +121,7 @@ print_metal_uniform_struct :: (sb: *String_Builder, node: *Code_Procedure_Header
     compiler_report("Metal Backend: Shader uniforms are not a struct", make_location(node.arguments[1]));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
 
-  append(sb, tprint("struct % {\n", struct_type.name));
+  append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
   for * struct_type.members {
     append(sb, "    ");
     print_metal_member_with_typename(sb, it);
@@ -136,7 +136,7 @@ print_metal_out_struct :: (sb: *String_Builder, node: *Code_Procedure_Header, sh
     compiler_report("Metal Backend: Shader Output is not a struct", make_location(node.returns[0]));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
 
-  append(sb, tprint("struct % {\n", struct_type.name));
+  append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
   color_i := 0;
   for * struct_type.members {
     if shader_type == .Vertex && it.name == "gl_FragCoord" continue;
@@ -596,7 +596,7 @@ print_metal_type :: (sb: *String_Builder, type: *Type_Info) {
     case .BOOL; append(sb, "bool");
     case .STRUCT; {
       structtype := cast(*Type_Info_Struct) type;
-      append(sb, jai_to_metal_type_name(structtype.name));
+      append(sb, jai_to_metal_type_name(get_struct_type_name(structtype)));
     }
     case .VOID; append(sb, "void");
 
@@ -638,10 +638,10 @@ print_metal_struct_literal :: (ctx: *Shader_Write_Context, sb: *String_Builder, 
     constructor_name = jai_to_metal_type_name(name.name);
   } else if expected_type && expected_type.type == .STRUCT {
     struct_type := cast(*Type_Info_Struct) expected_type;
-    constructor_name = jai_to_metal_type_name(struct_type.name);
+    constructor_name = jai_to_metal_type_name(get_struct_type_name(struct_type));
   } else if lit.type.type == .STRUCT {
     struct_type := cast(*Type_Info_Struct) lit.type;
-    constructor_name = jai_to_metal_type_name(struct_type.name);
+    constructor_name = jai_to_metal_type_name(get_struct_type_name(struct_type));
   } else {
     compiler_report("Unfortunately, we can't easily know enough about types without the explicit name here.", make_location(lit));
     return;

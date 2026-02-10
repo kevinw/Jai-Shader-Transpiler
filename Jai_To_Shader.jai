@@ -20,9 +20,14 @@ DEBUG_OUTDIR :: ".generated_shaders";
 
 Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
+    
+    // options
     output_shaders: bool;
-    currently_waiting_contexts: [..] Shader_Write_Context;
-    pending_request_declarations: [..] *Code_Declaration;
+    
+    using impl: struct {
+      currently_waiting_contexts: [..] Shader_Write_Context;
+      pending_request_declarations: [..] *Code_Declaration;
+    }
 }
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
@@ -183,6 +188,7 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
 }
 
 write_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
+  reset_unnamed_struct_cache();
   // log("Converting % Shader: %", ctx.type, node.header.name);
   
   if ctx.language == {
