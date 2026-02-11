@@ -642,17 +642,12 @@ ir_lower_expr :: (node: *Code_Node,
           left_for_member := left;
           if bn.left && bn.left.type && bn.left.type.type == .POINTER {
             ptr_type := cast(*Type_Info_Pointer) bn.left.type;
-            // Only materialize implicit dereference for pointer forms that lower as buffer-like values.
-            // Pointers to structs that themselves contain pointer/resource members are lowered as direct
-            // struct values in this pipeline, so adding [0] would be incorrect there.
             should_emit_implicit_deref := true;
             if ptr_type.pointer_to && ptr_type.pointer_to.type == .STRUCT && ir_struct_has_pointer_members(ptr_type.pointer_to) {
               should_emit_implicit_deref = false;
             }
 
             if should_emit_implicit_deref {
-              // Jai allows member access on pointers; lower to explicit first-element dereference.
-              // In shader code this maps pointer-like buffers to `ptr[0].field`.
               deref_index := ir_expr_new(.LITERAL);
               deref_index.text = "0";
               deref := ir_expr_new(.SUBSCRIPT);
@@ -1235,6 +1230,67 @@ ir_block_has_return_stmt :: (block: *IR_Block) -> bool {
   return false;
 }
 
+ir_emit_graphics_global_resource_args :: (sb: *String_Builder, args: [] IR_Function_Arg) -> bool {
+  assert(sb != null);
+  emitted_any := false;
+  for args {
+    if !ir_type_name_is_parameter_block(it.type_name) continue;
+    append(sb, tprint("% %;\n", it.type_name, it.name));
+    emitted_any = true;
+  }
+  if emitted_any append(sb, "\n");
+  return true;
+}
+
+ir_pair_global_resource_arg_conflicts :: (vertex_args: [] IR_Function_Arg, fragment_args: [] IR_Function_Arg) -> bool {
+  for vertex_args {
+    va := it;
+    if !ir_type_name_is_parameter_block(va.type_name) continue;
+    for fragment_args {
+      fa := it;
+      if !ir_type_name_is_parameter_block(fa.type_name) continue;
+      if va.name != fa.name continue;
+      if va.type_name != fa.type_name return true;
+    }
+  }
+  return false;
+}
+
+ir_emit_pair_global_resource_args :: (sb: *String_Builder, vertex_args: [] IR_Function_Arg, fragment_args: [] IR_Function_Arg) -> bool {
+  assert(sb != null);
+  if ir_pair_global_resource_arg_conflicts(vertex_args, fragment_args) return false;
+
+  emitted_any := false;
+  seen_names: [..] string;
+
+  emit_from_args :: (sb: *String_Builder, args: [] IR_Function_Arg, seen_names: *[..] string, emitted_any: *bool) {
+    for args {
+      arg := it;
+      if !ir_type_name_is_parameter_block(arg.type_name) continue;
+      already_seen := false;
+      for seen_names.* if it == arg.name { already_seen = true; break; }
+      if already_seen continue;
+      append(sb, tprint("% %;\n", arg.type_name, arg.name));
+      array_add(seen_names, arg.name);
+      emitted_any.* = true;
+    }
+  }
+
+  emit_from_args(sb, vertex_args, *seen_names, *emitted_any);
+  emit_from_args(sb, fragment_args, *seen_names, *emitted_any);
+  if emitted_any append(sb, "\n");
+  return true;
+}
+
+ir_emit_compute_global_buffers :: (sb: *String_Builder, buffers: [] IR_Compute_Buffer) {
+  assert(sb != null);
+  if buffers.count == 0 return;
+  for buffers {
+    append(sb, tprint("RWStructuredBuffer<%> %;\n", it.element_type_name, it.name));
+  }
+  append(sb, "\n");
+}
+
 emit_ir_vertex_to_slang :: (shader: IR_Vertex_Shader) -> (string, bool) {
   if shader.entry_name.count == 0 return "", false;
 
@@ -1247,10 +1303,12 @@ emit_ir_vertex_to_slang :: (shader: IR_Vertex_Shader) -> (string, bool) {
   for shader.extra_structs ir_emit_struct_slang(*sb, *it);
   ir_emit_helper_prototypes(*sb, shader.helpers);
   if !ir_emit_helper_definitions(*sb, shader.helpers) return "", false;
+  if !ir_emit_graphics_global_resource_args(*sb, shader.args) return "", false;
 
   append(*sb, "[shader(\"vertex\")]\n");
   append(*sb, tprint("% %(% input", shader.output.name, shader.entry_name, shader.input.name));
   for shader.args {
+    if ir_type_name_is_parameter_block(it.type_name) continue;
     if it.is_readonly && !ir_type_name_is_parameter_block(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
     else append(*sb, tprint(", % %", it.type_name, it.name));
   }
@@ -1282,10 +1340,12 @@ emit_ir_fragment_to_slang :: (shader: IR_Fragment_Shader) -> (string, bool) {
   for shader.extra_structs ir_emit_struct_slang(*sb, *it);
   ir_emit_helper_prototypes(*sb, shader.helpers);
   if !ir_emit_helper_definitions(*sb, shader.helpers) return "", false;
+  if !ir_emit_graphics_global_resource_args(*sb, shader.args) return "", false;
 
   append(*sb, "[shader(\"fragment\")]\n");
   append(*sb, tprint("% %(% input", shader.output.name, shader.entry_name, shader.input.name));
   for shader.args {
+    if ir_type_name_is_parameter_block(it.type_name) continue;
     if it.is_readonly append(*sb, tprint(", const % %", it.type_name, it.name));
     else append(*sb, tprint(", % %", it.type_name, it.name));
   }
@@ -1327,10 +1387,12 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   for fragment.helpers ir_add_helper_unique_by_name(*pair_helpers, it);
   ir_emit_helper_prototypes(*sb, pair_helpers);
   if !ir_emit_helper_definitions(*sb, pair_helpers) return "", false;
+  if !ir_emit_pair_global_resource_args(*sb, vertex.args, fragment.args) return "", false;
 
   append(*sb, "[shader(\"vertex\")]\n");
   append(*sb, tprint("% %(% input", vertex.output.name, vertex.entry_name, vertex.input.name));
   for vertex.args {
+    if ir_type_name_is_parameter_block(it.type_name) continue;
     if it.is_readonly && !ir_type_name_is_parameter_block(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
     else append(*sb, tprint(", % %", it.type_name, it.name));
   }
@@ -1349,6 +1411,7 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   append(*sb, "[shader(\"fragment\")]\n");
   append(*sb, tprint("% %(% input", fragment.output.name, fragment.entry_name, fragment.input.name));
   for fragment.args {
+    if ir_type_name_is_parameter_block(it.type_name) continue;
     if it.is_readonly && !ir_type_name_is_parameter_block(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
     else append(*sb, tprint(", % %", it.type_name, it.name));
   }
@@ -1373,15 +1436,12 @@ emit_ir_compute_to_slang :: (shader: IR_Compute_Shader) -> (string, bool) {
   for shader.extra_structs ir_emit_struct_slang(*sb, *it);
   ir_emit_helper_prototypes(*sb, shader.helpers);
   if !ir_emit_helper_definitions(*sb, shader.helpers) return "", false;
+  ir_emit_compute_global_buffers(*sb, shader.buffers);
 
   append(*sb, "[shader(\"compute\")]\n");
   append(*sb, "void ");
   append(*sb, shader.entry_name);
-  append(*sb, tprint("(% input", shader.input.name));
-  for shader.buffers {
-    append(*sb, tprint(", RWStructuredBuffer<%> %", it.element_type_name, it.name));
-  }
-  append(*sb, ") {\n");
+  append(*sb, tprint("(% input) {\n", shader.input.name));
   body_lines: [..] string;
   if !ir_emit_ir_block_lines(*body_lines, *shader.body, 1) return "", false;
   for body_lines append(*sb, it, "\n");

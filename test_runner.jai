@@ -31,7 +31,7 @@ run_all_tests :: () {
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout(set = 0, binding = 0) uniform");
   check_file_contains(debug_path("compute_write_indices_vk.glsl"), "layout(std430, binding = 0) buffer");
   check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "readonly buffer StructuredBuffer_BindlessNestedVk_VertexData");
-  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "entryPointParams_params_vertex_data");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "params_vertex_data");
   check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
   check_file_contains(debug_path("tiles_pair_shader.metal"), "vertex VertexShader_Out VertexMain(");
   check_file_contains(debug_path("tiles_pair_shader.metal"), "fragment FragmentShader_Out FragmentMain(");

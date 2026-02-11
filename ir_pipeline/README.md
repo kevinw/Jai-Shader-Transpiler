@@ -20,6 +20,7 @@ Planned next steps:
 
 Current flag plumbing:
 - `-use_ir_pipeline` enables this path.
+- `-slang_emit_line_directives` keeps Slang `#line` output enabled. Default is to omit line directives for cleaner generated Metal/GLSL source.
 - Runtime behavior is partially switched:
   - Experimental IR path is enabled for a narrow safe subset (single-stage and paired Metal vertex/fragment shaders plus simple Metal compute shaders, with non-pointer/non-array interface types and simple body forms).
   - All other shaders fall back to the legacy backend path.
