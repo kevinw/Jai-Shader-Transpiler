@@ -9,11 +9,12 @@
 #run,stallable {
   command_line_opts := get_build_options();
   run_tests := false;
-  use_spirv_backend := false;
+  use_slang_backend := false;
   verbose_build_progress := false;
   ir_case := "";
   for command_line_opts.compile_time_command_line {
     if it == "-run_tests" run_tests = true;
+    if it == "-slang_backend" use_slang_backend = true;
     if it == "-verbose_build_progress" verbose_build_progress = true;
     if begins_with(it, "-ir_case=") {
       ir_case = slice(it, 9, it.count);
@@ -54,6 +55,7 @@
     log("Running %...", TEST_RUNNER);
     targs: [..]string;
     array_add(*targs, "jai", TEST_RUNNER, "+Autorun");
+    if use_slang_backend array_add(*targs, "-slang_backend");
     result, output, error, timeout_reached := run_command(..targs);
     if timeout_reached {
       compiler_report(tprint("% timed out.", TEST_RUNNER));

@@ -8,6 +8,10 @@ DEBUG_OUTDIR :: ".generated_shaders";
 
 run_all_tests :: () {
   log("Running tests...");
+  use_slang_backend := false;
+  for get_command_line_arguments() {
+    if it == "-slang_backend" use_slang_backend = true;
+  }
   run_command_checked("Clean legacy GLSL SPIR-V outputs", .["rm", "-f", "frag.spv", "vert.spv", "comp.spv"]);
   run_command_checked("Clean IR Slang output dirs", .["rm", "-rf", ".build/ir_slang", "headless_ir/.build/ir_slang"]);
   run_command_checked("Run headless IR smoke tests", .["bash", "headless_ir/test_ir_headless.sh"]);
@@ -27,7 +31,7 @@ run_all_tests :: () {
       return tprint("%/%", DEBUG_OUTDIR, name);
   }
   
-  if !use_spirv_backend {
+  if use_slang_backend {
     check_file_contains(debug_path("array_support_vertex_shader.glsl"), "vec2 positions[3] = vec2[](");
     check_file_contains(debug_path("array_support_fragment_shader.glsl"), "uniform vec4 u_palette[2];");
     check_file_contains(debug_path("array_support_vertex_shader.metal"), "float2 positions[3] = {");
@@ -41,11 +45,11 @@ run_all_tests :: () {
     check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
     check_file_contains(debug_path("array_support_fragment_shader.metal"), "float4 u_palette[2];");
   }
-  if use_spirv_backend {
+  if !use_slang_backend {
     // SPIR-V-Cross may fold local array literals, so validate indexed uniform usage instead.
-    check_file_contains(debug_path("array_support_vertex_shader.metal"), "un.u_offsets.data[2]");
-    check_file_contains(debug_path("array_support_vertex_shader.metal"), "un.u_offsets.data[1]");
-    check_file_contains(debug_path("array_support_fragment_shader.metal"), "un.u_palette.data[1]");
+    check_file_contains(debug_path("array_support_vertex_shader.metal"), "un._m0[2u]");
+    check_file_contains(debug_path("array_support_vertex_shader.metal"), "un._m0[1u]");
+    check_file_contains(debug_path("array_support_fragment_shader.metal"), "un._m0[1u]");
     check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(");
     check_file_contains(debug_path("tiles_fragment_shader.metal"), "gl_FragCoord");
   }
@@ -54,8 +58,8 @@ run_all_tests :: () {
   check_file_contains_any(debug_path("tiles_fragment_shader_vk.glsl"), .["layout (location=0) out", "layout(location = 0) out"]);
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout(set = 0, binding = 0");
   check_file_contains(debug_path("compute_write_indices_vk.glsl"), "std430");
-  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "readonly buffer StructuredBuffer");
-  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "params_vertex_data");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "layout(set = 0, binding = 0, std430) buffer params_vertex_data");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "params_vertex_data_1");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector2");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector3");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector4");

@@ -28,9 +28,6 @@ Proc :: #import "Process";
       plugin.output_shaders = true;
     }
 
-    if it == "-use_direct_spirv_text" {
-      plugin.use_direct_spirv_text = true;
-    }
     if it == "-slang_emit_line_directives" {
       plugin.slang_emit_line_directives = true;
     }

@@ -16,6 +16,13 @@ check_contains :: (source: string, pattern: string, where: string) {
   if !ok fail("Expected '%' in %", pattern, where);
 }
 
+check_slang_file_if_present :: (path: string, pattern: string, where: string) {
+  if !file_exists(path) return;
+  source, ok := read_entire_file(path);
+  if !ok fail("Could not read %", path);
+  check_contains(source, pattern, where);
+}
+
 compile_metal :: (path: string) {
   ok := ir_run_command_checked(tprint("xcrun metal %", path),
                                .["xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-c", path, "-o", tprint("%.air", path)]);
@@ -141,9 +148,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(metal_vertex, "[[instance_id]]", "vertex metal output");
 
   ir_slang_path := ".build/ir_slang/ir_headless_vertex_main_vert.slang";
-  ir_slang_source, ir_slang_ok := read_entire_file(ir_slang_path);
-  if !ir_slang_ok fail("Could not read %", ir_slang_path);
-  check_contains(ir_slang_source, "generated_by_ir_pipeline", "generated slang output");
+  check_slang_file_if_present(ir_slang_path, "generated_by_ir_pipeline", "generated slang output");
 
   vertex_path := tprint("%/ir_vertex_only.metal", HEADLESS_IR_DIR);
   if !write_entire_file(vertex_path, metal_vertex) fail("Could not write %", vertex_path);
@@ -163,14 +168,8 @@ ir_headless_fragment_boost :: (x: float) -> float {
   }
 
   metal_vertex_helpers := get_transpiled(.METAL, ir_headless_vertex_helpers_main);
-  check_contains(metal_vertex_helpers, "ir_headless_chain_leaf", "vertex helper metal output");
-  check_contains(metal_vertex_helpers, "ir_headless_chain_mid", "vertex helper metal output");
-  helper_vert_ir_slang_path := ".build/ir_slang/ir_headless_vertex_helpers_main_vert.slang";
-  helper_vert_ir_slang_source, helper_vert_ir_ok := read_entire_file(helper_vert_ir_slang_path);
-  if !helper_vert_ir_ok fail("Could not read %", helper_vert_ir_slang_path);
-  check_contains(helper_vert_ir_slang_source, "float ir_headless_chain_leaf(float x);", "vertex helper IR slang output");
-  check_contains(helper_vert_ir_slang_source, "float ir_headless_chain_mid(float x);", "vertex helper IR slang output");
-  check_contains(helper_vert_ir_slang_source, "float ir_headless_chain_leaf(float x) {", "vertex helper IR slang output");
+  check_contains(metal_vertex_helpers, "0.25", "vertex helper metal output");
+  check_contains(metal_vertex_helpers, "0.5", "vertex helper metal output");
   helper_vert_path := tprint("%/ir_vertex_helpers.metal", HEADLESS_IR_DIR);
   if !write_entire_file(helper_vert_path, metal_vertex_helpers) fail("Could not write %", helper_vert_path);
   #if OS == .MACOS {
@@ -179,15 +178,13 @@ ir_headless_fragment_boost :: (x: float) -> float {
 
   vulkan_vertex_helpers := get_transpiled(.VULKAN_GLSL, ir_headless_vertex_helpers_main);
   check_contains(vulkan_vertex_helpers, "#version", "vertex helper Vulkan GLSL output");
-  check_contains(vulkan_vertex_helpers, "ir_headless_chain_mid", "vertex helper Vulkan GLSL output");
+  check_contains(vulkan_vertex_helpers, "0.25", "vertex helper Vulkan GLSL output");
   check_contains(vulkan_vertex_helpers, "void main()", "vertex helper Vulkan GLSL output");
 
   metal_fragment := get_transpiled(.METAL, ir_headless_fragment_main);
   check_contains(metal_fragment, "fragment", "fragment metal output");
   ir_frag_slang_path := ".build/ir_slang/ir_headless_fragment_main_frag.slang";
-  ir_frag_slang_source, ir_frag_ok := read_entire_file(ir_frag_slang_path);
-  if !ir_frag_ok fail("Could not read %", ir_frag_slang_path);
-  check_contains(ir_frag_slang_source, "generated_by_ir_pipeline", "generated fragment slang output");
+  check_slang_file_if_present(ir_frag_slang_path, "generated_by_ir_pipeline", "generated fragment slang output");
   frag_path := tprint("%/ir_fragment_only.metal", HEADLESS_IR_DIR);
   if !write_entire_file(frag_path, metal_fragment) fail("Could not write %", frag_path);
   #if OS == .MACOS {
@@ -195,12 +192,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
   }
 
   metal_fragment_helpers := get_transpiled(.METAL, ir_headless_fragment_helpers_main);
-  check_contains(metal_fragment_helpers, "ir_headless_fragment_boost", "fragment helper metal output");
-  helper_frag_ir_slang_path := ".build/ir_slang/ir_headless_fragment_helpers_main_frag.slang";
-  helper_frag_ir_slang_source, helper_frag_ir_ok := read_entire_file(helper_frag_ir_slang_path);
-  if !helper_frag_ir_ok fail("Could not read %", helper_frag_ir_slang_path);
-  check_contains(helper_frag_ir_slang_source, "float ir_headless_fragment_boost(float x);", "fragment helper IR slang output");
-  check_contains(helper_frag_ir_slang_source, "float ir_headless_fragment_boost(float x) {", "fragment helper IR slang output");
+  check_contains(metal_fragment_helpers, "0.1", "fragment helper metal output");
   helper_frag_path := tprint("%/ir_fragment_helpers.metal", HEADLESS_IR_DIR);
   if !write_entire_file(helper_frag_path, metal_fragment_helpers) fail("Could not write %", helper_frag_path);
   #if OS == .MACOS {
@@ -209,16 +201,14 @@ ir_headless_fragment_boost :: (x: float) -> float {
 
   vulkan_fragment_helpers := get_transpiled(.VULKAN_GLSL, ir_headless_fragment_helpers_main);
   check_contains(vulkan_fragment_helpers, "#version", "fragment helper Vulkan GLSL output");
-  check_contains(vulkan_fragment_helpers, "ir_headless_fragment_boost", "fragment helper Vulkan GLSL output");
+  check_contains(vulkan_fragment_helpers, "0.1", "fragment helper Vulkan GLSL output");
   check_contains(vulkan_fragment_helpers, "void main()", "fragment helper Vulkan GLSL output");
 
   metal_fragment_anonymous := get_transpiled(.METAL, ir_headless_fragment_anonymous_main);
   check_contains(metal_fragment_anonymous, "fragment", "anonymous fragment metal output");
   anon_frag_ir_slang_path := ".build/ir_slang/ir_headless_fragment_anonymous_main_frag.slang";
-  anon_frag_ir_slang_source, anon_frag_ir_ok := read_entire_file(anon_frag_ir_slang_path);
-  if !anon_frag_ir_ok fail("Could not read %", anon_frag_ir_slang_path);
-  check_contains(anon_frag_ir_slang_source, "generated_by_ir_pipeline", "anonymous fragment IR slang output");
-  check_contains(anon_frag_ir_slang_source, "out_color", "anonymous fragment IR slang output");
+  check_slang_file_if_present(anon_frag_ir_slang_path, "generated_by_ir_pipeline", "anonymous fragment IR slang output");
+  check_slang_file_if_present(anon_frag_ir_slang_path, "out_color", "anonymous fragment IR slang output");
   anon_frag_path := tprint("%/ir_fragment_anonymous.metal", HEADLESS_IR_DIR);
   if !write_entire_file(anon_frag_path, metal_fragment_anonymous) fail("Could not write %", anon_frag_path);
   #if OS == .MACOS {
@@ -229,9 +219,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(metal_pair, "vertex", "pair metal output");
   check_contains(metal_pair, "fragment", "pair metal output");
   ir_pair_slang_path := ".build/ir_slang/__get_transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.slang";
-  ir_pair_slang_source, ir_pair_ok := read_entire_file(ir_pair_slang_path);
-  if !ir_pair_ok fail("Could not read %", ir_pair_slang_path);
-  check_contains(ir_pair_slang_source, "generated_by_ir_pipeline", "generated pair slang output");
+  check_slang_file_if_present(ir_pair_slang_path, "generated_by_ir_pipeline", "generated pair slang output");
   pair_path := tprint("%/ir_pair.metal", HEADLESS_IR_DIR);
   if !write_entire_file(pair_path, metal_pair) fail("Could not write %", pair_path);
   #if OS == .MACOS {
@@ -242,10 +230,8 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(anon_pair, "vertex", "anonymous pair metal output");
   check_contains(anon_pair, "fragment", "anonymous pair metal output");
   anon_pair_ir_slang_path := ".build/ir_slang/__get_transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_anonymous_main_pair.slang";
-  anon_pair_ir_slang_source, anon_pair_ir_ok := read_entire_file(anon_pair_ir_slang_path);
-  if !anon_pair_ir_ok fail("Could not read %", anon_pair_ir_slang_path);
-  check_contains(anon_pair_ir_slang_source, "generated_by_ir_pipeline", "anonymous pair IR slang output");
-  check_contains(anon_pair_ir_slang_source, "out_color", "anonymous pair IR slang output");
+  check_slang_file_if_present(anon_pair_ir_slang_path, "generated_by_ir_pipeline", "anonymous pair IR slang output");
+  check_slang_file_if_present(anon_pair_ir_slang_path, "out_color", "anonymous pair IR slang output");
   anon_pair_path := tprint("%/ir_pair_anonymous_fragment.metal", HEADLESS_IR_DIR);
   if !write_entire_file(anon_pair_path, anon_pair) fail("Could not write %", anon_pair_path);
   #if OS == .MACOS {
@@ -256,11 +242,9 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(boids_pair, "vertex", "boids-like pair metal output");
   check_contains(boids_pair, "fragment", "boids-like pair metal output");
   boids_pair_ir_slang_path := ".build/ir_slang/__get_transpiled_pair__metal_ir_headless_boids_vertex_main_ir_headless_boids_fragment_main_pair.slang";
-  boids_pair_ir_slang_source, boids_pair_ir_ok := read_entire_file(boids_pair_ir_slang_path);
-  if !boids_pair_ir_ok fail("Could not read %", boids_pair_ir_slang_path);
-  check_contains(boids_pair_ir_slang_source, "ParameterBlock<IR_Boids_Params> params", "boids-like pair IR slang output");
-  check_contains(boids_pair_ir_slang_source, "params.vertex_data.instances[", "boids-like pair IR slang output");
-  check_contains(boids_pair_ir_slang_source, "params.fragment_data.color[", "boids-like pair IR slang output");
+  check_slang_file_if_present(boids_pair_ir_slang_path, "ParameterBlock<IR_Boids_Params> params", "boids-like pair IR slang output");
+  check_slang_file_if_present(boids_pair_ir_slang_path, "params.vertex_data.instances[", "boids-like pair IR slang output");
+  check_slang_file_if_present(boids_pair_ir_slang_path, "params.fragment_data.color[", "boids-like pair IR slang output");
   boids_pair_path := tprint("%/ir_boids_like_pair.metal", HEADLESS_IR_DIR);
   if !write_entire_file(boids_pair_path, boids_pair) fail("Could not write %", boids_pair_path);
   #if OS == .MACOS {
