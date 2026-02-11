@@ -45,21 +45,50 @@ ir_emit_ir_stmt_lines :: (out_lines: *[..] string, stmt: *IR_Stmt, indent: s64) 
     }
 
     case .SWITCH; {
+      // Emit switch as an if/else-if chain with expanded fallthrough paths.
+      // This avoids known SPIR-V codegen issues in downstream toolchains for some switch/fallthrough forms.
       cond, cond_ok := ir_expr_to_slang_from_ir(stmt.switch_condition);
       if !cond_ok return false;
-      array_add(out_lines, tprint("%switch (%) {", ir_shared_stmt_indent(indent), cond));
-      for stmt.switch_cases {
-        if it.condition {
-          case_cond, case_ok := ir_expr_to_slang_from_ir(it.condition);
-          if !case_ok return false;
-          array_add(out_lines, tprint("%case %:", ir_shared_stmt_indent(indent+1), case_cond));
-        } else {
-          array_add(out_lines, tprint("%default:", ir_shared_stmt_indent(indent+1)));
+
+      default_index := cast(s64) -1;
+      for i: 0..stmt.switch_cases.count-1 {
+        if !stmt.switch_cases[i].condition {
+          default_index = i;
+          break;
         }
-        if !ir_emit_ir_block_lines(out_lines, it.body, indent+2) return false;
-        if !it.falls_through array_add(out_lines, tprint("%break;", ir_shared_stmt_indent(indent+2)));
       }
-      array_add(out_lines, tprint("%}", ir_shared_stmt_indent(indent)));
+
+      emit_expanded_from_case :: (out_lines: *[..] string, cases: [] IR_Switch_Case, start_index: s64, indent: s64) -> bool {
+        for j: start_index..cases.count-1 {
+          if !ir_emit_ir_block_lines(out_lines, cases[j].body, indent) return false;
+          if !cases[j].falls_through break;
+        }
+        return true;
+      }
+
+      emitted_any_branch := false;
+      for i: 0..stmt.switch_cases.count-1 {
+        c := stmt.switch_cases[i];
+        if !c.condition continue;
+        case_cond, case_ok := ir_expr_to_slang_from_ir(c.condition);
+        if !case_ok return false;
+
+        branch_kw := ifx emitted_any_branch then "} else if" else "if";
+        array_add(out_lines, tprint("% % (% == %) {", ir_shared_stmt_indent(indent), branch_kw, cond, case_cond));
+        if !emit_expanded_from_case(out_lines, stmt.switch_cases, i, indent+1) return false;
+        emitted_any_branch = true;
+      }
+
+      if default_index != -1 {
+        if emitted_any_branch array_add(out_lines, tprint("%} else {", ir_shared_stmt_indent(indent)));
+        else array_add(out_lines, tprint("%{", ir_shared_stmt_indent(indent)));
+        if !emit_expanded_from_case(out_lines, stmt.switch_cases, default_index, indent+1) return false;
+        emitted_any_branch = true;
+      }
+
+      if emitted_any_branch {
+        array_add(out_lines, tprint("%}", ir_shared_stmt_indent(indent)));
+      }
       return true;
     }
 

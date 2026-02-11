@@ -1,0 +1,116 @@
+; SPIR-V
+; Version: 1.5
+; Generator: Khronos Slang Compiler; 0
+; Bound: 79
+; Schema: 0
+               OpCapability Shader
+               OpExtension "SPV_KHR_storage_buffer_storage_class"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %ComputeMain "main" %boids %values %gl_GlobalInvocationID
+               OpExecutionMode %ComputeMain LocalSize 1 1 1
+               OpSource Slang 1
+               OpName %Compute_Boid_State_std430 "Compute_Boid_State_std430"
+               OpMemberName %Compute_Boid_State_std430 0 "pos"
+               OpMemberName %Compute_Boid_State_std430 1 "vel"
+               OpName %RWStructuredBuffer "RWStructuredBuffer"
+               OpName %boids "boids"
+               OpName %RWStructuredBuffer_0 "RWStructuredBuffer"
+               OpName %values "values"
+               OpName %ComputeMain "ComputeMain"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpMemberDecorate %Compute_Boid_State_std430 0 Offset 0
+               OpMemberDecorate %Compute_Boid_State_std430 1 Offset 8
+               OpDecorate %_ptr_StorageBuffer_Compute_Boid_State_std430 ArrayStride 16
+               OpDecorate %_runtimearr_Compute_Boid_State_std430 ArrayStride 16
+               OpDecorate %RWStructuredBuffer Block
+               OpMemberDecorate %RWStructuredBuffer 0 Offset 0
+               OpDecorate %boids Binding 1
+               OpDecorate %boids DescriptorSet 0
+               OpDecorate %_ptr_StorageBuffer_v2float ArrayStride 8
+               OpDecorate %_ptr_StorageBuffer_float ArrayStride 4
+               OpDecorate %_ptr_StorageBuffer_uint ArrayStride 4
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %RWStructuredBuffer_0 Block
+               OpMemberDecorate %RWStructuredBuffer_0 0 Offset 0
+               OpDecorate %values Binding 0
+               OpDecorate %values DescriptorSet 0
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+       %bool = OpTypeBool
+    %uint_64 = OpConstant %uint 64
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+      %float = OpTypeFloat 32
+    %v2float = OpTypeVector %float 2
+%Compute_Boid_State_std430 = OpTypeStruct %v2float %v2float
+%_ptr_StorageBuffer_Compute_Boid_State_std430 = OpTypePointer StorageBuffer %Compute_Boid_State_std430
+%_runtimearr_Compute_Boid_State_std430 = OpTypeRuntimeArray %Compute_Boid_State_std430
+%RWStructuredBuffer = OpTypeStruct %_runtimearr_Compute_Boid_State_std430
+%_ptr_StorageBuffer_RWStructuredBuffer = OpTypePointer StorageBuffer %RWStructuredBuffer
+%_ptr_StorageBuffer_v2float = OpTypePointer StorageBuffer %v2float
+%_ptr_StorageBuffer_float = OpTypePointer StorageBuffer %float
+      %int_1 = OpConstant %int 1
+%_ptr_StorageBuffer_uint = OpTypePointer StorageBuffer %uint
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+%RWStructuredBuffer_0 = OpTypeStruct %_runtimearr_uint
+%_ptr_StorageBuffer_RWStructuredBuffer_0 = OpTypePointer StorageBuffer %RWStructuredBuffer_0
+    %float_8 = OpConstant %float 8
+    %float_4 = OpConstant %float 4
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+      %boids = OpVariable %_ptr_StorageBuffer_RWStructuredBuffer StorageBuffer
+     %values = OpVariable %_ptr_StorageBuffer_RWStructuredBuffer_0 StorageBuffer
+%ComputeMain = OpFunction %void None %3
+          %4 = OpLabel
+          %9 = OpLoad %v3uint %gl_GlobalInvocationID
+         %12 = OpCompositeExtract %uint %9 0
+         %14 = OpULessThan %bool %12 %uint_64
+               OpSelectionMerge %6 None
+               OpBranchConditional %14 %5 %6
+          %5 = OpLabel
+         %23 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %12
+         %29 = OpAccessChain %_ptr_StorageBuffer_v2float %23 %int_0
+         %31 = OpAccessChain %_ptr_StorageBuffer_float %29 %int_0
+         %32 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %12
+         %33 = OpAccessChain %_ptr_StorageBuffer_v2float %32 %int_0
+         %34 = OpLoad %v2float %33
+         %35 = OpCompositeExtract %float %34 0
+         %36 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %12
+         %38 = OpAccessChain %_ptr_StorageBuffer_v2float %36 %int_1
+         %39 = OpLoad %v2float %38
+         %40 = OpCompositeExtract %float %39 0
+         %41 = OpFAdd %float %35 %40
+               OpStore %31 %41
+         %43 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %12
+         %44 = OpAccessChain %_ptr_StorageBuffer_v2float %43 %int_0
+         %45 = OpAccessChain %_ptr_StorageBuffer_float %44 %int_1
+         %46 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %12
+         %47 = OpAccessChain %_ptr_StorageBuffer_v2float %46 %int_0
+         %48 = OpLoad %v2float %47
+         %49 = OpCompositeExtract %float %48 1
+         %50 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %12
+         %51 = OpAccessChain %_ptr_StorageBuffer_v2float %50 %int_1
+         %52 = OpLoad %v2float %51
+         %53 = OpCompositeExtract %float %52 1
+         %54 = OpFAdd %float %49 %53
+               OpStore %45 %54
+         %57 = OpAccessChain %_ptr_StorageBuffer_uint %values %int_0 %12
+         %62 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %12
+         %63 = OpAccessChain %_ptr_StorageBuffer_v2float %62 %int_0
+         %64 = OpLoad %v2float %63
+         %65 = OpCompositeExtract %float %64 0
+         %66 = OpFMul %float %65 %float_8
+         %68 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %12
+         %69 = OpAccessChain %_ptr_StorageBuffer_v2float %68 %int_0
+         %70 = OpLoad %v2float %69
+         %71 = OpCompositeExtract %float %70 1
+         %72 = OpFMul %float %71 %float_4
+         %74 = OpFAdd %float %66 %72
+         %75 = OpConvertFToU %uint %74
+               OpStore %57 %75
+               OpBranch %6
+          %6 = OpLabel
+               OpReturn
+               OpFunctionEnd

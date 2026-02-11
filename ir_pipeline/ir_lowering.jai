@@ -826,7 +826,7 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
     case .CAST; {
       inner, ok := ir_expr_to_slang_from_ir(expr.left);
       if !ok return "", false;
-      return tprint("((%)(%))", expr.text, inner), true;
+      return tprint("%(%)", expr.text, inner), true;
     }
 
     case .CALL; {

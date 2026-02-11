@@ -1,0 +1,102 @@
+; SPIR-V
+; Version: 1.5
+; Generator: Khronos Slang Compiler; 0
+; Bound: 63
+; Schema: 0
+               OpCapability Shader
+               OpExtension "SPV_KHR_storage_buffer_storage_class"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %ComputeMain "main" %values %gl_GlobalInvocationID
+               OpExecutionMode %ComputeMain LocalSize 1 1 1
+               OpSource Slang 1
+               OpName %it "it"
+               OpName %it "it"
+               OpName %acc "acc"
+               OpName %acc "acc"
+               OpName %RWStructuredBuffer "RWStructuredBuffer"
+               OpName %values "values"
+               OpName %base "base"
+               OpName %acc_0 "acc"
+               OpName %it_0 "it"
+               OpName %ComputeMain "ComputeMain"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %_ptr_StorageBuffer_uint ArrayStride 4
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %RWStructuredBuffer Block
+               OpMemberDecorate %RWStructuredBuffer 0 Offset 0
+               OpDecorate %values Binding 0
+               OpDecorate %values DescriptorSet 0
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+        %int = OpTypeInt 32 1
+%_ptr_Function_int = OpTypePointer Function %int
+       %uint = OpTypeInt 32 0
+%_ptr_Function_uint = OpTypePointer Function %uint
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+       %bool = OpTypeBool
+    %uint_64 = OpConstant %uint 64
+      %int_0 = OpConstant %int 0
+%_ptr_StorageBuffer_uint = OpTypePointer StorageBuffer %uint
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+%RWStructuredBuffer = OpTypeStruct %_runtimearr_uint
+%_ptr_StorageBuffer_RWStructuredBuffer = OpTypePointer StorageBuffer %RWStructuredBuffer
+     %uint_0 = OpConstant %uint 0
+      %int_4 = OpConstant %int 4
+     %uint_1 = OpConstant %uint 1
+      %int_1 = OpConstant %int 1
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+     %values = OpVariable %_ptr_StorageBuffer_RWStructuredBuffer StorageBuffer
+%ComputeMain = OpFunction %void None %3
+          %4 = OpLabel
+         %it = OpVariable %_ptr_Function_int Function
+        %acc = OpVariable %_ptr_Function_uint Function
+         %24 = OpLoad %v3uint %gl_GlobalInvocationID
+         %27 = OpCompositeExtract %uint %24 0
+         %29 = OpULessThan %bool %27 %uint_64
+               OpSelectionMerge %18 None
+               OpBranchConditional %29 %11 %18
+         %11 = OpLabel
+         %34 = OpAccessChain %_ptr_StorageBuffer_uint %values %int_0 %27
+       %base = OpLoad %uint %34
+               OpStore %it %int_0
+               OpStore %acc %uint_0
+               OpBranch %12
+         %12 = OpLabel
+               OpLoopMerge %17 %22 None
+               OpBranch %13
+         %13 = OpLabel
+               OpBranch %14
+         %14 = OpLabel
+               OpBranch %15
+         %15 = OpLabel
+         %43 = OpLoad %int %it
+         %44 = OpSLessThanEqual %bool %43 %int_4
+               OpSelectionMerge %19 None
+               OpBranchConditional %44 %19 %16
+         %16 = OpLabel
+               OpBranch %17
+         %19 = OpLabel
+         %54 = OpIAdd %uint %27 %uint_1
+         %56 = OpLoad %uint %acc
+      %acc_0 = OpIAdd %uint %56 %54
+               OpBranch %20
+         %20 = OpLabel
+               OpBranch %21
+         %21 = OpLabel
+         %60 = OpLoad %int %it
+       %it_0 = OpIAdd %int %60 %int_1
+               OpStore %it %it_0
+               OpStore %acc %acc_0
+               OpBranch %22
+         %22 = OpLabel
+               OpBranch %12
+         %17 = OpLabel
+         %48 = OpAccessChain %_ptr_StorageBuffer_uint %values %int_0 %27
+         %49 = OpLoad %uint %acc
+         %50 = OpIAdd %uint %base %49
+               OpStore %48 %50
+               OpBranch %18
+         %18 = OpLabel
+               OpReturn
+               OpFunctionEnd

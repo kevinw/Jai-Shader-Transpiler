@@ -267,7 +267,8 @@ compute_semantics_intrinsics_shader :: (using in: Compute_Semantics_In, values: 
     c := abs(x - 7.0);
     d := sqrt((x + 1.0) * (x + 1.0));
     e := sin(0.0) + cos(0.0);
-    values[idx] = cast(u32) (a + b + c + d + e);
+    // Avoid integer-boundary flakiness from tiny trig precision differences across CPU/GPU.
+    values[idx] = cast(u32) floor(a + b + c + d + e + 0.5);
   }
 } @compute_shader
 
@@ -495,6 +496,8 @@ main :: () {
   check_spvasm_is_generic("compute_semantics_using_shader");
   check_spvasm_is_generic("compute_semantics_compound_assign_shader");
   check_spvasm_is_generic("compute_semantics_bitwise_shader");
+  check_spvasm_is_generic("compute_semantics_matrix_math_shader");
+  check_spvasm_is_generic("compute_semantics_intrinsics_shader");
 
   ir_slang_path := ".build/ir_slang/compute_semantics_shader_comp.slang";
   ir_slang_source, ir_slang_ok := read_entire_file(ir_slang_path);

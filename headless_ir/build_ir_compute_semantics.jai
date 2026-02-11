@@ -14,6 +14,10 @@ Proc :: #import "Process";
   options.output_executable_name = "ir_compute_semantics_runner";
   set_optimization(*options, .VERY_DEBUG);
   options.text_output_flags = command_line_opts.text_output_flags;
+  explicit_import_paths: [..] string;
+  array_add(*explicit_import_paths, "/Users/kev/src/peel/modules");
+  array_add(*explicit_import_paths, ..options.import_path);
+  options.import_path = explicit_import_paths;
   set_build_options(options, w);
 
   plugin := get_plugin();
@@ -25,6 +29,15 @@ Proc :: #import "Process";
     }
     if it == "-use_ir_pipeline" {
       plugin.use_ir_pipeline = true;
+    }
+    if it == "-use_spirv_backend" {
+      plugin.use_spirv_backend = true;
+    }
+    if it == "-use_direct_spirv_text" {
+      plugin.use_direct_spirv_text = true;
+    }
+    if it == "-slang_emit_line_directives" {
+      plugin.slang_emit_line_directives = true;
     }
   }
 

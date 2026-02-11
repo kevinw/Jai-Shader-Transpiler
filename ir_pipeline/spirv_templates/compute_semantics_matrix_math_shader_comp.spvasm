@@ -1,0 +1,80 @@
+; SPIR-V
+; Version: 1.5
+; Generator: Khronos Slang Compiler; 0
+; Bound: 57
+; Schema: 0
+               OpCapability Shader
+               OpExtension "SPV_KHR_storage_buffer_storage_class"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %ComputeMain "main" %values %gl_GlobalInvocationID
+               OpExecutionMode %ComputeMain LocalSize 1 1 1
+               OpSource Slang 1
+               OpName %v "v"
+               OpName %RWStructuredBuffer "RWStructuredBuffer"
+               OpName %values "values"
+               OpName %ComputeMain "ComputeMain"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %_ptr_StorageBuffer_uint ArrayStride 4
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %RWStructuredBuffer Block
+               OpMemberDecorate %RWStructuredBuffer 0 Offset 0
+               OpDecorate %values Binding 0
+               OpDecorate %values DescriptorSet 0
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+       %bool = OpTypeBool
+    %uint_64 = OpConstant %uint 64
+     %uint_8 = OpConstant %uint 8
+      %float = OpTypeFloat 32
+     %uint_3 = OpConstant %uint 3
+     %uint_7 = OpConstant %uint 7
+    %v2float = OpTypeVector %float 2
+%mat2v2float = OpTypeMatrix %v2float 2
+    %float_2 = OpConstant %float 2
+   %float_n1 = OpConstant %float -1
+         %31 = OpConstantComposite %v2float %float_2 %float_n1
+    %float_1 = OpConstant %float 1
+    %float_3 = OpConstant %float 3
+         %34 = OpConstantComposite %v2float %float_1 %float_3
+         %30 = OpConstantComposite %mat2v2float %31 %34
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+%_ptr_StorageBuffer_uint = OpTypePointer StorageBuffer %uint
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+%RWStructuredBuffer = OpTypeStruct %_runtimearr_uint
+%_ptr_StorageBuffer_RWStructuredBuffer = OpTypePointer StorageBuffer %RWStructuredBuffer
+    %float_4 = OpConstant %float 4
+   %float_17 = OpConstant %float 17
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+     %values = OpVariable %_ptr_StorageBuffer_RWStructuredBuffer StorageBuffer
+%ComputeMain = OpFunction %void None %3
+          %4 = OpLabel
+          %9 = OpLoad %v3uint %gl_GlobalInvocationID
+         %12 = OpCompositeExtract %uint %9 0
+         %14 = OpULessThan %bool %12 %uint_64
+               OpSelectionMerge %6 None
+               OpBranchConditional %14 %5 %6
+          %5 = OpLabel
+         %17 = OpUMod %uint %12 %uint_8
+         %20 = OpConvertUToF %float %17
+         %21 = OpIMul %uint %12 %uint_3
+         %23 = OpUMod %uint %21 %uint_7
+         %25 = OpConvertUToF %float %23
+          %v = OpCompositeConstruct %v2float %20 %25
+         %28 = OpMatrixTimesVector %v2float %30 %v
+         %40 = OpAccessChain %_ptr_StorageBuffer_uint %values %int_0 %12
+         %45 = OpCompositeExtract %float %28 0
+         %46 = OpFMul %float %45 %float_4
+         %48 = OpCompositeExtract %float %28 1
+         %49 = OpFMul %float %48 %float_2
+         %50 = OpFAdd %float %46 %49
+         %51 = OpFAdd %float %50 %float_17
+         %53 = OpConvertFToU %uint %51
+               OpStore %40 %53
+               OpBranch %6
+          %6 = OpLabel
+               OpReturn
+               OpFunctionEnd

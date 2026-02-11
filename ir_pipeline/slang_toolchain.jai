@@ -71,7 +71,7 @@ emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: 
   if target == .METAL {
     return ir_run_command_checked(
       tprint("spirv-cross metal %", entry_name),
-      .["spirv-cross", spv_path, "--msl", "--msl-version", "30000",
+      .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--msl-decoration-binding",
         "--rename-entry-point", "main", entry_name, spirv_cross_stage_name(stage),
         "--output", output_path]);
   }

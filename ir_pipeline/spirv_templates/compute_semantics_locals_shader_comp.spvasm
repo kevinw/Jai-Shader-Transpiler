@@ -1,0 +1,62 @@
+; SPIR-V
+; Version: 1.5
+; Generator: Khronos Slang Compiler; 0
+; Bound: 36
+; Schema: 0
+               OpCapability Shader
+               OpExtension "SPV_KHR_storage_buffer_storage_class"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %ComputeMain "main" %values %gl_GlobalInvocationID
+               OpExecutionMode %ComputeMain LocalSize 1 1 1
+               OpSource Slang 1
+               OpName %RWStructuredBuffer "RWStructuredBuffer"
+               OpName %values "values"
+               OpName %base "base"
+               OpName %t0 "t0"
+               OpName %t1 "t1"
+               OpName %t2 "t2"
+               OpName %ComputeMain "ComputeMain"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %_ptr_StorageBuffer_uint ArrayStride 4
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %RWStructuredBuffer Block
+               OpMemberDecorate %RWStructuredBuffer 0 Offset 0
+               OpDecorate %values Binding 0
+               OpDecorate %values DescriptorSet 0
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+       %bool = OpTypeBool
+    %uint_64 = OpConstant %uint 64
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+%_ptr_StorageBuffer_uint = OpTypePointer StorageBuffer %uint
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+%RWStructuredBuffer = OpTypeStruct %_runtimearr_uint
+%_ptr_StorageBuffer_RWStructuredBuffer = OpTypePointer StorageBuffer %RWStructuredBuffer
+     %uint_2 = OpConstant %uint 2
+     %uint_5 = OpConstant %uint 5
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+     %values = OpVariable %_ptr_StorageBuffer_RWStructuredBuffer StorageBuffer
+%ComputeMain = OpFunction %void None %3
+          %4 = OpLabel
+          %9 = OpLoad %v3uint %gl_GlobalInvocationID
+         %12 = OpCompositeExtract %uint %9 0
+         %14 = OpULessThan %bool %12 %uint_64
+               OpSelectionMerge %6 None
+               OpBranchConditional %14 %5 %6
+          %5 = OpLabel
+         %20 = OpAccessChain %_ptr_StorageBuffer_uint %values %int_0 %12
+       %base = OpLoad %uint %20
+         %t0 = OpIAdd %uint %base %12
+         %t1 = OpIMul %uint %t0 %uint_2
+         %29 = OpUMod %uint %12 %uint_5
+         %t2 = OpISub %uint %t1 %29
+         %32 = OpAccessChain %_ptr_StorageBuffer_uint %values %int_0 %12
+               OpStore %32 %t2
+               OpBranch %6
+          %6 = OpLabel
+               OpReturn
+               OpFunctionEnd

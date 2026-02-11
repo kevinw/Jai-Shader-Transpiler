@@ -75,6 +75,7 @@ get_plugin :: () -> *Jai_To_Shader_Plugin {
     }
     if it == "-use_spirv_backend" {
       p.use_spirv_backend = true;
+      p.use_direct_spirv_text = true;
     }
     if it == "-use_direct_spirv_text" {
       p.use_direct_spirv_text = true;
@@ -660,7 +661,7 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_te
     return "", false, diag;
   }
 
-  build_dir := ".build/ir_spirv";
+  build_dir := ".build/ir_slang";
   make_directory_if_it_does_not_exist(build_dir, recursive=true);
 
   stage_short := ir_stage_short_from_context(ctx);

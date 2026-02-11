@@ -1,0 +1,93 @@
+; SPIR-V
+; Version: 1.5
+; Generator: Jai Shader Transpiler IR SPIR-V text backend; 1
+; Bound: 55
+; Schema: 0
+               OpCapability Shader
+          %1 = OpExtInstImport "GLSL.std.450"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main" %gl_GlobalInvocationID %_
+               OpExecutionMode %main LocalSize 32 1 1
+               OpSource Unknown 100000
+               OpName %main "main"
+               OpName %x "x"
+               OpName %gl_GlobalInvocationID "gl_GlobalInvocationID"
+               OpName %v "v"
+               OpName %Values "Values"
+               OpMemberName %Values 0 "values"
+               OpName %_ "values"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %Values Block
+               OpMemberDecorate %Values 0 Offset 0
+               OpDecorate %_ Binding 0
+               OpDecorate %_ DescriptorSet 0
+               OpDecorate %gl_WorkGroupSize BuiltIn WorkgroupSize
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+%_ptr_Function_uint = OpTypePointer Function %uint
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+     %uint_0 = OpConstant %uint 0
+%_ptr_Input_uint = OpTypePointer Input %uint
+    %uint_BOUND = OpConstant %uint 32
+       %bool = OpTypeBool
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+     %Values = OpTypeStruct %_runtimearr_uint
+%_ptr_StorageBuffer_Values = OpTypePointer StorageBuffer %Values
+          %_ = OpVariable %_ptr_StorageBuffer_Values StorageBuffer
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+%_ptr_StorageBuffer_uint = OpTypePointer StorageBuffer %uint
+     %uint_MOD = OpConstant %uint 3
+     %uint_THEN_MUL = OpConstant %uint 2
+     %uint_1 = OpConstant %uint 1
+     %uint_THEN_ADD = OpConstant %uint 9
+     %uint_ELSE_MUL = OpConstant %uint 7
+     %uint_ELSE_ADD = OpConstant %uint 11
+     %uint_EQ = OpConstant %uint 1
+%gl_WorkGroupSize = OpConstantComposite %v3uint %uint_BOUND %uint_1 %uint_1
+       %main = OpFunction %void None %3
+          %5 = OpLabel
+          %x = OpVariable %_ptr_Function_uint Function
+          %v = OpVariable %_ptr_Function_uint Function
+         %14 = OpAccessChain %_ptr_Input_uint %gl_GlobalInvocationID %uint_0
+         %15 = OpLoad %uint %14
+               OpStore %x %15
+         %16 = OpLoad %uint %x
+         %19 = OpULessThan %bool %16 %uint_BOUND
+               OpSelectionMerge %21 None
+               OpBranchConditional %19 %20 %21
+         %20 = OpLabel
+         %29 = OpLoad %uint %x
+         %31 = OpAccessChain %_ptr_StorageBuffer_uint %_ %int_0 %29
+         %32 = OpLoad %uint %31
+               OpStore %v %32
+         %33 = OpLoad %uint %x
+         %35 = OpUMod %uint %33 %uint_MOD
+         %36 = OpIEqual %bool %35 %uint_EQ
+               OpSelectionMerge %38 None
+               OpBranchConditional %36 %37 %46
+         %37 = OpLabel
+         %39 = OpLoad %uint %x
+         %40 = OpLoad %uint %v
+         %42 = OpIMul %uint %40 %uint_THEN_MUL
+         %44 = OpIAdd %uint %42 %uint_THEN_ADD
+         %45 = OpAccessChain %_ptr_StorageBuffer_uint %_ %int_0 %39
+               OpStore %45 %44
+               OpBranch %38
+         %46 = OpLabel
+         %47 = OpLoad %uint %x
+         %48 = OpLoad %uint %v
+         %50 = OpIMul %uint %48 %uint_ELSE_MUL
+         %52 = OpIAdd %uint %50 %uint_ELSE_ADD
+         %53 = OpAccessChain %_ptr_StorageBuffer_uint %_ %int_0 %47
+               OpStore %53 %52
+               OpBranch %38
+         %38 = OpLabel
+               OpBranch %21
+         %21 = OpLabel
+               OpReturn
+               OpFunctionEnd

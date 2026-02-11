@@ -1,0 +1,129 @@
+; SPIR-V
+; Version: 1.5
+; Generator: Khronos Slang Compiler; 0
+; Bound: 255
+; Schema: 0
+               OpCapability Shader
+               OpExtension "SPV_KHR_storage_buffer_storage_class"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %ComputeMain "main" %boids %values %gl_GlobalInvocationID
+               OpExecutionMode %ComputeMain LocalSize 1 1 1
+               OpSource Slang 1
+               OpName %Compute_Boid_State_std430_logical "Compute_Boid_State_std430_logical"
+               OpMemberName %Compute_Boid_State_std430_logical 0 "pos"
+               OpMemberName %Compute_Boid_State_std430_logical 1 "vel"
+               OpName %Compute_Boid_State_std430 "Compute_Boid_State_std430"
+               OpMemberName %Compute_Boid_State_std430 0 "pos"
+               OpMemberName %Compute_Boid_State_std430 1 "vel"
+               OpName %RWStructuredBuffer "RWStructuredBuffer"
+               OpName %boids "boids"
+               OpName %RWStructuredBuffer_0 "RWStructuredBuffer"
+               OpName %values "values"
+               OpName %ComputeMain "ComputeMain"
+               OpDecorate %gl_GlobalInvocationID BuiltIn GlobalInvocationId
+               OpMemberDecorate %Compute_Boid_State_std430 0 Offset 0
+               OpMemberDecorate %Compute_Boid_State_std430 1 Offset 8
+               OpDecorate %_ptr_StorageBuffer_Compute_Boid_State_std430 ArrayStride 16
+               OpDecorate %_runtimearr_Compute_Boid_State_std430 ArrayStride 16
+               OpDecorate %RWStructuredBuffer Block
+               OpMemberDecorate %RWStructuredBuffer 0 Offset 0
+               OpDecorate %boids Binding 1
+               OpDecorate %boids DescriptorSet 0
+               OpDecorate %_ptr_StorageBuffer_v2float ArrayStride 8
+               OpDecorate %_ptr_StorageBuffer_uint ArrayStride 4
+               OpDecorate %_runtimearr_uint ArrayStride 4
+               OpDecorate %RWStructuredBuffer_0 Block
+               OpMemberDecorate %RWStructuredBuffer_0 0 Offset 0
+               OpDecorate %values Binding 0
+               OpDecorate %values DescriptorSet 0
+       %void = OpTypeVoid
+          %3 = OpTypeFunction %void
+      %float = OpTypeFloat 32
+    %v2float = OpTypeVector %float 2
+%Compute_Boid_State_std430_logical = OpTypeStruct %v2float %v2float
+       %uint = OpTypeInt 32 0
+     %v3uint = OpTypeVector %uint 3
+%_ptr_Input_v3uint = OpTypePointer Input %v3uint
+       %bool = OpTypeBool
+    %uint_64 = OpConstant %uint 64
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+%Compute_Boid_State_std430 = OpTypeStruct %v2float %v2float
+%_ptr_StorageBuffer_Compute_Boid_State_std430 = OpTypePointer StorageBuffer %Compute_Boid_State_std430
+%_runtimearr_Compute_Boid_State_std430 = OpTypeRuntimeArray %Compute_Boid_State_std430
+%RWStructuredBuffer = OpTypeStruct %_runtimearr_Compute_Boid_State_std430
+%_ptr_StorageBuffer_RWStructuredBuffer = OpTypePointer StorageBuffer %RWStructuredBuffer
+      %int_1 = OpConstant %int 1
+    %float_2 = OpConstant %float 2
+%_ptr_StorageBuffer_v2float = OpTypePointer StorageBuffer %v2float
+%_ptr_StorageBuffer_uint = OpTypePointer StorageBuffer %uint
+%_runtimearr_uint = OpTypeRuntimeArray %uint
+%RWStructuredBuffer_0 = OpTypeStruct %_runtimearr_uint
+%_ptr_StorageBuffer_RWStructuredBuffer_0 = OpTypePointer StorageBuffer %RWStructuredBuffer_0
+%gl_GlobalInvocationID = OpVariable %_ptr_Input_v3uint Input
+      %boids = OpVariable %_ptr_StorageBuffer_RWStructuredBuffer StorageBuffer
+     %values = OpVariable %_ptr_StorageBuffer_RWStructuredBuffer_0 StorageBuffer
+        %254 = OpUndef %v2float
+%ComputeMain = OpFunction %void None %3
+          %4 = OpLabel
+         %16 = OpLoad %v3uint %gl_GlobalInvocationID
+         %19 = OpCompositeExtract %uint %16 0
+         %21 = OpULessThan %bool %19 %uint_64
+               OpSelectionMerge %13 None
+               OpBranchConditional %21 %12 %13
+         %12 = OpLabel
+         %28 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %19
+         %33 = OpLoad %Compute_Boid_State_std430 %28
+         %34 = OpCopyLogical %Compute_Boid_State_std430_logical %33
+        %223 = OpCompositeExtract %v2float %34 0
+        %224 = OpCompositeExtract %v2float %34 1
+        %120 = OpCompositeExtract %float %223 0
+        %123 = OpCompositeExtract %float %224 0
+        %124 = OpFMul %float %123 %float_2
+        %125 = OpFAdd %float %120 %124
+        %243 = OpCompositeInsert %v2float %125 %223 0
+        %128 = OpCompositeExtract %float %223 1
+        %130 = OpCompositeExtract %float %224 1
+        %131 = OpFMul %float %130 %float_2
+        %132 = OpFAdd %float %128 %131
+        %245 = OpCompositeInsert %v2float %132 %243 1
+         %75 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %19
+         %78 = OpAccessChain %_ptr_StorageBuffer_v2float %75 %int_0
+               OpStore %78 %245
+         %81 = OpAccessChain %_ptr_StorageBuffer_v2float %75 %int_1
+               OpStore %81 %224
+         %84 = OpAccessChain %_ptr_StorageBuffer_uint %values %int_0 %19
+         %89 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %19
+         %90 = OpLoad %Compute_Boid_State_std430 %89
+         %91 = OpCopyLogical %Compute_Boid_State_std430_logical %90
+        %230 = OpCompositeExtract %v2float %91 0
+        %231 = OpCompositeExtract %v2float %91 1
+        %145 = OpCompositeExtract %float %230 0
+        %148 = OpCompositeExtract %float %231 0
+        %150 = OpFAdd %float %145 %148
+        %247 = OpCompositeInsert %v2float %150 %254 0
+        %153 = OpCompositeExtract %float %230 1
+        %155 = OpCompositeExtract %float %231 1
+        %157 = OpFAdd %float %153 %155
+        %249 = OpCompositeInsert %v2float %157 %247 1
+         %96 = OpCompositeExtract %float %247 0
+         %97 = OpAccessChain %_ptr_StorageBuffer_Compute_Boid_State_std430 %boids %int_0 %19
+         %98 = OpLoad %Compute_Boid_State_std430 %97
+         %99 = OpCopyLogical %Compute_Boid_State_std430_logical %98
+        %237 = OpCompositeExtract %v2float %99 0
+        %238 = OpCompositeExtract %v2float %99 1
+        %170 = OpCompositeExtract %float %237 0
+        %173 = OpCompositeExtract %float %238 0
+        %175 = OpFAdd %float %170 %173
+        %178 = OpCompositeExtract %float %237 1
+        %180 = OpCompositeExtract %float %238 1
+        %182 = OpFAdd %float %178 %180
+        %253 = OpCompositeInsert %v2float %182 %254 1
+        %103 = OpCompositeExtract %float %253 1
+        %104 = OpFAdd %float %96 %103
+        %105 = OpConvertFToU %uint %104
+               OpStore %84 %105
+               OpBranch %13
+         %13 = OpLabel
+               OpReturn
+               OpFunctionEnd
