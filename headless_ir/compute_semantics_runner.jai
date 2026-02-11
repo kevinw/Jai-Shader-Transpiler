@@ -496,6 +496,8 @@ main :: () {
   check_spvasm_is_generic("compute_semantics_using_shader");
   check_spvasm_is_generic("compute_semantics_compound_assign_shader");
   check_spvasm_is_generic("compute_semantics_bitwise_shader");
+  check_spvasm_is_generic("compute_semantics_vector_index_shader");
+  check_spvasm_is_generic("compute_semantics_access_chain_shader");
   check_spvasm_is_generic("compute_semantics_matrix_math_shader");
   check_spvasm_is_generic("compute_semantics_intrinsics_shader");
 

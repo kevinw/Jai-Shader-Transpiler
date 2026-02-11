@@ -84,6 +84,7 @@ match_branch_condition_outer :: (expr: *IR_Expr) -> (u32, bool) {
 
 IR_SPV_Gen_Type :: enum {
   UNKNOWN;
+  STRUCT;
   UINT;
   FLOAT;
   FLOAT2;
@@ -109,8 +110,20 @@ IR_SPV_Gen_Local_Struct :: struct {
   fields: [..] IR_SPV_Gen_Local_Struct_Field;
 }
 
+IR_SPV_Gen_Buffer_Field :: struct {
+  name: string;
+  index: s64;
+  type: IR_SPV_Gen_Type;
+  offset: s64;
+}
+
 IR_SPV_Gen_Const_U32 :: struct {
   value: u32;
+  id: s64;
+}
+
+IR_SPV_Gen_Const_I32 :: struct {
+  value: s32;
   id: s64;
 }
 
@@ -123,6 +136,15 @@ IR_SPV_Gen_Buffer :: struct {
   name: string;
   var_id: s64;
   binding_index: s64;
+  element_type_name: string;
+  element_kind: IR_SPV_Gen_Type;
+  element_type_id: s64;
+  runtimearr_type_id: s64;
+  wrapper_struct_type_id: s64;
+  ptr_wrapper_type_id: s64;
+  ptr_storage_element_type_id: s64;
+  array_stride: s64;
+  fields: [..] IR_SPV_Gen_Buffer_Field;
 }
 
 IR_SPV_Gen_Loop_Target :: struct {
@@ -135,6 +157,7 @@ IR_SPV_Gen_State :: struct {
   locals: [..] IR_SPV_Gen_Local;
   local_structs: [..] IR_SPV_Gen_Local_Struct;
   const_u32: [..] IR_SPV_Gen_Const_U32;
+  const_i32: [..] IR_SPV_Gen_Const_I32;
   const_f32: [..] IR_SPV_Gen_Const_F32;
   buffers: [..] IR_SPV_Gen_Buffer;
   loop_targets: [..] IR_SPV_Gen_Loop_Target;
@@ -165,6 +188,8 @@ IR_SPV_Gen_State :: struct {
   id_buffer_struct: s64;
   id_ptr_storage_buffer_struct: s64;
   id_ptr_storage_uint: s64;
+  id_ptr_storage_float: s64;
+  id_ptr_storage_float2: s64;
   id_ptr_func_float: s64;
   id_ptr_func_float2: s64;
   id_ptr_func_float2x2: s64;
@@ -254,6 +279,13 @@ get_u32_const :: (s: *IR_SPV_Gen_State, value: u32) -> s64 {
   return id;
 }
 
+get_i32_const :: (s: *IR_SPV_Gen_State, value: s32) -> s64 {
+  for s.const_i32 if it.value == value return it.id;
+  id := new_id(s);
+  array_add(*s.const_i32, .{value=value, id=id});
+  return id;
+}
+
 get_f32_const :: (s: *IR_SPV_Gen_State, text: string) -> s64 {
   for s.const_f32 if it.text == text return it.id;
   id := new_id(s);
@@ -271,7 +303,8 @@ get_current_break_target :: (s: *IR_SPV_Gen_State) -> (s64, bool) {
   return s.break_targets[s.break_targets.count-1], true;
 }
 
-init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: u32) {
+init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: u32) -> (bool, IR_Diagnostic) {
+  diag: IR_Diagnostic;
   assert(s != null);
   assert(buffers.count > 0);
   s.next_id = 1;
@@ -297,8 +330,10 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   s.id_buffer_struct = new_id(s);
   s.id_ptr_storage_buffer_struct = new_id(s);
   s.id_int = new_id(s);
-  s.id_int_0 = new_id(s);
+  s.id_int_0 = get_i32_const(s, 0);
   s.id_ptr_storage_uint = new_id(s);
+  s.id_ptr_storage_float = new_id(s);
+  s.id_ptr_storage_float2 = new_id(s);
   s.id_ptr_func_float = new_id(s);
   s.id_ptr_func_float2 = new_id(s);
   s.id_ptr_func_float2x2 = new_id(s);
@@ -308,12 +343,67 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 
   for buffers {
     var_id := new_id(s);
-    array_add(*s.buffers, .{
-      name = it.name,
-      var_id = var_id,
-      binding_index = it_index,
-    });
+    buffer_info: IR_SPV_Gen_Buffer;
+    buffer_info.name = it.name;
+    buffer_info.var_id = var_id;
+    buffer_info.binding_index = it_index;
+    buffer_info.element_type_name = it.element_type_name;
+    if is_uint_type_name(it.element_type_name) {
+      buffer_info.element_kind = .UINT;
+      buffer_info.element_type_id = s.id_uint;
+      buffer_info.runtimearr_type_id = s.id_runtimearr_uint;
+      buffer_info.wrapper_struct_type_id = s.id_buffer_struct;
+      buffer_info.ptr_wrapper_type_id = s.id_ptr_storage_buffer_struct;
+      buffer_info.ptr_storage_element_type_id = s.id_ptr_storage_uint;
+      buffer_info.array_stride = 4;
+      array_add(*s.buffers, buffer_info);
+      continue;
+    }
+
+    struct_def, struct_ok := find_struct(s, it.element_type_name);
+    if !struct_ok {
+      diag.message = tprint("SPIR-V generic backend: buffer '%' has unsupported element type '%'.", it.name, it.element_type_name);
+      return false, diag;
+    }
+
+    element_struct_type_id := new_id(s);
+    runtimearr_type_id := new_id(s);
+    wrapper_struct_type_id := new_id(s);
+    ptr_wrapper_type_id := new_id(s);
+    ptr_storage_element_type_id := new_id(s);
+
+    buffer_info.element_kind = .STRUCT;
+    buffer_info.element_type_id = element_struct_type_id;
+    buffer_info.runtimearr_type_id = runtimearr_type_id;
+    buffer_info.wrapper_struct_type_id = wrapper_struct_type_id;
+    buffer_info.ptr_wrapper_type_id = ptr_wrapper_type_id;
+    buffer_info.ptr_storage_element_type_id = ptr_storage_element_type_id;
+
+    offset: s64 = 0;
+    for struct_def.fields {
+      field_type := expr_type_from_decl(it.type_name);
+      if field_type == .UNKNOWN {
+        diag.message = tprint("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, it.type_name);
+        return false, diag;
+      }
+      field_size := byte_size_of_kind(field_type);
+      if field_size <= 0 {
+        diag.message = tprint("SPIR-V generic backend: buffer struct '%' field '%' has unsupported layout type '%'.", struct_def.name, it.name, it.type_name);
+        return false, diag;
+      }
+      array_add(*buffer_info.fields, .{
+        name = it.name,
+        index = it_index,
+        type = field_type,
+        offset = offset,
+      });
+      offset += field_size;
+    }
+    buffer_info.array_stride = offset;
+    array_add(*s.buffers, buffer_info);
   }
+
+  return true, diag;
 }
 
 load_thread_x :: (s: *IR_SPV_Gen_State) -> s64 {
@@ -341,6 +431,94 @@ expr_type_from_decl :: (name: string) -> IR_SPV_Gen_Type {
   if name == "Matrix2" return .FLOAT2X2;
   if name == "bool" return .BOOL;
   return .UNKNOWN;
+}
+
+type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .UINT return s.id_uint;
+  if kind == .FLOAT return s.id_float;
+  if kind == .FLOAT2 return s.id_float2;
+  if kind == .FLOAT2X2 return s.id_float2x2;
+  if kind == .BOOL return s.id_bool;
+  return 0;
+}
+
+storage_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .UINT return s.id_ptr_storage_uint;
+  if kind == .FLOAT return s.id_ptr_storage_float;
+  if kind == .FLOAT2 return s.id_ptr_storage_float2;
+  return 0;
+}
+
+func_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .UINT return s.id_ptr_func_uint;
+  if kind == .FLOAT return s.id_ptr_func_float;
+  if kind == .FLOAT2 return s.id_ptr_func_float2;
+  if kind == .FLOAT2X2 return s.id_ptr_func_float2x2;
+  if kind == .BOOL return s.id_ptr_func_bool;
+  return 0;
+}
+
+byte_size_of_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .UINT return 4;
+  if kind == .FLOAT return 4;
+  if kind == .FLOAT2 return 8;
+  return 0;
+}
+
+find_buffer_field :: (buffer: *IR_SPV_Gen_Buffer, name: string) -> (*IR_SPV_Gen_Buffer_Field, bool) {
+  if !buffer return null, false;
+  for *buffer.fields if it.name == name return it, true;
+  return null, false;
+}
+
+emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, field_name: string) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if !subscript || subscript.kind != .SUBSCRIPT {
+    diag.message = "SPIR-V backend: expected subscript expression for buffer struct field access.";
+    return 0, .UNKNOWN, false, diag;
+  }
+  if !subscript.left || subscript.left.kind != .IDENT {
+    diag.message = "SPIR-V backend: subscript base must be an identifier.";
+    return 0, .UNKNOWN, false, diag;
+  }
+  buffer, found := find_buffer(s, subscript.left.text);
+  if !found {
+    diag.message = tprint("SPIR-V backend: unknown subscript base '%'.", subscript.left.text);
+    return 0, .UNKNOWN, false, diag;
+  }
+  if buffer.element_kind != .STRUCT {
+    diag.message = tprint("SPIR-V backend: buffer '%' is not a struct buffer.", buffer.name);
+    return 0, .UNKNOWN, false, diag;
+  }
+  field, field_ok := find_buffer_field(buffer, field_name);
+  if !field_ok {
+    diag.message = tprint("SPIR-V backend: unknown field '%.%'.", buffer.name, field_name);
+    return 0, .UNKNOWN, false, diag;
+  }
+
+  idx_id, idx_type, idx_ok, idx_diag := emit_expr(s, subscript.right);
+  if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+  if idx_type != .UINT {
+    diag.message = "SPIR-V backend: subscript index must be uint.";
+    return 0, .UNKNOWN, false, diag;
+  }
+
+  field_ptr_type_id := storage_ptr_type_id_from_kind(s, field.type);
+  if field_ptr_type_id == 0 {
+    diag.message = tprint("SPIR-V backend: unsupported struct buffer field type for '%.%'.", buffer.name, field.name);
+    return 0, .UNKNOWN, false, diag;
+  }
+
+  field_index_id := get_i32_const(s, cast(s32) field.index);
+  ptr := new_id(s);
+  add_op(s, tprint("         % = OpAccessChain % % % % %",
+                   id_text(ptr),
+                   id_text(field_ptr_type_id),
+                   id_text(buffer.var_id),
+                   id_text(s.id_int_0),
+                   id_text(idx_id),
+                   id_text(field_index_id)));
+  return ptr, field.type, true, diag;
 }
 
 emit_uint_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
@@ -656,6 +834,43 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
       if path == "thread_id.x" || path == "input.thread_id.x" {
         return load_thread_x(s), .UINT, true, diag;
       }
+      if expr.left && expr.left.kind == .SUBSCRIPT {
+        field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left, expr.text);
+        if field_ok {
+          value_id := new_id(s);
+          value_type_id := type_id_from_kind(s, field_type);
+          if value_type_id == 0 {
+            diag.message = tprint("SPIR-V backend: unsupported loaded field type for '%'.", path);
+            return 0, .UNKNOWN, false, diag;
+          }
+          add_op(s, tprint("         % = OpLoad % %",
+                           id_text(value_id),
+                           id_text(value_type_id),
+                           id_text(field_ptr)));
+          return value_id, field_type, true, diag;
+        }
+        return 0, .UNKNOWN, false, field_diag;
+      }
+      if expr.left {
+        left_id, left_type, left_ok, left_diag := emit_expr(s, expr.left);
+        if left_ok && left_type == .FLOAT2 {
+          comp_index: s64 = -1;
+          if expr.text == "x" comp_index = 0;
+          if expr.text == "y" comp_index = 1;
+          if comp_index >= 0 {
+            scalar_value := new_id(s);
+            add_op(s, tprint("         % = OpCompositeExtract % % %",
+                             id_text(scalar_value),
+                             id_text(s.id_float),
+                             id_text(left_id),
+                             comp_index));
+            return scalar_value, .FLOAT, true, diag;
+          }
+        }
+        if !left_ok && expr.left.kind != .IDENT {
+          return 0, .UNKNOWN, false, left_diag;
+        }
+      }
       if expr.left && expr.left.kind == .IDENT {
         local, local_ok := find_local(s, expr.left.text);
         if local_ok && local.type == .FLOAT2 {
@@ -690,6 +905,8 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
           result_type := s.id_uint;
           if field.type == .BOOL result_type = s.id_bool;
           if field.type == .FLOAT result_type = s.id_float;
+          if field.type == .FLOAT2 result_type = s.id_float2;
+          if field.type == .FLOAT2X2 result_type = s.id_float2x2;
           add_op(s, tprint("         % = OpLoad % %",
                            id_text(value_id),
                            id_text(result_type),
@@ -717,19 +934,23 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
         diag.message = "SPIR-V backend: subscript index must be uint.";
         return 0, .UNKNOWN, false, diag;
       }
-      ptr := new_id(s);
-      add_op(s, tprint("         % = OpAccessChain % % % %",
-                                  id_text(ptr),
-                                  id_text(s.id_ptr_storage_uint),
-                                  id_text(buffer.var_id),
-                                  id_text(s.id_int_0),
-                                  id_text(idx)));
-      value := new_id(s);
-      add_op(s, tprint("         % = OpLoad % %",
-                                  id_text(value),
-                                  id_text(s.id_uint),
-                                  id_text(ptr)));
-      return value, .UINT, true, diag;
+      if buffer.element_kind == .UINT {
+        ptr := new_id(s);
+        add_op(s, tprint("         % = OpAccessChain % % % %",
+                                    id_text(ptr),
+                                    id_text(buffer.ptr_storage_element_type_id),
+                                    id_text(buffer.var_id),
+                                    id_text(s.id_int_0),
+                                    id_text(idx)));
+        value := new_id(s);
+        add_op(s, tprint("         % = OpLoad % %",
+                                    id_text(value),
+                                    id_text(s.id_uint),
+                                    id_text(ptr)));
+        return value, .UINT, true, diag;
+      }
+      diag.message = tprint("SPIR-V backend: subscript value access for struct buffer '%' is unsupported; access a field instead.", buffer.name);
+      return 0, .UNKNOWN, false, diag;
     }
 
     case .BINARY; {
@@ -958,14 +1179,89 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Ty
       diag.message = "SPIR-V backend: lvalue subscript index must be uint.";
       return 0, .UNKNOWN, false, diag;
     }
-    ptr := new_id(s);
-    add_op(s, tprint("         % = OpAccessChain % % % %",
-                                id_text(ptr),
-                                id_text(s.id_ptr_storage_uint),
-                                id_text(buffer.var_id),
-                                id_text(s.id_int_0),
-                                id_text(idx)));
-    return ptr, .UINT, true, diag;
+    if buffer.element_kind == .UINT {
+      ptr := new_id(s);
+      add_op(s, tprint("         % = OpAccessChain % % % %",
+                                  id_text(ptr),
+                                  id_text(buffer.ptr_storage_element_type_id),
+                                  id_text(buffer.var_id),
+                                  id_text(s.id_int_0),
+                                  id_text(idx)));
+      return ptr, .UINT, true, diag;
+    }
+    diag.message = tprint("SPIR-V backend: struct buffer '%' requires member access on lvalue.", buffer.name);
+    return 0, .UNKNOWN, false, diag;
+  }
+  if expr.kind == .MEMBER {
+    if expr.left && expr.left.kind == .SUBSCRIPT {
+      ptr_id, ptr_type, ptr_ok, ptr_diag := emit_buffer_struct_field_ptr(s, expr.left, expr.text);
+      return ptr_id, ptr_type, ptr_ok, ptr_diag;
+    }
+    if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .SUBSCRIPT {
+      field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
+      if !field_ok return 0, .UNKNOWN, false, field_diag;
+      if field_type != .FLOAT2 {
+        diag.message = tprint("SPIR-V backend: lvalue component access requires float2 field, got %.", field_type);
+        return 0, .UNKNOWN, false, diag;
+      }
+      comp_index: u32 = 0;
+      if expr.text == "x" comp_index = 0;
+      else if expr.text == "y" comp_index = 1;
+      else {
+        diag.message = tprint("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
+        return 0, .UNKNOWN, false, diag;
+      }
+      comp_index_id := get_u32_const(s, comp_index);
+      ptr := new_id(s);
+      add_op(s, tprint("         % = OpAccessChain % % %",
+                       id_text(ptr),
+                       id_text(s.id_ptr_storage_float),
+                       id_text(field_ptr),
+                       id_text(comp_index_id)));
+      return ptr, .FLOAT, true, diag;
+    }
+    if expr.left && expr.left.kind == .IDENT {
+      local_struct, struct_ok := find_local_struct(s, expr.left.text);
+      if struct_ok {
+        field, field_ok := find_local_struct_field(local_struct, expr.text);
+        if !field_ok {
+          diag.message = tprint("SPIR-V backend: unknown struct field '%.%'.", expr.left.text, expr.text);
+          return 0, .UNKNOWN, false, diag;
+        }
+        return field.ptr_id, field.type, true, diag;
+      }
+    }
+    if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .IDENT {
+      local_struct, struct_ok := find_local_struct(s, expr.left.left.text);
+      if struct_ok {
+        field, field_ok := find_local_struct_field(local_struct, expr.left.text);
+        if !field_ok {
+          diag.message = tprint("SPIR-V backend: unknown struct field '%.%'.", expr.left.left.text, expr.left.text);
+          return 0, .UNKNOWN, false, diag;
+        }
+        if field.type != .FLOAT2 {
+          diag.message = tprint("SPIR-V backend: component lvalue requires float2 field, got %.", field.type);
+          return 0, .UNKNOWN, false, diag;
+        }
+        comp_index: u32 = 0;
+        if expr.text == "x" comp_index = 0;
+        else if expr.text == "y" comp_index = 1;
+        else {
+          diag.message = tprint("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
+          return 0, .UNKNOWN, false, diag;
+        }
+        comp_index_id := get_u32_const(s, comp_index);
+        ptr := new_id(s);
+        add_op(s, tprint("         % = OpAccessChain % % %",
+                         id_text(ptr),
+                         id_text(s.id_ptr_func_float),
+                         id_text(field.ptr_id),
+                         id_text(comp_index_id)));
+        return ptr, .FLOAT, true, diag;
+      }
+    }
+    diag.message = tprint("SPIR-V backend: unsupported lvalue member expression '%'.", expr_text(expr));
+    return 0, .UNKNOWN, false, diag;
   }
   diag.message = tprint("SPIR-V backend: unsupported lvalue expression kind %.", expr.kind);
   return 0, .UNKNOWN, false, diag;
@@ -1014,15 +1310,21 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
       local_struct.name = stmt.decl_name;
       local_struct.type_name = stmt.decl_type_name;
       for struct_def.fields {
-        if !is_uint_type_name(it.type_name) {
+        field_type := expr_type_from_decl(it.type_name);
+        if field_type == .UNKNOWN || field_type == .STRUCT {
           diag.message = tprint("SPIR-V backend: struct '%' field '%' type '%' is unsupported in generic path.", struct_def.name, it.name, it.type_name);
           return false, false, diag;
         }
         field_ptr := new_id(s);
+        field_ptr_type := func_ptr_type_id_from_kind(s, field_type);
+        if field_ptr_type == 0 {
+          diag.message = tprint("SPIR-V backend: struct '%' field '%' type '%' has no function pointer type.", struct_def.name, it.name, it.type_name);
+          return false, false, diag;
+        }
         add_local_decl(s, tprint("         % = OpVariable % Function",
                                  id_text(field_ptr),
-                                 id_text(s.id_ptr_func_uint)));
-        array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=.UINT});
+                                 id_text(field_ptr_type)));
+        array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=field_type});
       }
 
       if stmt.decl_init {
@@ -1057,10 +1359,39 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
               return false, false, diag;
             }
             src_value := new_id(s);
+            src_type_id := type_id_from_kind(s, src_field.type);
+            if src_type_id == 0 {
+              diag.message = tprint("SPIR-V backend: unsupported struct field type while copying '%'.", it.name);
+              return false, false, diag;
+            }
             add_op(s, tprint("         % = OpLoad % %",
                              id_text(src_value),
-                             id_text(s.id_uint),
+                             id_text(src_type_id),
                              id_text(src_field.ptr_id)));
+            add_op(s, tprint("               OpStore % %",
+                             id_text(dst_field.ptr_id),
+                             id_text(src_value)));
+          }
+        } else if stmt.decl_init.kind == .SUBSCRIPT && stmt.decl_init.left && stmt.decl_init.left.kind == .IDENT {
+          buffer, buffer_ok := find_buffer(s, stmt.decl_init.left.text);
+          if !buffer_ok || buffer.element_kind != .STRUCT || buffer.element_type_name != stmt.decl_type_name {
+            diag.message = tprint("SPIR-V backend: struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
+            return false, false, diag;
+          }
+          for struct_def.fields {
+            dst_field := local_struct.fields[it_index];
+            src_ptr, src_type, src_ok, src_diag := emit_buffer_struct_field_ptr(s, stmt.decl_init, it.name);
+            if !src_ok return false, false, src_diag;
+            if src_type != dst_field.type {
+              diag.message = tprint("SPIR-V backend: struct declaration '%': field '%' type mismatch in buffer initializer.", stmt.decl_name, it.name);
+              return false, false, diag;
+            }
+            src_value := new_id(s);
+            src_type_id := type_id_from_kind(s, src_type);
+            add_op(s, tprint("         % = OpLoad % %",
+                             id_text(src_value),
+                             id_text(src_type_id),
+                             id_text(src_ptr)));
             add_op(s, tprint("               OpStore % %",
                              id_text(dst_field.ptr_id),
                              id_text(src_value)));
@@ -1443,12 +1774,6 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (string, bool
     diag.message = "SPIR-V generic backend: expected at least one compute buffer.";
     return "", false, diag;
   }
-  for shader.buffers {
-    if it.element_type_name != "uint" {
-      diag.message = tprint("SPIR-V generic backend: buffer '%' has unsupported element type '%'; only uint is supported.", it.name, it.element_type_name);
-      return "", false, diag;
-    }
-  }
   if shader.body.statements.count == 0 {
     diag.message = "SPIR-V generic backend: empty compute body.";
     return "", false, diag;
@@ -1461,9 +1786,10 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (string, bool
   }
 
   state: IR_SPV_Gen_State;
-  init_base(*state, shader.buffers, bound_value);
   state.helpers = shader.helpers;
   state.extra_structs = shader.extra_structs;
+  init_ok, init_diag := init_base(*state, shader.buffers, bound_value);
+  if !init_ok return "", false, init_diag;
 
   entry_label := new_id(*state);
   ok, body_terminated, body_diag := emit_stmt_block(*state, *shader.body);
@@ -1494,6 +1820,19 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (string, bool
   append(*sb, tprint("               OpDecorate % Block\n", id_text(state.id_buffer_struct)));
   append(*sb, tprint("               OpMemberDecorate % 0 Offset 0\n", id_text(state.id_buffer_struct)));
   for state.buffers {
+    buffer := it;
+    if buffer.element_kind != .STRUCT continue;
+    append(*sb, tprint("               OpDecorate % ArrayStride %\n", id_text(buffer.runtimearr_type_id), buffer.array_stride));
+    for buffer.fields {
+      append(*sb, tprint("               OpMemberDecorate % % Offset %\n",
+                         id_text(buffer.element_type_id),
+                         it.index,
+                         it.offset));
+    }
+    append(*sb, tprint("               OpDecorate % Block\n", id_text(buffer.wrapper_struct_type_id)));
+    append(*sb, tprint("               OpMemberDecorate % 0 Offset 0\n", id_text(buffer.wrapper_struct_type_id)));
+  }
+  for state.buffers {
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(it.var_id), it.binding_index));
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(it.var_id)));
   }
@@ -1512,12 +1851,29 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (string, bool
   append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_global_invocation_id), id_text(state.id_ptr_input_v3uint)));
   append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_uint), id_text(state.id_uint)));
   append(*sb, tprint("        % = OpTypeInt 32 1\n", id_text(state.id_int)));
-  append(*sb, tprint("      % = OpConstant % 0\n", id_text(state.id_int_0), id_text(state.id_int)));
   append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(state.id_runtimearr_uint), id_text(state.id_uint)));
   append(*sb, tprint("% = OpTypeStruct %\n", id_text(state.id_buffer_struct), id_text(state.id_runtimearr_uint)));
   append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_buffer_struct), id_text(state.id_buffer_struct)));
-  for state.buffers append(*sb, tprint("% = OpVariable % StorageBuffer\n", id_text(it.var_id), id_text(state.id_ptr_storage_buffer_struct)));
   append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_uint), id_text(state.id_uint)));
+  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_float), id_text(state.id_float)));
+  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_float2), id_text(state.id_float2)));
+  for state.buffers {
+    buffer := it;
+    if buffer.element_kind != .STRUCT continue;
+    struct_type_line_sb: String_Builder;
+    append(*struct_type_line_sb, tprint("% = OpTypeStruct", id_text(buffer.element_type_id)));
+    for buffer.fields {
+      field_type_id := type_id_from_kind(*state, it.type);
+      append(*struct_type_line_sb, tprint(" %", id_text(field_type_id)));
+    }
+    append(*struct_type_line_sb, "\n");
+    append(*sb, builder_to_string(*struct_type_line_sb));
+    append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(buffer.runtimearr_type_id), id_text(buffer.element_type_id)));
+    append(*sb, tprint("% = OpTypeStruct %\n", id_text(buffer.wrapper_struct_type_id), id_text(buffer.runtimearr_type_id)));
+    append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(buffer.ptr_wrapper_type_id), id_text(buffer.wrapper_struct_type_id)));
+    append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(buffer.ptr_storage_element_type_id), id_text(buffer.element_type_id)));
+  }
+  for state.buffers append(*sb, tprint("% = OpVariable % StorageBuffer\n", id_text(it.var_id), id_text(it.ptr_wrapper_type_id)));
   append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float), id_text(state.id_float)));
   append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2), id_text(state.id_float2)));
   append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2x2), id_text(state.id_float2x2)));
@@ -1529,6 +1885,12 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (string, bool
     append(*sb, tprint("      % = OpConstant % %\n",
                        id_text(it.id),
                        id_text(state.id_uint),
+                       it.value));
+  }
+  for state.const_i32 {
+    append(*sb, tprint("      % = OpConstant % %\n",
+                       id_text(it.id),
+                       id_text(state.id_int),
                        it.value));
   }
   for state.const_f32 {
