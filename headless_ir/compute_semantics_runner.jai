@@ -221,6 +221,33 @@ compute_semantics_vector_index_shader :: (using in: Compute_Semantics_In, values
   }
 } @compute_shader
 
+compute_semantics_access_chain_shader :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+  if thread_id.x < 64 {
+    idx := thread_id.x;
+    boids[idx].pos.x = boids[idx].pos.x + boids[idx].vel.x;
+    boids[idx].pos.y = boids[idx].pos.y + boids[idx].vel.y;
+    using boids[idx].pos;
+    values[idx] = cast(u32) ((x * 8.0) + (y * 4.0));
+  }
+} @compute_shader
+
+compute_semantics_boid_advance :: (state: Compute_Boid_State, scale: float) -> Compute_Boid_State {
+  out := state;
+  out.pos.x = state.pos.x + state.vel.x * scale;
+  out.pos.y = state.pos.y + state.vel.y * scale;
+  return out;
+}
+
+compute_semantics_helper_struct_chain_shader :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+  if thread_id.x < 64 {
+    idx := thread_id.x;
+    next := compute_semantics_boid_advance(boids[idx], 2.0);
+    boids[idx] = next;
+    values[idx] = cast(u32) (compute_semantics_boid_advance(boids[idx], 1.0).pos.x +
+                             compute_semantics_boid_advance(boids[idx], 1.0).pos.y);
+  }
+} @compute_shader
+
 log_nserror :: (label: string, error: *NSError) -> bool {
   if !error return false;
   desc := NSError.localizedDescription(error);
@@ -402,6 +429,8 @@ main :: () {
   _ = get_transpiled(.METAL, compute_semantics_switch_shader);
   _ = get_transpiled(.METAL, compute_semantics_compound_assign_shader);
   _ = get_transpiled(.METAL, compute_semantics_vector_index_shader);
+  _ = get_transpiled(.METAL, compute_semantics_access_chain_shader);
+  _ = get_transpiled(.METAL, compute_semantics_helper_struct_chain_shader);
 
   compute_source := get_transpiled(.METAL, compute_semantics_shader);
   loop_source := get_transpiled(.METAL, compute_semantics_loop_shader);
@@ -417,6 +446,8 @@ main :: () {
   switch_source := get_transpiled(.METAL, compute_semantics_switch_shader);
   compound_assign_source := get_transpiled(.METAL, compute_semantics_compound_assign_shader);
   vector_index_source := get_transpiled(.METAL, compute_semantics_vector_index_shader);
+  access_chain_source := get_transpiled(.METAL, compute_semantics_access_chain_shader);
+  helper_struct_chain_source := get_transpiled(.METAL, compute_semantics_helper_struct_chain_shader);
 
   ir_slang_path := ".build/ir_slang/compute_semantics_shader_comp.slang";
   ir_slang_source, ir_slang_ok := read_entire_file(ir_slang_path);
@@ -522,6 +553,22 @@ main :: () {
   check_contains(vector_index_ir_slang_source, "struct Compute_Boid_State", "compute vector/index IR slang output");
   check_contains(vector_index_ir_slang_source, "float2 pos", "compute vector/index IR slang output");
 
+  access_chain_ir_slang_path := ".build/ir_slang/compute_semantics_access_chain_shader_comp.slang";
+  access_chain_ir_slang_source, access_chain_ir_ok := read_entire_file(access_chain_ir_slang_path);
+  if !access_chain_ir_ok fail("Could not read %", access_chain_ir_slang_path);
+  check_contains(access_chain_ir_slang_source, "generated_by_ir_pipeline", "compute access-chain IR slang output");
+  check_contains(access_chain_ir_slang_source, "boids[idx].pos.x = ", "compute access-chain IR slang output");
+  check_contains(access_chain_ir_slang_source, "boids[idx].vel.x", "compute access-chain IR slang output");
+  check_contains(access_chain_ir_slang_source, "values[idx] = ", "compute access-chain IR slang output");
+
+  helper_struct_chain_ir_slang_path := ".build/ir_slang/compute_semantics_helper_struct_chain_shader_comp.slang";
+  helper_struct_chain_ir_slang_source, helper_struct_chain_ir_ok := read_entire_file(helper_struct_chain_ir_slang_path);
+  if !helper_struct_chain_ir_ok fail("Could not read %", helper_struct_chain_ir_slang_path);
+  check_contains(helper_struct_chain_ir_slang_source, "generated_by_ir_pipeline", "compute helper-struct-chain IR slang output");
+  check_contains(helper_struct_chain_ir_slang_source, "compute_semantics_boid_advance", "compute helper-struct-chain IR slang output");
+  check_contains(helper_struct_chain_ir_slang_source, ".pos.x", "compute helper-struct-chain IR slang output");
+  check_contains(helper_struct_chain_ir_slang_source, ".pos.y", "compute helper-struct-chain IR slang output");
+
   init_objective_c();
   init_metal();
 
@@ -551,5 +598,7 @@ main :: () {
   run_compute_case(switch_source, "switch", compute_semantics_switch_shader);
   run_compute_case(compound_assign_source, "compound-assign", compute_semantics_compound_assign_shader);
   run_compute_case_with_boid_table(vector_index_source, "vector-index", compute_semantics_vector_index_shader);
+  run_compute_case_with_boid_table(access_chain_source, "access-chain", compute_semantics_access_chain_shader);
+  run_compute_case_with_boid_table(helper_struct_chain_source, "helper-struct-chain", compute_semantics_helper_struct_chain_shader);
   log("IR compute semantics test passed (GPU output matches CPU reference for % elements).", ELEMENT_COUNT);
 }

@@ -129,10 +129,27 @@ ir_emit_ir_block_lines :: (out_lines: *[..] string, block: *IR_Block, indent: s6
   return true;
 }
 
-ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [] string, output_fields: [] string, allow_return_value: bool, active_usings: *[..] IR_Using_Source) -> bool {
+ir_shared_struct_fields_match_names :: (type: *Type_Info, field_names: [] string) -> bool {
+  if !type || type.type != .STRUCT return false;
+  st := cast(*Type_Info_Struct) type;
+  if st.members.count != field_names.count return false;
+  for i: 0..field_names.count-1 {
+    if st.members[i].name != field_names[i] return false;
+  }
+  return true;
+}
+
+ir_shared_lower_stmt :: (stmt: *Code_Node,
+                         out_block: *IR_Block,
+                         input_fields: [] string,
+                         output_fields: [] string,
+                         allow_return_value: bool,
+                         active_usings: *[..] IR_Using_Source,
+                         active_aliases: *[..] IR_Decl_Alias) -> bool {
   assert(stmt != null);
   assert(out_block != null);
   assert(active_usings != null);
+  assert(active_aliases != null);
 
   if stmt.kind == {
     case .DECLARATION; {
@@ -145,7 +162,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
       out_stmt.decl_type_name = type_name;
       out_stmt.decl_name = decl.name;
       if decl.expression {
-        init_expr, init_ok := ir_lower_expr(decl.expression, input_fields, output_fields, active_usings.*);
+        init_expr, init_ok := ir_lower_expr(decl.expression, input_fields, output_fields, active_usings.*, active_aliases.*);
         if !init_ok return false;
         out_stmt.decl_init = init_expr;
       }
@@ -159,9 +176,9 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
         lhs := cast(*Code_Ident) bn.left;
         if lhs.name == "_" return true; // discard assignment
       }
-      left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings.*);
+      left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings.*, active_aliases.*);
       if !left_ok return false;
-      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings.*);
+      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings.*, active_aliases.*);
       if !right_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .BINARY;
@@ -175,7 +192,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
     case .IF; {
       op := cast(*Code_If) stmt;
       if op.if_flags & .IS_SWITCH_STATEMENT {
-        cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*);
+        cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*, active_aliases.*);
         if !cond_ok return false;
         if !op.then_block return false;
 
@@ -190,11 +207,11 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
           sw_case.falls_through = case_node.marked_as_fallthrough;
           sw_case.body = New(IR_Block);
           if case_node.condition {
-            lowered_case_cond, case_cond_ok := ir_lower_expr(case_node.condition, input_fields, output_fields, active_usings.*);
+            lowered_case_cond, case_cond_ok := ir_lower_expr(case_node.condition, input_fields, output_fields, active_usings.*, active_aliases.*);
             if !case_cond_ok return false;
             sw_case.condition = lowered_case_cond;
           }
-          if !ir_shared_lower_block(case_node.then_block, sw_case.body, input_fields, output_fields, allow_return_value, active_usings.*) return false;
+          if !ir_shared_lower_block(case_node.then_block, sw_case.body, input_fields, output_fields, allow_return_value, active_usings.*, active_aliases.*) return false;
           array_add(*out_stmt.switch_cases, sw_case);
         }
 
@@ -203,16 +220,16 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
         return true;
       }
 
-      cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*);
+      cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*, active_aliases.*);
       if !cond_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .IF;
       out_stmt.if_condition = cond;
       out_stmt.if_then = New(IR_Block);
-      if !ir_shared_lower_block(op.then_block, out_stmt.if_then, input_fields, output_fields, allow_return_value, active_usings.*) return false;
+      if !ir_shared_lower_block(op.then_block, out_stmt.if_then, input_fields, output_fields, allow_return_value, active_usings.*, active_aliases.*) return false;
       if op.else_block {
         out_stmt.if_else = New(IR_Block);
-        if !ir_shared_lower_block(op.else_block, out_stmt.if_else, input_fields, output_fields, allow_return_value, active_usings.*) return false;
+        if !ir_shared_lower_block(op.else_block, out_stmt.if_else, input_fields, output_fields, allow_return_value, active_usings.*, active_aliases.*) return false;
       }
       array_add(*out_block.statements, out_stmt);
       return true;
@@ -223,9 +240,9 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
       if op.macro_expansion_procedure_call || !op.iteration_expression_right return false;
       if op.for_flags & .POINTER return false;
 
-      start_expr, start_ok := ir_lower_expr(op.iteration_expression, input_fields, output_fields, active_usings.*);
+      start_expr, start_ok := ir_lower_expr(op.iteration_expression, input_fields, output_fields, active_usings.*, active_aliases.*);
       if !start_ok return false;
-      end_expr, end_ok := ir_lower_expr(op.iteration_expression_right, input_fields, output_fields, active_usings.*);
+      end_expr, end_ok := ir_lower_expr(op.iteration_expression_right, input_fields, output_fields, active_usings.*, active_aliases.*);
       if !end_ok return false;
 
       out_stmt: IR_Stmt;
@@ -240,20 +257,20 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
         out_stmt.for_step = "-= 1";
       }
       out_stmt.for_body = New(IR_Block);
-      if !ir_shared_lower_block(op.block, out_stmt.for_body, input_fields, output_fields, allow_return_value, active_usings.*) return false;
+      if !ir_shared_lower_block(op.block, out_stmt.for_body, input_fields, output_fields, allow_return_value, active_usings.*, active_aliases.*) return false;
       array_add(*out_block.statements, out_stmt);
       return true;
     }
 
     case .WHILE; {
       op := cast(*Code_While) stmt;
-      cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*);
+      cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*, active_aliases.*);
       if !cond_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .WHILE;
       out_stmt.while_condition = cond;
       out_stmt.while_body = New(IR_Block);
-      if !ir_shared_lower_block(op.block, out_stmt.while_body, input_fields, output_fields, allow_return_value, active_usings.*) return false;
+      if !ir_shared_lower_block(op.block, out_stmt.while_body, input_fields, output_fields, allow_return_value, active_usings.*, active_aliases.*) return false;
       array_add(*out_block.statements, out_stmt);
       return true;
     }
@@ -269,7 +286,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
     }
 
     case .PROCEDURE_CALL; {
-      call_expr, call_ok := ir_lower_expr(stmt, input_fields, output_fields, active_usings.*);
+      call_expr, call_ok := ir_lower_expr(stmt, input_fields, output_fields, active_usings.*, active_aliases.*);
       if !call_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .CALL;
@@ -284,7 +301,56 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
       out_stmt.kind = .RETURN;
       if op.arguments_sorted.count == 1 {
         if !allow_return_value return false;
-        ret_expr, ret_ok := ir_lower_expr(op.arguments_sorted[0], input_fields, output_fields, active_usings.*);
+        ret_node := op.arguments_sorted[0];
+
+        // For entry shader outputs, lower `return { ... }` as assignments to `o` and `return o;`.
+        if output_fields.count != 0 && ret_node.kind == .LITERAL {
+          ret_lit := cast(*Code_Literal) ret_node;
+          if ret_lit.value_type == .STRUCT {
+            positional_index := cast(s64) 0;
+            for ret_lit.struct_literal_info.arguments {
+              field_name := "";
+              value_node := it;
+
+              if it.kind == .BINARY_OPERATOR {
+                bn := cast(*Code_Binary_Operator) it;
+                if bn.operator_type == cast(Operator_Type) #char "=" && bn.left && bn.left.kind == .IDENT {
+                  field_name = (cast(*Code_Ident) bn.left).name;
+                  value_node = bn.right;
+                }
+              }
+
+              if field_name.count == 0 {
+                if positional_index >= output_fields.count return false;
+                field_name = output_fields[positional_index];
+                positional_index += 1;
+              }
+
+              rhs, rhs_ok := ir_lower_expr(value_node, input_fields, output_fields, active_usings.*, active_aliases.*);
+              if !rhs_ok return false;
+
+              lhs_base := ir_expr_new(.IDENT);
+              lhs_base.text = "o";
+              lhs := ir_expr_new(.MEMBER);
+              lhs.left = lhs_base;
+              lhs.text = field_name;
+
+              assign_stmt: IR_Stmt;
+              assign_stmt.kind = .BINARY;
+              assign_stmt.binary_left = lhs;
+              assign_stmt.binary_op = "=";
+              assign_stmt.binary_right = rhs;
+              array_add(*out_block.statements, assign_stmt);
+            }
+
+            out_stmt.return_expr = ir_expr_new(.IDENT);
+            out_stmt.return_expr.text = "o";
+            array_add(*out_block.statements, out_stmt);
+            return true;
+          }
+        }
+
+        ret_expr, ret_ok := ir_lower_expr(ret_node, input_fields, output_fields, active_usings.*, active_aliases.*);
         if !ret_ok return false;
         out_stmt.return_expr = ret_expr;
       } else if op.arguments_sorted.count > 1 {
@@ -307,6 +373,24 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
       src.expression_node = op.expression;
       for *using_struct.members array_add(*src.field_names, it.name);
       array_add(active_usings, src);
+
+      if output_fields.count != 0 && ir_shared_struct_fields_match_names(using_type, output_fields) {
+        if op.expression.kind == .IDENT {
+          ident := cast(*Code_Ident) op.expression;
+          if ident.resolved_declaration {
+            array_add(active_aliases, .{
+              declaration = ident.resolved_declaration,
+              replacement_text = "o",
+            });
+          }
+        } else if op.expression.kind == .DECLARATION {
+          decl := cast(*Code_Declaration) op.expression;
+          array_add(active_aliases, .{
+            declaration = decl,
+            replacement_text = "o",
+          });
+        }
+      }
       return true;
     }
   }
@@ -314,13 +398,21 @@ ir_shared_lower_stmt :: (stmt: *Code_Node, out_block: *IR_Block, input_fields: [
   return false;
 }
 
-ir_shared_lower_block :: (block: *Code_Block, out_block: *IR_Block, input_fields: [] string, output_fields: [] string, allow_return_value: bool, incoming_usings: [] IR_Using_Source = .[]) -> bool {
+ir_shared_lower_block :: (block: *Code_Block,
+                          out_block: *IR_Block,
+                          input_fields: [] string,
+                          output_fields: [] string,
+                          allow_return_value: bool,
+                          incoming_usings: [] IR_Using_Source = .[],
+                          incoming_aliases: [] IR_Decl_Alias = .[]) -> bool {
   assert(out_block != null);
   if !block return true;
   active_usings: [..] IR_Using_Source;
   for incoming_usings array_add(*active_usings, it);
+  active_aliases: [..] IR_Decl_Alias;
+  for incoming_aliases array_add(*active_aliases, it);
   for block.statements {
-    if !ir_shared_lower_stmt(it, out_block, input_fields, output_fields, allow_return_value, *active_usings) return false;
+    if !ir_shared_lower_stmt(it, out_block, input_fields, output_fields, allow_return_value, *active_usings, *active_aliases) return false;
   }
   return true;
 }

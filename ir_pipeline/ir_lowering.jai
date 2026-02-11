@@ -14,6 +14,8 @@ IR_Vertex_Shader :: struct {
   entry_name: string;
   input: IR_Struct;
   output: IR_Struct;
+  extra_structs: [..] IR_Struct;
+  args: [..] IR_Function_Arg;
   helpers: [..] IR_Helper_Function;
   body: IR_Block;
 }
@@ -23,6 +25,8 @@ IR_Fragment_Shader :: struct {
   entry_name: string;
   input: IR_Struct;
   output: IR_Struct;
+  extra_structs: [..] IR_Struct;
+  args: [..] IR_Function_Arg;
   helpers: [..] IR_Helper_Function;
   body: IR_Block;
 }
@@ -35,6 +39,7 @@ IR_Compute_Buffer :: struct {
 IR_Function_Arg :: struct {
   name: string;
   type_name: string;
+  is_readonly: bool;
 }
 
 IR_Helper_Function :: struct {
@@ -57,6 +62,11 @@ IR_Compute_Shader :: struct {
 IR_Using_Source :: struct {
   expression_node: *Code_Node;
   field_names: [..] string;
+}
+
+IR_Decl_Alias :: struct {
+  declaration: *Code_Declaration;
+  replacement_text: string;
 }
 
 IR_Expr_Kind :: enum {
@@ -183,6 +193,64 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
   return out, true;
 }
 
+ir_lower_struct_member_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> (string, bool) {
+  if !type return "", false;
+
+  if type.type == .POINTER {
+    ptr := cast(*Type_Info_Pointer) type;
+    if !ptr.pointer_to return "", false;
+    if ptr.pointer_to.type == .STRUCT {
+      st := cast(*Type_Info_Struct) ptr.pointer_to;
+      nested_name := jai_to_hlsl_type_name(get_struct_type_name(st));
+      nested_struct, nested_ok := ir_lower_struct_with_pointer_members_from_type(nested_name, ptr.pointer_to, extra_structs);
+      if !nested_ok return "", false;
+      ir_add_struct_unique_by_name(extra_structs, nested_struct);
+      if ir_struct_has_pointer_members(ptr.pointer_to) {
+        // Model pointers-to-parameter-block structs as direct struct values.
+        return nested_name, true;
+      }
+      return tprint("StructuredBuffer<%>", nested_name), true;
+    }
+
+    elem_name, elem_ok := ir_type_to_slang_name(ptr.pointer_to);
+    if !elem_ok return "", false;
+    return tprint("StructuredBuffer<%>", elem_name), true;
+  }
+
+  if type.type == .STRUCT {
+    st := cast(*Type_Info_Struct) type;
+    nested_name := jai_to_hlsl_type_name(get_struct_type_name(st));
+    nested_struct, nested_ok := ir_lower_struct_with_pointer_members_from_type(nested_name, type, extra_structs);
+    if !nested_ok return "", false;
+    ir_add_struct_unique_by_name(extra_structs, nested_struct);
+    return nested_name, true;
+  }
+
+  type_name, type_ok := ir_type_to_slang_name(type);
+  return type_name, type_ok;
+}
+
+ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Info, extra_structs: *[..] IR_Struct) -> (IR_Struct, bool) {
+  out: IR_Struct;
+  out.name = name;
+
+  if !type || type.type != .STRUCT return out, false;
+
+  st := cast(*Type_Info_Struct) type;
+  for *st.members {
+    type_name, ok := ir_lower_struct_member_type_name(it.type, extra_structs);
+    if !ok return out, false;
+    field_semantic := member_get_semantic(it);
+    array_add(*out.fields, .{
+      name = it.name,
+      type_name = type_name,
+      semantic = field_semantic,
+    });
+  }
+
+  return out, true;
+}
+
 ir_struct_has_field :: (s: *IR_Struct, name: string) -> bool {
   for s.fields if it.name == name return true;
   return false;
@@ -222,6 +290,51 @@ ir_lookup_using_field_source :: (active_usings: [] IR_Using_Source, field_name: 
   return found_node, found, ambiguous;
 }
 
+ir_lookup_decl_alias :: (active_aliases: [] IR_Decl_Alias, declaration: *Code_Declaration) -> (string, bool) {
+  if !declaration return "", false;
+  for active_aliases {
+    if it.declaration == declaration return it.replacement_text, true;
+  }
+  return "", false;
+}
+
+ir_struct_has_pointer_members :: (type: *Type_Info) -> bool {
+  if !type || type.type != .STRUCT return false;
+  st := cast(*Type_Info_Struct) type;
+  for *st.members if it.type && it.type.type == .POINTER return true;
+  return false;
+}
+
+ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> (string, bool) {
+  if !type return "", false;
+  if type.type == .POINTER {
+    ptr := cast(*Type_Info_Pointer) type;
+    if !ptr.pointer_to return "", false;
+    if ptr.pointer_to.type == .STRUCT {
+      st := cast(*Type_Info_Struct) ptr.pointer_to;
+      struct_name := jai_to_hlsl_type_name(get_struct_type_name(st));
+      lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, ptr.pointer_to, extra_structs);
+      if !lowered_ok return "", false;
+      ir_add_struct_unique_by_name(extra_structs, lowered_struct);
+      if ir_struct_has_pointer_members(ptr.pointer_to) return struct_name, true;
+      return tprint("StructuredBuffer<%>", struct_name), true;
+    }
+    elem_name, elem_ok := ir_type_to_slang_name(ptr.pointer_to);
+    if !elem_ok return "", false;
+    return tprint("StructuredBuffer<%>", elem_name), true;
+  }
+  if type.type == .STRUCT {
+    st := cast(*Type_Info_Struct) type;
+    struct_name := jai_to_hlsl_type_name(get_struct_type_name(st));
+    lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, type, extra_structs);
+    if !lowered_ok return "", false;
+    ir_add_struct_unique_by_name(extra_structs, lowered_struct);
+    return struct_name, true;
+  }
+  type_name, type_ok := ir_type_to_slang_name(type);
+  return type_name, type_ok;
+}
+
 ir_binary_operator_to_slang :: (op: Operator_Type) -> string {
   if op == .PLUS_ASSIGN return "+=";
   if op == .MINUS_ASSIGN return "-=";
@@ -259,16 +372,29 @@ ir_literal_to_text :: (lit: *Code_Literal) -> (string, bool) {
   return "", false;
 }
 
-ir_lower_expr :: (node: *Code_Node, input_fields: [] string, output_fields: [] string, active_usings: [] IR_Using_Source = .[]) -> (*IR_Expr, bool) {
+ir_lower_expr :: (node: *Code_Node,
+                  input_fields: [] string,
+                  output_fields: [] string,
+                  active_usings: [] IR_Using_Source = .[],
+                  active_aliases: [] IR_Decl_Alias = .[]) -> (*IR_Expr, bool) {
   assert(node != null);
 
   if node.kind == {
     case .IDENT; {
       ident := cast(*Code_Ident) node;
 
-      if ident.name == "input" || ident.name == "o" || ident.name == "out" || ident.name == "un" {
+      if ident.resolved_declaration {
+        alias_text, aliased := ir_lookup_decl_alias(active_aliases, ident.resolved_declaration);
+        if aliased {
+          out := ir_expr_new(.IDENT);
+          out.text = alias_text;
+          return out, true;
+        }
+      }
+
+      if ident.name == "input" || ident.name == "o" || ident.name == "un" {
         out := ir_expr_new(.IDENT);
-        out.text = ifx ident.name == "out" then "o" else ident.name;
+        out.text = ident.name;
         return out, true;
       }
 
@@ -291,7 +417,7 @@ ir_lower_expr :: (node: *Code_Node, input_fields: [] string, output_fields: [] s
       using_source, found_using, ambiguous := ir_lookup_using_field_source(active_usings, ident.name);
       if ambiguous return null, false;
       if found_using {
-        base, ok := ir_lower_expr(using_source, input_fields, output_fields, active_usings);
+        base, ok := ir_lower_expr(using_source, input_fields, output_fields, active_usings, active_aliases);
         if !ok return null, false;
         out := ir_expr_new(.MEMBER);
         out.left = base;
@@ -321,7 +447,7 @@ ir_lower_expr :: (node: *Code_Node, input_fields: [] string, output_fields: [] s
         out := ir_expr_new(.CONSTRUCTOR);
         out.text = constructor_name;
         for lit.struct_literal_info.arguments {
-          arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings);
+          arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings, active_aliases);
           if !ok return null, false;
           array_add(*out.args, arg);
         }
@@ -337,7 +463,7 @@ ir_lower_expr :: (node: *Code_Node, input_fields: [] string, output_fields: [] s
 
     case .UNARY_OPERATOR; {
       un := cast(*Code_Unary_Operator) node;
-      inner, ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings);
+      inner, ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases);
       if !ok return null, false;
       out := ir_expr_new(.UNARY);
       out.text = operator_string(un.operator_type);
@@ -347,11 +473,11 @@ ir_lower_expr :: (node: *Code_Node, input_fields: [] string, output_fields: [] s
 
     case .BINARY_OPERATOR; {
       bn := cast(*Code_Binary_Operator) node;
-      left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings);
+      left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings, active_aliases);
       if !left_ok return null, false;
 
       if bn.operator_type == .ARRAY_SUBSCRIPT {
-        right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings);
+        right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases);
         if !right_ok return null, false;
         out := ir_expr_new(.SUBSCRIPT);
         out.left = left;
@@ -371,7 +497,7 @@ ir_lower_expr :: (node: *Code_Node, input_fields: [] string, output_fields: [] s
         return null, false;
       }
 
-      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings);
+      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases);
       if !right_ok return null, false;
       out := ir_expr_new(.BINARY);
       out.text = op;
@@ -396,7 +522,7 @@ ir_lower_expr :: (node: *Code_Node, input_fields: [] string, output_fields: [] s
         return null, false;
       }
 
-      inner, ok := ir_lower_expr(cast_node.expression, input_fields, output_fields, active_usings);
+      inner, ok := ir_lower_expr(cast_node.expression, input_fields, output_fields, active_usings, active_aliases);
       if !ok return null, false;
       out := ir_expr_new(.CAST);
       out.text = type_name;
@@ -406,12 +532,12 @@ ir_lower_expr :: (node: *Code_Node, input_fields: [] string, output_fields: [] s
 
     case .PROCEDURE_CALL; {
       pc := cast(*Code_Procedure_Call) node;
-      callee, callee_ok := ir_lower_expr(pc.procedure_expression, input_fields, output_fields, active_usings);
+      callee, callee_ok := ir_lower_expr(pc.procedure_expression, input_fields, output_fields, active_usings, active_aliases);
       if !callee_ok return null, false;
       out := ir_expr_new(.CALL);
       out.left = callee;
       for pc.arguments_sorted {
-        arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings);
+        arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings, active_aliases);
         if !ok return null, false;
         array_add(*out.args, arg);
       }
@@ -444,13 +570,13 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
     }
 
     case .MEMBER; {
-      left, left_ok := ir_expr_to_slang_from_ir(expr.left);
+      left, left_ok := ir_expr_to_slang_postfix_base(expr.left);
       if !left_ok return "", false;
       return tprint("%.%", left, expr.text), true;
     }
 
     case .SUBSCRIPT; {
-      left, left_ok := ir_expr_to_slang_from_ir(expr.left);
+      left, left_ok := ir_expr_to_slang_postfix_base(expr.left);
       if !left_ok return "", false;
       right, right_ok := ir_expr_to_slang_from_ir(expr.right);
       if !right_ok return "", false;
@@ -464,7 +590,7 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
     }
 
     case .CALL; {
-      callee, callee_ok := ir_expr_to_slang_from_ir(expr.left);
+      callee, callee_ok := ir_expr_to_slang_postfix_base(expr.left);
       if !callee_ok return "", false;
       b: String_Builder;
       append(*b, callee, "(");
@@ -495,8 +621,29 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
   return "", false;
 }
 
-ir_expr_to_slang :: (node: *Code_Node, input_fields: [] string, output_fields: [] string, active_usings: [] IR_Using_Source = .[]) -> (string, bool) {
-  expr, ok := ir_lower_expr(node, input_fields, output_fields, active_usings);
+// Postfix forms like `.member`, `[index]`, and call argument lists bind tighter than
+// unary/cast/binary forms, so parenthesize those bases to preserve Jai expression meaning.
+ir_expr_to_slang_postfix_base :: (expr: *IR_Expr) -> (string, bool) {
+  assert(expr != null);
+  text, ok := ir_expr_to_slang_from_ir(expr);
+  if !ok return "", false;
+
+  need_parens := false;
+  if expr.kind == .UNARY need_parens = true;
+  if expr.kind == .BINARY need_parens = true;
+  if expr.kind == .CAST need_parens = true;
+  if expr.kind == .CONSTRUCTOR need_parens = true;
+
+  if need_parens return tprint("(%)", text), true;
+  return text, true;
+}
+
+ir_expr_to_slang :: (node: *Code_Node,
+                     input_fields: [] string,
+                     output_fields: [] string,
+                     active_usings: [] IR_Using_Source = .[],
+                     active_aliases: [] IR_Decl_Alias = .[]) -> (string, bool) {
+  expr, ok := ir_lower_expr(node, input_fields, output_fields, active_usings, active_aliases);
   if !ok return "", false;
   text, text_ok := ir_expr_to_slang_from_ir(expr);
   if !text_ok return "", false;
@@ -563,6 +710,17 @@ ir_lower_vertex_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Verte
   out.entry_name = "VertexMain";
   out.input = in_struct;
   out.output = out_struct;
+  for i: 1..ctx.main_fn.header.arguments.count-1 {
+    arg := ctx.main_fn.header.arguments[i];
+    arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
+    arg_type_name, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
+    if !arg_ok return out, false;
+    array_add(*out.args, .{
+      name = arg.name,
+      type_name = arg_type_name,
+      is_readonly = true,
+    });
+  }
   seen_headers: [..] *Code_Procedure_Header;
   if !ir_shared_collect_helper_functions_recursive(ctx.main_fn.header, *seen_headers, *out.helpers, ctx.main_fn.header) return out, false;
   input_field_names: [..] string;
@@ -601,6 +759,17 @@ ir_lower_fragment_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Fra
   out.entry_name = "FragmentMain";
   out.input = in_struct;
   out.output = out_struct;
+  for i: 1..ctx.main_fn.header.arguments.count-1 {
+    arg := ctx.main_fn.header.arguments[i];
+    arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
+    arg_type_name, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
+    if !arg_ok return out, false;
+    array_add(*out.args, .{
+      name = arg.name,
+      type_name = arg_type_name,
+      is_readonly = true,
+    });
+  }
   seen_headers: [..] *Code_Procedure_Header;
   if !ir_shared_collect_helper_functions_recursive(ctx.main_fn.header, *seen_headers, *out.helpers, ctx.main_fn.header) return out, false;
   input_field_names: [..] string;
@@ -717,11 +886,17 @@ emit_ir_vertex_to_slang :: (shader: IR_Vertex_Shader) -> (string, bool) {
 
   ir_emit_struct_slang(*sb, *shader.input);
   ir_emit_struct_slang(*sb, *shader.output);
+  for shader.extra_structs ir_emit_struct_slang(*sb, *it);
   ir_emit_helper_prototypes(*sb, shader.helpers);
   if !ir_emit_helper_definitions(*sb, shader.helpers) return "", false;
 
   append(*sb, "[shader(\"vertex\")]\n");
-  append(*sb, tprint("% %(% input) {\n", shader.output.name, shader.entry_name, shader.input.name));
+  append(*sb, tprint("% %(% input", shader.output.name, shader.entry_name, shader.input.name));
+  for shader.args {
+    if it.is_readonly append(*sb, tprint(", const % %", it.type_name, it.name));
+    else append(*sb, tprint(", % %", it.type_name, it.name));
+  }
+  append(*sb, ") {\n");
   append(*sb, tprint("    % o = (%)0;\n", shader.output.name, shader.output.name));
 
   body_lines: [..] string;
@@ -746,11 +921,17 @@ emit_ir_fragment_to_slang :: (shader: IR_Fragment_Shader) -> (string, bool) {
 
   ir_emit_struct_slang(*sb, *shader.input);
   ir_emit_struct_slang(*sb, *shader.output);
+  for shader.extra_structs ir_emit_struct_slang(*sb, *it);
   ir_emit_helper_prototypes(*sb, shader.helpers);
   if !ir_emit_helper_definitions(*sb, shader.helpers) return "", false;
 
   append(*sb, "[shader(\"fragment\")]\n");
-  append(*sb, tprint("% %(% input) {\n", shader.output.name, shader.entry_name, shader.input.name));
+  append(*sb, tprint("% %(% input", shader.output.name, shader.entry_name, shader.input.name));
+  for shader.args {
+    if it.is_readonly append(*sb, tprint(", const % %", it.type_name, it.name));
+    else append(*sb, tprint(", % %", it.type_name, it.name));
+  }
+  append(*sb, ") {\n");
   append(*sb, tprint("    % o = (%)0;\n", shader.output.name, shader.output.name));
 
   body_lines: [..] string;
@@ -780,6 +961,8 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   append_ir_struct_once(*sb, *emitted_names, *vertex.output);
   append_ir_struct_once(*sb, *emitted_names, *fragment.input);
   append_ir_struct_once(*sb, *emitted_names, *fragment.output);
+  for vertex.extra_structs append_ir_struct_once(*sb, *emitted_names, *it);
+  for fragment.extra_structs append_ir_struct_once(*sb, *emitted_names, *it);
 
   pair_helpers: [..] IR_Helper_Function;
   for vertex.helpers ir_add_helper_unique_by_name(*pair_helpers, it);
@@ -788,7 +971,12 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   if !ir_emit_helper_definitions(*sb, pair_helpers) return "", false;
 
   append(*sb, "[shader(\"vertex\")]\n");
-  append(*sb, tprint("% %(% input) {\n", vertex.output.name, vertex.entry_name, vertex.input.name));
+  append(*sb, tprint("% %(% input", vertex.output.name, vertex.entry_name, vertex.input.name));
+  for vertex.args {
+    if it.is_readonly append(*sb, tprint(", const % %", it.type_name, it.name));
+    else append(*sb, tprint(", % %", it.type_name, it.name));
+  }
+  append(*sb, ") {\n");
   append(*sb, tprint("    % o = (%)0;\n", vertex.output.name, vertex.output.name));
   vertex_body_lines: [..] string;
   if !ir_emit_ir_block_lines(*vertex_body_lines, *vertex.body, 1) return "", false;
@@ -801,7 +989,12 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   append(*sb, "}\n\n");
 
   append(*sb, "[shader(\"fragment\")]\n");
-  append(*sb, tprint("% %(% input) {\n", fragment.output.name, fragment.entry_name, fragment.input.name));
+  append(*sb, tprint("% %(% input", fragment.output.name, fragment.entry_name, fragment.input.name));
+  for fragment.args {
+    if it.is_readonly append(*sb, tprint(", const % %", it.type_name, it.name));
+    else append(*sb, tprint(", % %", it.type_name, it.name));
+  }
+  append(*sb, ") {\n");
   append(*sb, tprint("    % o = (%)0;\n", fragment.output.name, fragment.output.name));
   fragment_body_lines: [..] string;
   if !ir_emit_ir_block_lines(*fragment_body_lines, *fragment.body, 1) return "", false;
