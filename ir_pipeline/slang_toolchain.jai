@@ -73,8 +73,15 @@ spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
   return "comp";
 }
 
-emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string) -> bool {
+emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string, use_metal_argument_buffers := false) -> bool {
   if target == .METAL {
+    if use_metal_argument_buffers && (stage == .VERTEX || stage == .FRAGMENT) {
+      return ir_run_command_checked(
+        tprint("spirv-cross metal %", entry_name),
+        .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--msl-argument-buffers", "--msl-decoration-binding",
+          "--rename-entry-point", "main", entry_name, spirv_cross_stage_name(stage),
+          "--output", output_path]);
+    }
     return ir_run_command_checked(
       tprint("spirv-cross metal %", entry_name),
       .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--msl-decoration-binding",

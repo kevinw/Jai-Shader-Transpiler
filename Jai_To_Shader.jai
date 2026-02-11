@@ -627,6 +627,51 @@ ir_spirv_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
   return false;
 }
 
+ir_is_resource_buffer_type_name :: (type_name: string) -> bool {
+  if begins_with(type_name, "StructuredBuffer<") return true;
+  if begins_with(type_name, "RWStructuredBuffer<") return true;
+  return false;
+}
+
+ir_parse_parameter_block_struct_name_for_args :: (type_name: string) -> (string, bool) {
+  prefix :: "ParameterBlock<";
+  if !begins_with(type_name, prefix) return "", false;
+  if type_name.count < prefix.count + 1 return "", false;
+  if type_name[type_name.count-1] != #char ">" return "", false;
+  out: string;
+  out.data = type_name.data + prefix.count;
+  out.count = type_name.count - prefix.count - 1;
+  if out.count == 0 return "", false;
+  return out, true;
+}
+
+ir_lowered_struct_has_resource_fields :: (structs: [] IR_Struct, struct_name: string, depth := 0) -> bool {
+  if struct_name.count == 0 return false;
+  if depth > 16 return false;
+  for structs {
+    if it.name != struct_name continue;
+    for it.fields {
+      if ir_is_resource_buffer_type_name(it.type_name) return true;
+      nested_name := it.type_name;
+      param_block_name, is_param_block := ir_parse_parameter_block_struct_name_for_args(it.type_name);
+      if is_param_block nested_name = param_block_name;
+      if ir_lowered_struct_has_resource_fields(structs, nested_name, depth + 1) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+ir_graphics_requires_metal_argument_buffer :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct) -> bool {
+  for args {
+    struct_name := it.type_name;
+    param_block_name, is_param_block := ir_parse_parameter_block_struct_name_for_args(it.type_name);
+    if is_param_block struct_name = param_block_name;
+    if ir_lowered_struct_has_resource_fields(extra_structs, struct_name) return true;
+  }
+  return false;
+}
+
 ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated_comment := true) -> (string, string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   if !ir_spirv_supports_single_context(ctx) {
@@ -731,6 +776,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   spvasm_source: string;
   spvasm_ok := false;
   spvasm_diag: IR_Diagnostic;
+  use_metal_argument_buffers := false;
   if ctx.type == .Compute {
     ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
     if !lowered return "", "", false, lowered_diag;
@@ -738,10 +784,12 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   } else if ctx.type == .Vertex {
     ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(ctx);
     if !lowered return "", "", false, lowered_diag;
+    use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
   } else if ctx.type == .Fragment {
     ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(ctx);
     if !lowered return "", "", false, lowered_diag;
+    use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
   } else {
     diag.message = "SPIR-V backend: unsupported shader stage.";
@@ -794,7 +842,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  if !emit_spirv_cross_target_source(spv_for_target, entry_name, stage, target, output_path) {
+  if !emit_spirv_cross_target_source(spv_for_target, entry_name, stage, target, output_path, use_metal_argument_buffers) {
     diag.message = tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", ctx.name, spv_for_target);
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
@@ -845,6 +893,16 @@ ir_strip_metal_preamble_for_pair_merge :: (source: string) -> string {
   stripped.data = source.data + start;
   stripped.count = source.count - start;
   return stripped;
+}
+
+ir_metal_suffix_descriptor_set_types :: (source: string, suffix: string) -> string {
+  out := source;
+  for i: 0..31 {
+    type_name := tprint("spvDescriptorSetBuffer%", i);
+    suffixed := tprint("%_%", type_name, suffix);
+    out = replace(out, type_name, suffixed);
+  }
+  return out;
 }
 
 write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false) -> (string, bool, IR_Diagnostic) {
@@ -920,11 +978,13 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     diag.message = "SPIR-V backend: pair optimized SPIR-V validation failed.";
     return "", false, diag;
   }
-  if !emit_spirv_cross_target_source(vertex_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path) {
+  vertex_use_argument_buffer := ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
+  fragment_use_argument_buffer := ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
+  if !emit_spirv_cross_target_source(vertex_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, vertex_use_argument_buffer) {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
   }
-  if !emit_spirv_cross_target_source(fragment_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path) {
+  if !emit_spirv_cross_target_source(fragment_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path, fragment_use_argument_buffer) {
     diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
     return "", false, diag;
   }
@@ -934,6 +994,9 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     diag.message = "SPIR-V backend: failed reading pair spirv-cross outputs.";
     return "", false, diag;
   }
+
+  vertex_source = ir_metal_suffix_descriptor_set_types(vertex_source, "vert");
+  fragment_source = ir_metal_suffix_descriptor_set_types(fragment_source, "frag");
 
   merged_source := tprint("%\n\n%", vertex_source, ir_strip_metal_preamble_for_pair_merge(fragment_source));
   merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));

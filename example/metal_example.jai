@@ -160,6 +160,7 @@ metal_example_with_window :: () -> (success: bool) {
 
     error: *NSError = null;
     compile_options := objc_init(objc_alloc(MTLCompileOptions));
+    MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
     defer release(compile_options);
 
     // Force array support test shaders to typecheck and generate.

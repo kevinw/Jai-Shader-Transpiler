@@ -47,9 +47,9 @@ run_all_tests :: () {
   }
   if !use_slang_backend {
     // SPIR-V-Cross may fold local array literals, so validate indexed uniform usage instead.
-    check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[2u]", "un._m0[2u]"]);
-    check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[1u]", "un._m0[1u]"]);
-    check_file_contains_any(debug_path("array_support_fragment_shader.metal"), .["un.u_palette[1u]", "un._m0[1u]"]);
+    check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[2u]", "(*spvDescriptorSet0.un).u_offsets[2u]", "un._m0[2u]"]);
+    check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[1u]", "(*spvDescriptorSet0.un).u_offsets[1u]", "un._m0[1u]"]);
+    check_file_contains_any(debug_path("array_support_fragment_shader.metal"), .["un.u_palette[1u]", "(*spvDescriptorSet0.un).u_palette[1u]", "un._m0[1u]"]);
     check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(");
     check_file_contains(debug_path("tiles_fragment_shader.metal"), "gl_FragCoord");
   }
