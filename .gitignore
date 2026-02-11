@@ -19,3 +19,5 @@ headless_ir/ir_headless_runner
 ir_smoke_metal_pair
 ir_smoke_vk_bindless
 ir_smoke_vk_compute
+spirv_backend/spirv_compute_branch_runner
+spirv_backend/comp.spv
