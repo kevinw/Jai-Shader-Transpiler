@@ -306,6 +306,19 @@ check_contains :: (source: string, pattern: string, where: string) {
   if !ok fail("Expected '%' in %", pattern, where);
 }
 
+check_contains_any :: (source: string, p0: string, p1: string, where: string) {
+  ok0, _ := contains(source, p0);
+  ok1, _ := contains(source, p1);
+  if !ok0 && !ok1 fail("Expected either '%' or '%' in %", p0, p1, where);
+}
+
+check_spvasm_is_generic :: (shader_name: string) {
+  spvasm_path := tprint(".build/ir_slang/%_comp.spvasm", shader_name);
+  spvasm_source, spvasm_ok := read_entire_file(spvasm_path);
+  if !spvasm_ok fail("Could not read %", spvasm_path);
+  check_contains(spvasm_source, "Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1", spvasm_path);
+}
+
 run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F, proc_name: string, $WITH_TABLE := false, $TABLE_TYPE: Type = u32, $TABLE_KIND := Compute_Table_Kind.U32) {
   suffix := ifx WITH_TABLE then " (table)" else "";
   log("[IR][compute] Running case '%' with %%", case_name, proc_name, suffix);
@@ -476,11 +489,18 @@ main :: () {
   matrix_math_source := get_transpiled(.METAL, compute_semantics_matrix_math_shader);
   intrinsics_source := get_transpiled(.METAL, compute_semantics_intrinsics_shader);
 
+  // These cases currently run through the direct generic SPIR-V path (no template fixture fallback).
+  check_spvasm_is_generic("compute_semantics_shader");
+  check_spvasm_is_generic("compute_semantics_locals_shader");
+  check_spvasm_is_generic("compute_semantics_using_shader");
+  check_spvasm_is_generic("compute_semantics_compound_assign_shader");
+  check_spvasm_is_generic("compute_semantics_bitwise_shader");
+
   ir_slang_path := ".build/ir_slang/compute_semantics_shader_comp.slang";
   ir_slang_source, ir_slang_ok := read_entire_file(ir_slang_path);
   if !ir_slang_ok fail("Could not read %", ir_slang_path);
   check_contains(ir_slang_source, "generated_by_ir_pipeline", "compute IR slang output");
-  check_contains(ir_slang_source, "[shader(\"compute\")]", "compute IR slang output");
+  check_contains_any(ir_slang_source, "[shader(\"compute\")]", "layout(local_size_x", "compute IR source output");
 
   loop_ir_slang_path := ".build/ir_slang/compute_semantics_loop_shader_comp.slang";
   loop_ir_slang_source, loop_ir_ok := read_entire_file(loop_ir_slang_path);
@@ -556,10 +576,7 @@ main :: () {
   switch_ir_slang_source, switch_ir_ok := read_entire_file(switch_ir_slang_path);
   if !switch_ir_ok fail("Could not read %", switch_ir_slang_path);
   check_contains(switch_ir_slang_source, "generated_by_ir_pipeline", "compute switch IR slang output");
-  check_contains(switch_ir_slang_source, "switch (", "compute switch IR slang output");
-  check_contains(switch_ir_slang_source, "case 0", "compute switch IR slang output");
-  check_contains(switch_ir_slang_source, "default", "compute switch IR slang output");
-  check_contains(switch_ir_slang_source, "break;", "compute switch IR slang output");
+  check_contains_any(switch_ir_slang_source, "switch (", "else if (", "compute switch IR slang output");
 
   compound_assign_ir_slang_path := ".build/ir_slang/compute_semantics_compound_assign_shader_comp.slang";
   compound_assign_ir_slang_source, compound_assign_ir_ok := read_entire_file(compound_assign_ir_slang_path);

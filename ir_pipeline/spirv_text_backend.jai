@@ -75,10 +75,17 @@ IR_SPV_Gen_Const_U32 :: struct {
   id: s64;
 }
 
+IR_SPV_Gen_Buffer :: struct {
+  name: string;
+  var_id: s64;
+  binding_index: s64;
+}
+
 IR_SPV_Gen_State :: struct {
   next_id: s64;
   locals: [..] IR_SPV_Gen_Local;
   const_u32: [..] IR_SPV_Gen_Const_U32;
+  buffers: [..] IR_SPV_Gen_Buffer;
   local_var_lines: [..] string;
   op_lines: [..] string;
 
@@ -97,14 +104,12 @@ IR_SPV_Gen_State :: struct {
   id_runtimearr_uint: s64;
   id_buffer_struct: s64;
   id_ptr_storage_buffer_struct: s64;
-  id_values_var: s64;
   id_ptr_storage_uint: s64;
   id_ptr_func_uint: s64;
   id_main: s64;
   id_bound_const: s64;
 
   bound_value: u32;
-  buffer_name: string;
 }
 
 ir_spv_id_text :: (id: s64) -> string {
@@ -130,6 +135,11 @@ ir_spv_gen_find_local :: (s: *IR_SPV_Gen_State, name: string) -> (*IR_SPV_Gen_Lo
   return null, false;
 }
 
+ir_spv_gen_find_buffer :: (s: *IR_SPV_Gen_State, name: string) -> (*IR_SPV_Gen_Buffer, bool) {
+  for *s.buffers if it.name == name return it, true;
+  return null, false;
+}
+
 ir_spv_gen_get_u32_const :: (s: *IR_SPV_Gen_State, value: u32) -> s64 {
   for s.const_u32 if it.value == value return it.id;
   id := ir_spv_gen_new_id(s);
@@ -137,10 +147,10 @@ ir_spv_gen_get_u32_const :: (s: *IR_SPV_Gen_State, value: u32) -> s64 {
   return id;
 }
 
-ir_spv_gen_init_base :: (s: *IR_SPV_Gen_State, buffer_name: string, bound_value: u32) {
+ir_spv_gen_init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: u32) {
   assert(s != null);
+  assert(buffers.count > 0);
   s.next_id = 1;
-  s.buffer_name = buffer_name;
   s.bound_value = bound_value;
 
   s.id_extinst = ir_spv_gen_new_id(s);
@@ -157,12 +167,20 @@ ir_spv_gen_init_base :: (s: *IR_SPV_Gen_State, buffer_name: string, bound_value:
   s.id_runtimearr_uint = ir_spv_gen_new_id(s);
   s.id_buffer_struct = ir_spv_gen_new_id(s);
   s.id_ptr_storage_buffer_struct = ir_spv_gen_new_id(s);
-  s.id_values_var = ir_spv_gen_new_id(s);
   s.id_int = ir_spv_gen_new_id(s);
   s.id_int_0 = ir_spv_gen_new_id(s);
   s.id_ptr_storage_uint = ir_spv_gen_new_id(s);
   s.id_ptr_func_uint = ir_spv_gen_new_id(s);
   s.id_main = ir_spv_gen_new_id(s);
+
+  for buffers {
+    var_id := ir_spv_gen_new_id(s);
+    array_add(*s.buffers, .{
+      name = it.name,
+      var_id = var_id,
+      binding_index = it_index,
+    });
+  }
 }
 
 ir_spv_gen_load_thread_x :: (s: *IR_SPV_Gen_State) -> s64 {
@@ -184,6 +202,28 @@ ir_spv_gen_expr_type_from_decl :: (name: string) -> IR_SPV_Gen_Type {
   if name == "uint" return .UINT;
   if name == "bool" return .BOOL;
   return .UNKNOWN;
+}
+
+ir_spv_gen_emit_uint_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  result := ir_spv_gen_new_id(s);
+  if op == "+" { ir_spv_gen_add_op(s, tprint("         % = OpIAdd % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == "-" { ir_spv_gen_add_op(s, tprint("         % = OpISub % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == "*" { ir_spv_gen_add_op(s, tprint("         % = OpIMul % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == "%" { ir_spv_gen_add_op(s, tprint("         % = OpUMod % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == "|" { ir_spv_gen_add_op(s, tprint("         % = OpBitwiseOr % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == "&" { ir_spv_gen_add_op(s, tprint("         % = OpBitwiseAnd % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == "^" { ir_spv_gen_add_op(s, tprint("         % = OpBitwiseXor % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == "<<" { ir_spv_gen_add_op(s, tprint("         % = OpShiftLeftLogical % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == ">>" { ir_spv_gen_add_op(s, tprint("         % = OpShiftRightLogical % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
+  if op == "<"  { ir_spv_gen_add_op(s, tprint("         % = OpULessThan % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_bool), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .BOOL, true, diag; }
+  if op == ">"  { ir_spv_gen_add_op(s, tprint("         % = OpUGreaterThan % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_bool), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .BOOL, true, diag; }
+  if op == "<=" { ir_spv_gen_add_op(s, tprint("         % = OpULessThanEqual % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_bool), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .BOOL, true, diag; }
+  if op == ">=" { ir_spv_gen_add_op(s, tprint("         % = OpUGreaterThanEqual % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_bool), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .BOOL, true, diag; }
+  if op == "==" { ir_spv_gen_add_op(s, tprint("         % = OpIEqual % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_bool), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .BOOL, true, diag; }
+  if op == "!=" { ir_spv_gen_add_op(s, tprint("         % = OpINotEqual % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_bool), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .BOOL, true, diag; }
+  diag.message = tprint("SPIR-V backend: unsupported uint binary op '%'.", op);
+  return 0, .UNKNOWN, false, diag;
 }
 
 ir_spv_gen_emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
@@ -232,8 +272,9 @@ ir_spv_gen_emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_G
         diag.message = "SPIR-V backend: subscript base must be an identifier.";
         return 0, .UNKNOWN, false, diag;
       }
-      if expr.left.text != s.buffer_name {
-        diag.message = tprint("SPIR-V backend: unsupported subscript base '%'.", expr.left.text);
+      buffer, found := ir_spv_gen_find_buffer(s, expr.left.text);
+      if !found {
+        diag.message = tprint("SPIR-V backend: unknown subscript base '%'.", expr.left.text);
         return 0, .UNKNOWN, false, diag;
       }
       idx, idx_type, idx_ok, idx_diag := ir_spv_gen_emit_expr(s, expr.right);
@@ -246,7 +287,7 @@ ir_spv_gen_emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_G
       ir_spv_gen_add_op(s, tprint("         % = OpAccessChain % % % %",
                                   ir_spv_id_text(ptr),
                                   ir_spv_id_text(s.id_ptr_storage_uint),
-                                  ir_spv_id_text(s.id_values_var),
+                                  ir_spv_id_text(buffer.var_id),
                                   ir_spv_id_text(s.id_int_0),
                                   ir_spv_id_text(idx)));
       value := ir_spv_gen_new_id(s);
@@ -264,14 +305,9 @@ ir_spv_gen_emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_G
       if !right_ok return 0, .UNKNOWN, false, right_diag;
 
       op := expr.text;
-      result := ir_spv_gen_new_id(s);
       if left_type == .UINT && right_type == .UINT {
-        if op == "+" { ir_spv_gen_add_op(s, tprint("         % = OpIAdd % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
-        if op == "-" { ir_spv_gen_add_op(s, tprint("         % = OpISub % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
-        if op == "*" { ir_spv_gen_add_op(s, tprint("         % = OpIMul % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
-        if op == "%" { ir_spv_gen_add_op(s, tprint("         % = OpUMod % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_uint), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .UINT, true, diag; }
-        if op == "<" { ir_spv_gen_add_op(s, tprint("         % = OpULessThan % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_bool), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .BOOL, true, diag; }
-        if op == "==" { ir_spv_gen_add_op(s, tprint("         % = OpIEqual % % %", ir_spv_id_text(result), ir_spv_id_text(s.id_bool), ir_spv_id_text(left_id), ir_spv_id_text(right_id))); return result, .BOOL, true, diag; }
+        result_id, result_type, result_ok, result_diag := ir_spv_gen_emit_uint_binary_op(s, op, left_id, right_id);
+        return result_id, result_type, result_ok, result_diag;
       }
 
       diag.message = tprint("SPIR-V backend: unsupported binary op '%' for emitted types.", op);
@@ -298,8 +334,13 @@ ir_spv_gen_emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR
     return local.ptr_id, local.type, true, diag;
   }
   if expr.kind == .SUBSCRIPT {
-    if !expr.left || expr.left.kind != .IDENT || expr.left.text != s.buffer_name {
+    if !expr.left || expr.left.kind != .IDENT {
       diag.message = "SPIR-V backend: unsupported lvalue subscript base.";
+      return 0, .UNKNOWN, false, diag;
+    }
+    buffer, found := ir_spv_gen_find_buffer(s, expr.left.text);
+    if !found {
+      diag.message = tprint("SPIR-V backend: unknown lvalue subscript base '%'.", expr.left.text);
       return 0, .UNKNOWN, false, diag;
     }
     idx, idx_type, idx_ok, idx_diag := ir_spv_gen_emit_expr(s, expr.right);
@@ -312,7 +353,7 @@ ir_spv_gen_emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR
     ir_spv_gen_add_op(s, tprint("         % = OpAccessChain % % % %",
                                 ir_spv_id_text(ptr),
                                 ir_spv_id_text(s.id_ptr_storage_uint),
-                                ir_spv_id_text(s.id_values_var),
+                                ir_spv_id_text(buffer.var_id),
                                 ir_spv_id_text(s.id_int_0),
                                 ir_spv_id_text(idx)));
     return ptr, .UINT, true, diag;
@@ -321,18 +362,18 @@ ir_spv_gen_emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR
   return 0, .UNKNOWN, false, diag;
 }
 
-ir_spv_gen_emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, IR_Diagnostic) {
+ir_spv_gen_emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   if !stmt {
     diag.message = "SPIR-V backend: null statement.";
-    return false, diag;
+    return false, false, diag;
   }
   if stmt.kind == {
     case .DECL; {
       decl_type := ir_spv_gen_expr_type_from_decl(stmt.decl_type_name);
       if decl_type != .UINT {
         diag.message = tprint("SPIR-V backend: unsupported declaration type '%'.", stmt.decl_type_name);
-        return false, diag;
+        return false, false, diag;
       }
       ptr_id := ir_spv_gen_new_id(s);
       ir_spv_gen_add_local_decl(s, tprint("         % = OpVariable % Function",
@@ -341,43 +382,85 @@ ir_spv_gen_emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, IR_Diag
       array_add(*s.locals, .{name=stmt.decl_name, ptr_id=ptr_id, type=decl_type});
       if stmt.decl_init {
         init_id, init_type, init_ok, init_diag := ir_spv_gen_emit_expr(s, stmt.decl_init);
-        if !init_ok return false, init_diag;
+        if !init_ok return false, false, init_diag;
         if init_type != decl_type {
           diag.message = tprint("SPIR-V backend: declaration type mismatch for '%'.", stmt.decl_name);
-          return false, diag;
+          return false, false, diag;
         }
         ir_spv_gen_add_op(s, tprint("               OpStore % %",
                                     ir_spv_id_text(ptr_id),
                                     ir_spv_id_text(init_id)));
       }
-      return true, diag;
+      return true, false, diag;
     }
 
     case .BINARY; {
-      if stmt.binary_op != "=" {
-        diag.message = tprint("SPIR-V backend: unsupported statement binary op '%'.", stmt.binary_op);
-        return false, diag;
-      }
+      op := stmt.binary_op;
       ptr_id, lhs_type, lhs_ok, lhs_diag := ir_spv_gen_emit_lvalue_ptr(s, stmt.binary_left);
-      if !lhs_ok return false, lhs_diag;
-      rhs_id, rhs_type, rhs_ok, rhs_diag := ir_spv_gen_emit_expr(s, stmt.binary_right);
-      if !rhs_ok return false, rhs_diag;
-      if lhs_type != rhs_type {
-        diag.message = "SPIR-V backend: assignment type mismatch.";
-        return false, diag;
+      if !lhs_ok return false, false, lhs_diag;
+      if lhs_type != .UINT {
+        diag.message = "SPIR-V backend: non-uint lvalue assignment is not supported yet.";
+        return false, false, diag;
       }
+
+      if op == "=" {
+        rhs_id, rhs_type, rhs_ok, rhs_diag := ir_spv_gen_emit_expr(s, stmt.binary_right);
+        if !rhs_ok return false, false, rhs_diag;
+        if lhs_type != rhs_type {
+          diag.message = "SPIR-V backend: assignment type mismatch.";
+          return false, false, diag;
+        }
+        ir_spv_gen_add_op(s, tprint("               OpStore % %",
+                                    ir_spv_id_text(ptr_id),
+                                    ir_spv_id_text(rhs_id)));
+        return true, false, diag;
+      }
+
+      base_op: string = "";
+      if op == "+=" base_op = "+";
+      if op == "-=" base_op = "-";
+      if op == "*=" base_op = "*";
+      if op == "%=" base_op = "%";
+      if op == "|=" base_op = "|";
+      if op == "&=" base_op = "&";
+      if op == "^=" base_op = "^";
+      if op == "<<=" base_op = "<<";
+      if op == ">>=" base_op = ">>";
+      if base_op.count == 0 {
+        diag.message = tprint("SPIR-V backend: unsupported statement binary op '%'.", stmt.binary_op);
+        return false, false, diag;
+      }
+
+      lhs_value := ir_spv_gen_new_id(s);
+      ir_spv_gen_add_op(s, tprint("         % = OpLoad % %",
+                                  ir_spv_id_text(lhs_value),
+                                  ir_spv_id_text(s.id_uint),
+                                  ir_spv_id_text(ptr_id)));
+      rhs_id, rhs_type, rhs_ok, rhs_diag := ir_spv_gen_emit_expr(s, stmt.binary_right);
+      if !rhs_ok return false, false, rhs_diag;
+      if rhs_type != .UINT {
+        diag.message = "SPIR-V backend: compound assignment rhs must be uint.";
+        return false, false, diag;
+      }
+      result_id, result_type, result_ok, result_diag := ir_spv_gen_emit_uint_binary_op(s, base_op, lhs_value, rhs_id);
+      if !result_ok return false, false, result_diag;
+      if result_type != .UINT {
+        diag.message = "SPIR-V backend: compound assignment operator must produce uint.";
+        return false, false, diag;
+      }
+
       ir_spv_gen_add_op(s, tprint("               OpStore % %",
                                   ir_spv_id_text(ptr_id),
-                                  ir_spv_id_text(rhs_id)));
-      return true, diag;
+                                  ir_spv_id_text(result_id)));
+      return true, false, diag;
     }
 
     case .IF; {
       cond_id, cond_type, cond_ok, cond_diag := ir_spv_gen_emit_expr(s, stmt.if_condition);
-      if !cond_ok return false, cond_diag;
+      if !cond_ok return false, false, cond_diag;
       if cond_type != .BOOL {
         diag.message = "SPIR-V backend: if condition must be bool.";
-        return false, diag;
+        return false, false, diag;
       }
 
       then_label := ir_spv_gen_new_id(s);
@@ -392,48 +475,64 @@ ir_spv_gen_emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, IR_Diag
                                   ir_spv_id_text(else_label)));
 
       ir_spv_gen_add_op(s, tprint("         % = OpLabel", ir_spv_id_text(then_label)));
-      then_ok, then_diag := ir_spv_gen_emit_stmt_block(s, stmt.if_then);
-      if !then_ok return false, then_diag;
-      ir_spv_gen_add_op(s, tprint("               OpBranch %", ir_spv_id_text(merge_label)));
-
-      if stmt.if_else {
-        ir_spv_gen_add_op(s, tprint("         % = OpLabel", ir_spv_id_text(else_label)));
-        else_ok, else_diag := ir_spv_gen_emit_stmt_block(s, stmt.if_else);
-        if !else_ok return false, else_diag;
+      then_ok, then_terminated, then_diag := ir_spv_gen_emit_stmt_block(s, stmt.if_then);
+      if !then_ok return false, false, then_diag;
+      if !then_terminated {
         ir_spv_gen_add_op(s, tprint("               OpBranch %", ir_spv_id_text(merge_label)));
       }
 
+      if stmt.if_else {
+        ir_spv_gen_add_op(s, tprint("         % = OpLabel", ir_spv_id_text(else_label)));
+        else_ok, else_terminated, else_diag := ir_spv_gen_emit_stmt_block(s, stmt.if_else);
+        if !else_ok return false, false, else_diag;
+        if !else_terminated {
+          ir_spv_gen_add_op(s, tprint("               OpBranch %", ir_spv_id_text(merge_label)));
+        }
+      }
+
       ir_spv_gen_add_op(s, tprint("         % = OpLabel", ir_spv_id_text(merge_label)));
-      return true, diag;
+      return true, false, diag;
+    }
+
+    case .RETURN; {
+      if stmt.return_expr {
+        diag.message = "SPIR-V backend: return with value is not supported yet for compute.";
+        return false, false, diag;
+      }
+      ir_spv_gen_add_op(s, "               OpReturn");
+      return true, true, diag;
     }
   }
 
   diag.message = tprint("SPIR-V backend: unsupported statement kind %.", stmt.kind);
-  return false, diag;
+  return false, false, diag;
 }
 
-ir_spv_gen_emit_stmt_block :: (s: *IR_SPV_Gen_State, block: *IR_Block) -> (bool, IR_Diagnostic) {
+ir_spv_gen_emit_stmt_block :: (s: *IR_SPV_Gen_State, block: *IR_Block) -> (bool, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   if !block {
     diag.message = "SPIR-V backend: null statement block.";
-    return false, diag;
+    return false, false, diag;
   }
   for block.statements {
-    ok, step_diag := ir_spv_gen_emit_stmt(s, *it);
-    if !ok return false, step_diag;
+    ok, terminated, step_diag := ir_spv_gen_emit_stmt(s, *it);
+    if !ok return false, false, step_diag;
+    if terminated return true, true, diag;
   }
-  return true, diag;
+  return true, false, diag;
 }
 
 ir_spv_emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
-  if shader.buffers.count != 1 {
-    diag.message = "SPIR-V generic backend: expected exactly one compute buffer.";
+  if shader.buffers.count == 0 {
+    diag.message = "SPIR-V generic backend: expected at least one compute buffer.";
     return "", false, diag;
   }
-  if shader.buffers[0].element_type_name != "uint" {
-    diag.message = "SPIR-V generic backend: only uint buffer element type is currently supported.";
-    return "", false, diag;
+  for shader.buffers {
+    if it.element_type_name != "uint" {
+      diag.message = tprint("SPIR-V generic backend: buffer '%' has unsupported element type '%'; only uint is supported.", it.name, it.element_type_name);
+      return "", false, diag;
+    }
   }
   if shader.body.statements.count == 0 {
     diag.message = "SPIR-V generic backend: empty compute body.";
@@ -447,10 +546,10 @@ ir_spv_emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (strin
   }
 
   state: IR_SPV_Gen_State;
-  ir_spv_gen_init_base(*state, shader.buffers[0].name, bound_value);
+  ir_spv_gen_init_base(*state, shader.buffers, bound_value);
 
   entry_label := ir_spv_gen_new_id(*state);
-  ok, body_diag := ir_spv_gen_emit_stmt_block(*state, *shader.body);
+  ok, body_terminated, body_diag := ir_spv_gen_emit_stmt_block(*state, *shader.body);
   if !ok return "", false, body_diag;
 
   // Build module text sections after IDs are finalized.
@@ -463,21 +562,24 @@ ir_spv_emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (strin
   append(*sb, "               OpCapability Shader\n");
   append(*sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", ir_spv_id_text(state.id_extinst)));
   append(*sb, "               OpMemoryModel Logical GLSL450\n");
-  append(*sb, tprint("               OpEntryPoint GLCompute % \"main\" % %\n",
-                     ir_spv_id_text(state.id_main),
-                     ir_spv_id_text(state.id_gl_global_invocation_id),
-                     ir_spv_id_text(state.id_values_var)));
+  entry_point_sb: String_Builder;
+  append(*entry_point_sb, tprint("               OpEntryPoint GLCompute % \"main\" %", ir_spv_id_text(state.id_main), ir_spv_id_text(state.id_gl_global_invocation_id)));
+  for state.buffers append(*entry_point_sb, " ", ir_spv_id_text(it.var_id));
+  append(*entry_point_sb, "\n");
+  append(*sb, builder_to_string(*entry_point_sb));
   append(*sb, tprint("               OpExecutionMode % LocalSize 1 1 1\n", ir_spv_id_text(state.id_main)));
   append(*sb, "               OpSource Unknown 100000\n");
   append(*sb, tprint("               OpName % \"ComputeMain\"\n", ir_spv_id_text(state.id_main)));
   append(*sb, tprint("               OpName % \"gl_GlobalInvocationID\"\n", ir_spv_id_text(state.id_gl_global_invocation_id)));
-  append(*sb, tprint("               OpName % \"%\"\n", ir_spv_id_text(state.id_values_var), state.buffer_name));
+  for state.buffers append(*sb, tprint("               OpName % \"%\"\n", ir_spv_id_text(it.var_id), it.name));
   append(*sb, tprint("               OpDecorate % BuiltIn GlobalInvocationId\n", ir_spv_id_text(state.id_gl_global_invocation_id)));
   append(*sb, tprint("               OpDecorate % ArrayStride 4\n", ir_spv_id_text(state.id_runtimearr_uint)));
   append(*sb, tprint("               OpDecorate % Block\n", ir_spv_id_text(state.id_buffer_struct)));
   append(*sb, tprint("               OpMemberDecorate % 0 Offset 0\n", ir_spv_id_text(state.id_buffer_struct)));
-  append(*sb, tprint("               OpDecorate % Binding 0\n", ir_spv_id_text(state.id_values_var)));
-  append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", ir_spv_id_text(state.id_values_var)));
+  for state.buffers {
+    append(*sb, tprint("               OpDecorate % Binding %\n", ir_spv_id_text(it.var_id), it.binding_index));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", ir_spv_id_text(it.var_id)));
+  }
 
   append(*sb, tprint("       % = OpTypeVoid\n", ir_spv_id_text(state.id_void)));
   append(*sb, tprint("          % = OpTypeFunction %\n", ir_spv_id_text(state.id_fn_void), ir_spv_id_text(state.id_void)));
@@ -492,7 +594,7 @@ ir_spv_emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (strin
   append(*sb, tprint("% = OpTypeRuntimeArray %\n", ir_spv_id_text(state.id_runtimearr_uint), ir_spv_id_text(state.id_uint)));
   append(*sb, tprint("% = OpTypeStruct %\n", ir_spv_id_text(state.id_buffer_struct), ir_spv_id_text(state.id_runtimearr_uint)));
   append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", ir_spv_id_text(state.id_ptr_storage_buffer_struct), ir_spv_id_text(state.id_buffer_struct)));
-  append(*sb, tprint("% = OpVariable % StorageBuffer\n", ir_spv_id_text(state.id_values_var), ir_spv_id_text(state.id_ptr_storage_buffer_struct)));
+  for state.buffers append(*sb, tprint("% = OpVariable % StorageBuffer\n", ir_spv_id_text(it.var_id), ir_spv_id_text(state.id_ptr_storage_buffer_struct)));
   append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", ir_spv_id_text(state.id_ptr_storage_uint), ir_spv_id_text(state.id_uint)));
   append(*sb, tprint("% = OpTypePointer Function %\n", ir_spv_id_text(state.id_ptr_func_uint), ir_spv_id_text(state.id_uint)));
 
@@ -511,7 +613,7 @@ ir_spv_emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (strin
   append(*sb, tprint("          % = OpLabel\n", ir_spv_id_text(entry_label)));
   for state.local_var_lines append(*sb, it, "\n");
   for state.op_lines append(*sb, it, "\n");
-  append(*sb, "               OpReturn\n");
+  if !body_terminated append(*sb, "               OpReturn\n");
   append(*sb, "               OpFunctionEnd\n");
 
   out := builder_to_string(*sb);
