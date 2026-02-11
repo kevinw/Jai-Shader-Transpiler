@@ -19,7 +19,7 @@ vertex VertexShader_Out VertexMain(VertexShader_In in [[stage_in]], constant Ver
      float4 gl_Position;
 
      gl_Position = float4(a_pos.x, a_pos.y, 0.0, 1);
-     VertexShader_Out out;
+          VertexShader_Out out;
      out.gl_Position = gl_Position;
      out.gl_FragCoord = gl_Position;
      return out;

@@ -44,7 +44,7 @@ fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], const
      value += square_dist * 0.1;
      value *= 0.8 - 0.2;
      out_color = float4(pow(value, 2), pow(value, 1.5), pow(value, 1.2), 1);
-     FragmentShader_Out out;
+          FragmentShader_Out out;
      out.out_color = out_color;
      return out;
 }

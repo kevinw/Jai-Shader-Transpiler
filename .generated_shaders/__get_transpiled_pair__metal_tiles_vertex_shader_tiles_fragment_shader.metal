@@ -33,7 +33,7 @@ vertex VertexShader_Out VertexMain(VertexShader_In in [[stage_in]], constant Ver
      float4 gl_Position;
 
      gl_Position = float4(a_pos.x, a_pos.y, 0.0, 1);
-     VertexShader_Out out;
+          VertexShader_Out out;
      out.gl_Position = gl_Position;
      out.gl_FragCoord = gl_Position;
      return out;
@@ -63,7 +63,7 @@ fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], const
      value += square_dist * 0.1;
      value *= 0.8 - 0.2;
      out_color = float4(pow(value, 2), pow(value, 1.5), pow(value, 1.2), 1);
-     FragmentShader_Out out;
+          FragmentShader_Out out;
      out.out_color = out_color;
      return out;
 }

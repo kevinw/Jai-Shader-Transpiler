@@ -24,12 +24,15 @@ Transpiled_Target :: enum {
 #load "glsl_backend.jai";
 #load "hlsl_backend.jai";
 #load "metal_backend.jai";
+#load "ir_pipeline/slang_toolchain.jai";
+#load "ir_pipeline/ir_lowering.jai";
 
 Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
     
     // options
     output_shaders: bool;
+    use_ir_pipeline: bool;
     
     using impl: struct {
       currently_waiting_contexts: [..] Shader_Write_Context;
@@ -39,6 +42,8 @@ Jai_To_Shader_Plugin :: struct {
       generated_module_import: *Message_Import;
       lookup_entries: [..] Transpiled_Lookup_Entry;
       did_emit_lookup_overloads: bool;
+      did_log_ir_pipeline: bool;
+      did_log_ir_limitations: bool;
     }
 }
 
@@ -51,6 +56,12 @@ Transpiled_Lookup_Entry :: struct {
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
   p := New(Jai_To_Shader_Plugin);
+  opts := get_build_options();
+  for opts.compile_time_command_line {
+    if it == "-use_ir_pipeline" {
+      p.use_ir_pipeline = true;
+    }
+  }
 
   p.message = convert_procs;
 
@@ -233,8 +244,30 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     case .PHASE; {
       phase := cast(*Message_Phase) message;
       if phase.phase == .TYPECHECKED_ALL_WE_CAN {
+        if plugin.use_ir_pipeline && !plugin.did_log_ir_pipeline {
+          log("Jai Shader Transpiler: IR Slang pipeline flag is enabled (-use_ir_pipeline). Current experimental subset is METAL vertex/fragment/compute shaders (including vertex+fragment pairs) with non-pointer/non-array interface types and simple bodies; other shaders use legacy backend path.");
+          plugin.did_log_ir_pipeline = true;
+        }
+
         for * pair_ctx: plugin.currently_waiting_pair_contexts {
-          s := write_shader_pair(pair_ctx);
+          s: string;
+          used_ir_pipeline := false;
+          if plugin.use_ir_pipeline {
+            s2, ok2 := write_shader_pair_ir_slang(pair_ctx);
+            if ok2 {
+              s = s2;
+              used_ir_pipeline = true;
+            } else if pair_ctx.language == .METAL {
+              if !plugin.did_log_ir_limitations {
+                log("Jai Shader Transpiler: IR Slang pipeline fell back to legacy for at least one shader pair.");
+                plugin.did_log_ir_limitations = true;
+              }
+            }
+          }
+
+          if !used_ir_pipeline {
+            s = write_shader_pair(pair_ctx);
+          }
           if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
           else add_build_string(s, p.workspace);
 
@@ -258,14 +291,30 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
         for * ctx: plugin.currently_waiting_contexts {
           
           s: string;
-          if ctx.type == {
-            case .Vertex;   #through;
-            case .Fragment; #through;
-            case .Compute;
-              s = write_shader(ctx, ctx.main_fn);
-              
-            case; compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader",
-                            make_location(ctx.main_fn.header));
+          used_ir_pipeline := false;
+          if plugin.use_ir_pipeline {
+            s2, ok2 := write_shader_single_ir_slang(ctx);
+            if ok2 {
+              s = s2;
+              used_ir_pipeline = true;
+            } else if (ctx.type == .Vertex || ctx.type == .Fragment) && (ctx.language == .METAL || (ctx.language == .GLSL && ctx.glsl_target == .VULKAN)) {
+              if !plugin.did_log_ir_limitations {
+                log("Jai Shader Transpiler: IR Slang pipeline fell back to legacy for at least one shader.");
+                plugin.did_log_ir_limitations = true;
+              }
+            }
+          }
+
+          if !used_ir_pipeline {
+            if ctx.type == {
+              case .Vertex;   #through;
+              case .Fragment; #through;
+              case .Compute;
+                s = write_shader(ctx, ctx.main_fn);
+                
+              case; compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader",
+                              make_location(ctx.main_fn.header));
+            }
           }
 
           if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
@@ -301,9 +350,177 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       plugin.generated_module_import = null;
       array_reset(*plugin.lookup_entries);
       plugin.did_emit_lookup_overloads = false;
+      plugin.did_log_ir_pipeline = false;
+      plugin.did_log_ir_limitations = false;
       table_reset(*get_transpiled_requests_seen);
     }
   }
+}
+
+ir_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
+  if !ctx return false;
+  if ctx.language != .METAL return false;
+  if ctx.type == .Vertex {
+    _, lowered := ir_lower_vertex_from_shader_context(ctx);
+    return lowered;
+  }
+  if ctx.type == .Fragment {
+    _, lowered := ir_lower_fragment_from_shader_context(ctx);
+    return lowered;
+  }
+  if ctx.type == .Compute {
+    _, lowered := ir_lower_compute_from_shader_context(ctx);
+    return lowered;
+  }
+  return false;
+}
+
+ir_symbol_name_from_context :: (ctx: *Shader_Write_Context) -> string {
+  if ctx.language == .METAL return tprint("%_metal_string", ctx.name);
+  return tprint("%_string", ctx.name);
+}
+
+ir_entry_name_from_context :: (ctx: *Shader_Write_Context) -> string {
+  if ctx.type == .Vertex return "VertexMain";
+  if ctx.type == .Fragment return "FragmentMain";
+  if ctx.type == .Compute return "ComputeMain";
+  return "";
+}
+
+ir_stage_from_context :: (ctx: *Shader_Write_Context) -> (Slang_Stage, bool) {
+  if ctx.type == .Vertex return .VERTEX, true;
+  if ctx.type == .Fragment return .FRAGMENT, true;
+  if ctx.type == .Compute return .COMPUTE, true;
+  return .VERTEX, false;
+}
+
+ir_target_from_context :: (ctx: *Shader_Write_Context) -> (Slang_Target, bool) {
+  if ctx.language == .METAL return .METAL, true;
+  if ctx.language == .GLSL && ctx.glsl_target == .VULKAN return .VULKAN_GLSL, true;
+  return .METAL, false;
+}
+
+write_shader_single_ir_slang :: (ctx: *Shader_Write_Context) -> (string, bool) {
+  if !ir_supports_single_context(ctx) return "", false;
+
+  stage, stage_ok := ir_stage_from_context(ctx);
+  target, target_ok := ir_target_from_context(ctx);
+  if !stage_ok || !target_ok return "", false;
+
+  slang_source: string;
+  entry_name: string;
+  if ctx.type == .Vertex {
+    ir_vertex, lowered := ir_lower_vertex_from_shader_context(ctx);
+    if !lowered {
+      #if VERBOSE log("IR lowering failed for %", ctx.name);
+      return "", false;
+    }
+    emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
+    if !emitted {
+      #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
+      return "", false;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_vertex.entry_name;
+  } else if ctx.type == .Fragment {
+    ir_fragment, lowered := ir_lower_fragment_from_shader_context(ctx);
+    if !lowered {
+      #if VERBOSE log("IR lowering failed for %", ctx.name);
+      return "", false;
+    }
+    emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
+    if !emitted {
+      #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
+      return "", false;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_fragment.entry_name;
+  } else if ctx.type == .Compute {
+    ir_compute, lowered := ir_lower_compute_from_shader_context(ctx);
+    if !lowered {
+      #if VERBOSE log("IR lowering failed for %", ctx.name);
+      return "", false;
+    }
+    emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
+    if !emitted {
+      #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
+      return "", false;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_compute.entry_name;
+  } else {
+    return "", false;
+  }
+
+  build_dir := ".build/ir_slang";
+  make_directory_if_it_does_not_exist(build_dir, recursive=true);
+
+  stage_short := "frag";
+  if ctx.type == .Vertex stage_short = "vert";
+  if ctx.type == .Compute stage_short = "comp";
+  source_path := tprint("%/%_%.slang", build_dir, ctx.name, stage_short);
+  output_ext := ifx ctx.language == .METAL then "metal" else "glsl";
+  output_path := tprint("%/%_%.%", build_dir, ctx.name, stage_short, output_ext);
+
+  if !write_entire_file(source_path, slang_source) {
+    #if VERBOSE log("Failed writing IR Slang source %", source_path);
+    return "", false;
+  }
+
+  if entry_name.count == 0 return "", false;
+  if !emit_slang_target_source(source_path, entry_name, stage, target, output_path) {
+    #if VERBOSE log("Slang target emission failed for %", ctx.name);
+    return "", false;
+  }
+
+  target_source, ok := read_entire_file(output_path);
+  if !ok return "", false;
+  if ctx.type == .Compute && ctx.language == .METAL {
+    target_source = replace(target_source, "[[kernel]] void", "kernel void");
+  }
+
+  symbol_name := ir_symbol_name_from_context(ctx);
+  decl := tprint("% :: #string END\n%\nEND", symbol_name, target_source);
+  return decl, true;
+}
+
+ir_supports_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> bool {
+  if !pair_ctx return false;
+  if pair_ctx.language != .METAL return false;
+  if !pair_ctx.vertex_fn || !pair_ctx.fragment_fn return false;
+
+  vertex_ctx := create_shader_write_context(.METAL, pair_ctx.vertex_fn, pair_ctx.glsl_target);
+  fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
+  _, vertex_ok := ir_lower_vertex_from_shader_context(*vertex_ctx);
+  _, fragment_ok := ir_lower_fragment_from_shader_context(*fragment_ctx);
+  return vertex_ok && fragment_ok;
+}
+
+write_shader_pair_ir_slang :: (pair_ctx: *Shader_Write_Pair_Context) -> (string, bool) {
+  if !ir_supports_pair_context(pair_ctx) return "", false;
+
+  vertex_ctx := create_shader_write_context(.METAL, pair_ctx.vertex_fn, pair_ctx.glsl_target);
+  fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
+  ir_vertex, vertex_ok := ir_lower_vertex_from_shader_context(*vertex_ctx);
+  if !vertex_ok return "", false;
+  ir_fragment, fragment_ok := ir_lower_fragment_from_shader_context(*fragment_ctx);
+  if !fragment_ok return "", false;
+
+  slang_source, emitted := emit_ir_graphics_pair_to_slang(ir_vertex, ir_fragment);
+  if !emitted return "", false;
+
+  build_dir := ".build/ir_slang";
+  make_directory_if_it_does_not_exist(build_dir, recursive=true);
+
+  source_path := tprint("%/%_pair.slang", build_dir, pair_ctx.name);
+  output_path := tprint("%/%_pair.metal", build_dir, pair_ctx.name);
+  if !write_entire_file(source_path, slang_source) return "", false;
+  if !emit_slang_module_target_source(source_path, .METAL, output_path) return "", false;
+
+  target_source, ok := read_entire_file(output_path);
+  if !ok return "", false;
+  decl := tprint("%_metal_string :: #string END\n%\nEND", pair_ctx.name, target_source);
+  return decl, true;
 }
 
 shader_request_name_to_language :: (name: string) -> (Shader_Language, GLSL_Target, bool) {
@@ -673,6 +890,9 @@ operator_string :: (op: Operator_Type) -> string {
     case cast(Operator_Type) #char "*"; return "*";
     case cast(Operator_Type) #char "/"; return "/";
     case cast(Operator_Type) #char "%"; return "%";
+    case cast(Operator_Type) #char "&"; return "&";
+    case cast(Operator_Type) #char "|"; return "|";
+    case cast(Operator_Type) #char "^"; return "^";
     case cast(Operator_Type) #char "~"; return "~";
     case cast(Operator_Type) #char "."; return ".";
   }
@@ -771,8 +991,15 @@ member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
 }
 
 member_has_note_contains :: (member: *Type_Info_Struct_Member, note_fragment: string) -> bool {
+  normalized_fragment := copy_string(note_fragment);
+  to_lower_in_place(normalized_fragment);
+  normalized_fragment = replace(normalized_fragment, "_", "");
+
   for member.notes {
-    found, _ := contains(it, note_fragment);
+    normalized_note := copy_string(it);
+    to_lower_in_place(normalized_note);
+    normalized_note = replace(normalized_note, "_", "");
+    found, _ := contains(normalized_note, normalized_fragment);
     if found return true;
   }
   return false;

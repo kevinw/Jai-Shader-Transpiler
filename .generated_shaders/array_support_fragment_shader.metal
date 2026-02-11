@@ -25,7 +25,7 @@ fragment Array_Test_Fragment_Out FragmentMain(Array_Test_Vertex_Out in [[stage_i
 
      float4 local_palette[2] = {float4(1, 0.0, 0.0, 1), float4(0.0, 1, 0.0, 1)};
      out_color = local_palette[0] * sample_offset.x + 0.5 + u_palette[1] * 0.5;
-     Array_Test_Fragment_Out out;
+          Array_Test_Fragment_Out out;
      out.out_color = out_color;
      return out;
 }

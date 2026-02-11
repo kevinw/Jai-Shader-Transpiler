@@ -73,6 +73,7 @@ build :: (build_file: string, output_exe_name: string) {
       if it == {
         case "-run"; autorun = true;
         case "-output_shaders"; jai_to_shader_plugin.output_shaders = true;
+        case "-use_ir_pipeline"; jai_to_shader_plugin.use_ir_pipeline = true;
       }
   }
 

@@ -1,0 +1,82 @@
+#import "Basic";
+P :: #import "Process";
+
+Slang_Target :: enum {
+  METAL;
+  VULKAN_GLSL;
+}
+
+Slang_Stage :: enum {
+  VERTEX;
+  FRAGMENT;
+  COMPUTE;
+}
+
+slang_stage_name :: (stage: Slang_Stage) -> string {
+  if stage == .VERTEX return "vertex";
+  if stage == .FRAGMENT return "fragment";
+  return "compute";
+}
+
+ir_run_command_checked :: (description: string, args: [] string) -> bool {
+  result, output, error, timeout_reached := P.run_command(..args);
+
+  if timeout_reached {
+    log_error("% timed out: %", description, P.get_quoted_command_string(args));
+    return false;
+  }
+
+  if result.type == .FAILED_TO_LAUNCH {
+    log_error("% failed to launch: %", description, P.get_quoted_command_string(args));
+    return false;
+  }
+
+  if result.type != .EXITED || result.exit_code != 0 {
+    if output.count != 0 log("%", output);
+    if error.count != 0 log_error("%", error);
+    log_error("% failed with exit code %: %", description, result.exit_code, P.get_quoted_command_string(args));
+    return false;
+  }
+
+  return true;
+}
+
+compile_slang_to_spirv :: (source_path: string, entry_name: string, stage: Slang_Stage, output_spv: string) -> bool {
+  return ir_run_command_checked(
+    tprint("slangc %", entry_name),
+    .["slangc", source_path, "-entry", entry_name, "-stage", slang_stage_name(stage), "-target", "spirv", "-o", output_spv]);
+}
+
+emit_slang_target_source :: (source_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string) -> bool {
+  if target == .METAL {
+    return ir_run_command_checked(
+      tprint("slangc metal %", entry_name),
+      .["slangc", source_path, "-entry", entry_name, "-stage", slang_stage_name(stage), "-target", "metal", "-o", output_path]);
+  }
+
+  if target == .VULKAN_GLSL {
+    return ir_run_command_checked(
+      tprint("slangc glsl %", entry_name),
+      .["slangc", source_path, "-entry", entry_name, "-stage", slang_stage_name(stage), "-target", "glsl", "-profile", "glsl_450", "-o", output_path]);
+  }
+
+  log_error("Unsupported Slang target requested in new IR pipeline: %", target);
+  return false;
+}
+
+emit_slang_module_target_source :: (source_path: string, target: Slang_Target, output_path: string) -> bool {
+  if target == .METAL {
+    return ir_run_command_checked(
+      "slangc metal module",
+      .["slangc", source_path, "-target", "metal", "-o", output_path]);
+  }
+
+  if target == .VULKAN_GLSL {
+    return ir_run_command_checked(
+      "slangc glsl module",
+      .["slangc", source_path, "-target", "glsl", "-profile", "glsl_450", "-o", output_path]);
+  }
+
+  log_error("Unsupported Slang module target requested in IR pipeline: %", target);
+  return false;
+}

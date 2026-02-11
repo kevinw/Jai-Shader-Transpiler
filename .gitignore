@@ -12,3 +12,7 @@ test_runner
 *.exe
 vulkan_example
 cpu_example
+headless/ir_toolchain_headless_runner
+headless/option1_headless_runner
+headless_ir/ir_compute_semantics_runner
+headless_ir/ir_headless_runner

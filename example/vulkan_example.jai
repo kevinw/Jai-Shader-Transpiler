@@ -140,6 +140,7 @@ main :: () {
     _ = get_transpiled(.VULKAN_GLSL, tiles_vertex_shader_vk);
     _ = get_transpiled(.VULKAN_GLSL, tiles_fragment_shader_vk);
     _ = get_transpiled(.VULKAN_GLSL, compute_write_indices_vk);
+    _ = get_transpiled(.VULKAN_GLSL, bindless_nested_vertex_vk);
 
     args_ok, args, is_set := parse_arguments(struct { single_frame: bool; test_readback: bool; });
     single_frame := args_ok && is_set.single_frame;

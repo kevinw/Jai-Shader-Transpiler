@@ -28,7 +28,7 @@ vertex Array_Test_Vertex_Out VertexMain(Array_Test_Vertex_In in [[stage_in]], co
      float2 positions[3] = {float2(0.0, 0.5), float2(-0.5, -0.5), float2(0.5, -0.5)};
      sample_offset = positions[0] + u_offsets[1];
      gl_Position = float4(a_pos.x + positions[2].x, a_pos.y + u_offsets[2].y, 0.0, 1);
-     Array_Test_Vertex_Out out;
+          Array_Test_Vertex_Out out;
      out.gl_Position = gl_Position;
      out.gl_FragCoord = gl_Position;
      out.sample_offset = sample_offset;

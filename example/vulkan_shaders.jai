@@ -60,3 +60,28 @@ compute_write_indices_vk :: (using in: ComputeVk_In, values: *u32) {
     values[thread_id.x] = thread_id.x;
   }
 } @compute_shader
+
+BindlessNestedVk_Uniforms :: struct {}
+
+BindlessNestedVk_In :: struct {
+  a_pos: Vector2;
+}
+
+BindlessNestedVk_Out :: struct {
+  gl_Position: Vector4; @position
+}
+
+BindlessNestedVk_VertexData :: struct {
+  offset: Vector2;
+}
+
+BindlessNestedVk_Params :: struct {
+  vertex_data: *BindlessNestedVk_VertexData;
+}
+
+bindless_nested_vertex_vk :: (using in: BindlessNestedVk_In, params: BindlessNestedVk_Params) -> BindlessNestedVk_Out {
+  using out: BindlessNestedVk_Out;
+  p := params.vertex_data.offset + a_pos;
+  gl_Position = Vector4.{ p.x, p.y, 0.0, 1.0 };
+  return out;
+} @vertex_shader

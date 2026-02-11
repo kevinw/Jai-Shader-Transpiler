@@ -124,6 +124,47 @@ write_glsl_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Bod
 }
 
 
+glsl_ptr_type_already_emitted :: (ptr_type_names: *[..] string, name: string) -> bool {
+  for ptr_type_names.* if it == name return true;
+  return false;
+}
+
+glsl_struct_ptr_type_already_seen :: (struct_ptr_types_seen: *[..] *Type_Info_Struct, type: *Type_Info_Struct) -> bool {
+  for struct_ptr_types_seen.* if it == type return true;
+  return false;
+}
+
+emit_glsl_bindless_ptr_buffer_type :: (sb: *String_Builder, pointee: *Type_Info, ptr_type_names: *[..] string, struct_ptr_types_seen: *[..] *Type_Info_Struct) {
+  ptr_name := glsl_ptr_type_name(pointee);
+  if glsl_ptr_type_already_emitted(ptr_type_names, ptr_name) return;
+
+  if pointee.type == .STRUCT {
+    pointee_struct := cast(*Type_Info_Struct) pointee;
+    if !glsl_struct_ptr_type_already_seen(struct_ptr_types_seen, pointee_struct) {
+      array_add(struct_ptr_types_seen, pointee_struct);
+      for *pointee_struct.members {
+        if it.type.type != .POINTER continue;
+        pointer := cast(*Type_Info_Pointer) it.type;
+        emit_glsl_bindless_ptr_buffer_type(sb, pointer.pointer_to, ptr_type_names, struct_ptr_types_seen);
+      }
+    }
+
+    append(sb, "layout(buffer_reference, std430) readonly buffer ", ptr_name, " {\n");
+    for *pointee_struct.members {
+      append(sb, "    ");
+      print_glsl_member_with_typename(sb, it);
+      append(sb, ";\n");
+    }
+    append(sb, "};\n\n");
+    array_add(ptr_type_names, ptr_name);
+    return;
+  }
+
+  append(sb, "layout(buffer_reference, std430) readonly buffer ", ptr_name, " {\n    ");
+  append(sb, glsl_base_type_name(pointee), " data[];\n};\n\n");
+  array_add(ptr_type_names, ptr_name);
+}
+
 print_glsl_bindless_param_definitions :: (sb: *String_Builder, header: *Code_Procedure_Header) {
   bindless_decl, binding, has_bindless := find_bindless_param(header);
   if !has_bindless return;
@@ -136,20 +177,12 @@ print_glsl_bindless_param_definitions :: (sb: *String_Builder, header: *Code_Pro
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
 
   ptr_type_names: [..] string;
+  struct_ptr_types_seen: [..] *Type_Info_Struct;
+
   for *struct_type.members {
     if it.type.type != .POINTER continue;
     pointer := cast(*Type_Info_Pointer) it.type;
-    if pointer.pointer_to.type == .STRUCT
-      compiler_report("GLSL Backend: Bindless pointer-to-struct not yet supported", make_location(bindless_decl));
-
-    ptr_name := glsl_ptr_type_name(pointer.pointer_to);
-    already := false;
-    for ptr_type_names if it == ptr_name { already = true; break; }
-    if already continue;
-
-    array_add(*ptr_type_names, ptr_name);
-    append(sb, "layout(buffer_reference, std430) readonly buffer ", ptr_name, " {\n    ");
-    append(sb, glsl_base_type_name(pointer.pointer_to), " data[];\n};\n\n");
+    emit_glsl_bindless_ptr_buffer_type(sb, pointer.pointer_to, *ptr_type_names, *struct_ptr_types_seen);
   }
 
   append(sb, "layout(buffer_reference, std430) readonly buffer ", get_struct_type_name(struct_type), " {\n");
@@ -378,6 +411,10 @@ print_glsl_type :: (sb: *String_Builder, type: *Type_Info) {
     case .STRUCT; {
       structtype := cast(*Type_Info_Struct) type;
       append(sb, jai_to_glsl_type_name(get_struct_type_name(structtype)));
+    }
+    case .POINTER; {
+      pointer := cast(*Type_Info_Pointer) type;
+      append(sb, glsl_ptr_type_name(pointer.pointer_to));
     }
     case .VOID; append(sb, "void");
     

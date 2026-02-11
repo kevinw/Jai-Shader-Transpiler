@@ -7,7 +7,6 @@ cbuffer VertexShader_CBuffer {
 Texture2D texture : register(t0);
 SamplerState sampler : register(s0);
 struct VertexShader_Out {
-    float2 f_pos : SV_POSITION;
 }
 
 VertexShader_Out main(VertexShader_In in) {

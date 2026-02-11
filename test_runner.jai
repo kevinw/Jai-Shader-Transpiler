@@ -26,10 +26,15 @@ run_all_tests :: () {
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout (location=0) out");
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout(set = 0, binding = 0) uniform");
   check_file_contains(debug_path("compute_write_indices_vk.glsl"), "layout(std430, set = 0, binding = 0) buffer");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "layout(buffer_reference, std430) readonly buffer Ptr_BindlessNestedVk_VertexData");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "Ptr_BindlessNestedVk_VertexData vertex_data;");
   check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
   check_file_contains(debug_path("tiles_pair_shader.metal"), "vertex VertexShader_Out VertexMain(");
   check_file_contains(debug_path("tiles_pair_shader.metal"), "fragment FragmentShader_Out FragmentMain(");
   check_file_contains(debug_path("tiles_pair_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
+  check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector2");
+  check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector3");
+  check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector4");
 
   check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "<operator_not_supported>");
@@ -141,7 +146,17 @@ compile_generated_glsl_shaders :: () {
 
     for glsl_files {
         stage := glsl_stage_from_filename(it);
-        run_command_checked(tprint("Compile GLSL %", it), .["glslangValidator", "-S", stage, it]);
+        is_vulkan_glsl := false;
+        found, _ := contains(it, "_vk.glsl");
+        if found is_vulkan_glsl = true;
+
+        if is_vulkan_glsl {
+            run_command_checked(tprint("Compile Vulkan GLSL %", it),
+                .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", stage, it]);
+        } else {
+            run_command_checked(tprint("Compile GLSL %", it),
+                .["glslangValidator", "-S", stage, it]);
+        }
     }
 }
 

@@ -1,5 +1,7 @@
 METAL_HEADER :: "#include <metal_stdlib>\nusing namespace metal;\n\n";
 METAL_UNIFORM_BUFFER_INDEX :: 0;
+METAL_VERTEX_ID_PARAM_NAME :: "__jai_vertex_id";
+METAL_INSTANCE_ID_PARAM_NAME :: "__jai_instance_id";
 
 METAL_RADIANS_HELPERS :: "inline float jai_radians(float v) { return v * 0.01745329251994329577f; }\ninline float2 jai_radians(float2 v) { return v * 0.01745329251994329577f; }\ninline float3 jai_radians(float3 v) { return v * 0.01745329251994329577f; }\ninline float4 jai_radians(float4 v) { return v * 0.01745329251994329577f; }\n\n";
 METAL_DEGREES_HELPERS :: "inline float jai_degrees(float v) { return v * 57.29577951308232088f; }\ninline float2 jai_degrees(float2 v) { return v * 57.29577951308232088f; }\ninline float3 jai_degrees(float3 v) { return v * 57.29577951308232088f; }\ninline float4 jai_degrees(float4 v) { return v * 57.29577951308232088f; }\n\n";
@@ -139,6 +141,9 @@ write_metal_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, s
   append(*main_sb, get_struct_type_name(cast(*Type_Info_Struct) node.header.returns[0].type_inst.result));
   append(*main_sb, " ", main_function_name, "(");
   print_metal_stage_in_arg(*main_sb, node.header.arguments[0]);
+  if shader_type == .Vertex {
+    print_metal_vertex_builtin_args(*main_sb, node.header);
+  }
   bindless_decl, binding, has_bindless := find_bindless_param(node.header);
   if has_bindless {
     append(*main_sb, ", ");
@@ -220,7 +225,15 @@ print_metal_in_struct :: (sb: *String_Builder, node: *Code_Procedure_Header) {
   append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
   attribute_i := 0;
   for * struct_type.members {
+    if it.flags & .OVERLAY {
+      compiler_report(tprint("Metal Backend: #overlay is not supported in shader-transpiled structs (struct '%', member '%').",
+                             get_struct_type_name(struct_type), it.name));
+      return;
+    }
+
     if node_is_fragment_shader(node) && it.name == "gl_Position" continue;
+    if !node_is_fragment_shader(node) && member_has_note_contains(it, "vertex_id") continue;
+    if !node_is_fragment_shader(node) && member_has_note_contains(it, "instance_id") continue;
     if type_contains_array(it.type)
       compiler_report("Metal Backend: Array members are not supported in stage input/output structs. Use non-array varyings for now.", make_location(node.arguments[0]));
 
@@ -230,6 +243,9 @@ print_metal_in_struct :: (sb: *String_Builder, node: *Code_Procedure_Header) {
     if member_is_stage_builtin(it) {
       if member_has_note_contains(it, "frag_coord") append(sb, " [[position]]");
       else if member_has_note_contains(it, "position") append(sb, " [[position]]");
+      else if member_has_note_contains(it, "vertex_id") append(sb, " [[vertex_id]]");
+      else if member_has_note_contains(it, "instance_id") append(sb, " [[instance_id]]");
+      else if member_has_note_contains(it, "front_facing") append(sb, " [[front_facing]]");
     } else {
       if node_is_fragment_shader(node) append(sb, tprint(" [[user(%)]]", it.name));
       else append(sb, tprint(" [[attribute(%)]]", attribute_i));
@@ -240,19 +256,76 @@ print_metal_in_struct :: (sb: *String_Builder, node: *Code_Procedure_Header) {
   append(sb, "};\n\n");
 }
 
+print_metal_vertex_builtin_args :: (sb: *String_Builder, node: *Code_Procedure_Header) {
+  struct_type_generic := node.arguments[0].type_inst.result;
+  if struct_type_generic.type != .STRUCT return;
+  struct_type := cast(*Type_Info_Struct) struct_type_generic;
+
+  emit_vertex_id := false;
+  emit_instance_id := false;
+  for * struct_type.members {
+    if member_has_note_contains(it, "vertex_id") emit_vertex_id = true;
+    if member_has_note_contains(it, "instance_id") emit_instance_id = true;
+  }
+
+  if emit_vertex_id append(sb, tprint(", uint % [[vertex_id]]", METAL_VERTEX_ID_PARAM_NAME));
+  if emit_instance_id append(sb, tprint(", uint % [[instance_id]]", METAL_INSTANCE_ID_PARAM_NAME));
+}
+
+metal_struct_already_emitted :: (emitted: *[..] *Type_Info_Struct, struct_type: *Type_Info_Struct) -> bool {
+  for emitted.* if it == struct_type return true;
+  return false;
+}
+
+emit_metal_struct_definitions_for_type :: (sb: *String_Builder, type: *Type_Info, emitted: *[..] *Type_Info_Struct) {
+  if !type return;
+
+  if type.type == {
+    case .STRUCT; {
+      struct_type := cast(*Type_Info_Struct) type;
+      if metal_struct_already_emitted(emitted, struct_type) return;
+
+      // Types that map directly to Metal builtins (Vector/Matrix/etc.) must not be emitted as structs.
+      struct_name := get_struct_type_name(struct_type);
+      if jai_to_metal_type_name(struct_name) != struct_name return;
+
+      array_add(emitted, struct_type);
+
+      for * struct_type.members {
+        if it.flags & .OVERLAY {
+          compiler_report(tprint("Metal Backend: #overlay is not supported in shader-transpiled structs (struct '%', member '%').",
+                                 struct_name, it.name));
+          return;
+        }
+        emit_metal_struct_definitions_for_type(sb, it.type, emitted);
+      }
+
+      append(sb, tprint("struct % {\n", struct_name));
+      for * struct_type.members {
+        append(sb, "    ");
+        print_metal_member_with_typename(sb, it);
+        append(sb, ";\n");
+      }
+      append(sb, "};\n\n");
+    }
+    case .POINTER; {
+      pointer := cast(*Type_Info_Pointer) type;
+      emit_metal_struct_definitions_for_type(sb, pointer.pointer_to, emitted);
+    }
+    case .ARRAY; {
+      array_type := cast(*Type_Info_Array) type;
+      emit_metal_struct_definitions_for_type(sb, array_type.element_type, emitted);
+    }
+  }
+}
+
 print_metal_uniform_struct :: (sb: *String_Builder, node: *Code_Procedure_Header) {
   struct_type_generic := node.arguments[1].type_inst.result;
   if struct_type_generic.type != .STRUCT
     compiler_report("Metal Backend: Shader uniforms are not a struct", make_location(node.arguments[1]));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
-
-  append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
-  for * struct_type.members {
-    append(sb, "    ");
-    print_metal_member_with_typename(sb, it);
-    append(sb, ";\n");
-  }
-  append(sb, "};\n\n");
+  emitted: [..] *Type_Info_Struct;
+  emit_metal_struct_definitions_for_type(sb, struct_type, *emitted);
 }
 
 print_metal_out_struct :: (sb: *String_Builder, node: *Code_Procedure_Header, shader_type: Shader_Type) {
@@ -264,6 +337,12 @@ print_metal_out_struct :: (sb: *String_Builder, node: *Code_Procedure_Header, sh
   append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
   color_i := 0;
   for * struct_type.members {
+    if it.flags & .OVERLAY {
+      compiler_report(tprint("Metal Backend: #overlay is not supported in shader-transpiled structs (struct '%', member '%').",
+                             get_struct_type_name(struct_type), it.name));
+      return;
+    }
+
     if type_contains_array(it.type)
       compiler_report("Metal Backend: Array members are not supported in stage input/output structs. Use non-array varyings for now.", make_location(node.returns[0]));
 
@@ -301,14 +380,8 @@ print_metal_bindless_struct :: (sb: *String_Builder, decl: *Code_Declaration) {
   if struct_type_generic.type != .STRUCT
     compiler_report("Metal Backend: Bindless param is not a struct", make_location(decl));
   struct_type := cast(*Type_Info_Struct) struct_type_generic;
-
-  append(sb, tprint("struct % {\n", get_struct_type_name(struct_type)));
-  for *struct_type.members {
-    append(sb, "    ");
-    print_metal_member_with_typename(sb, it);
-    append(sb, ";\n");
-  }
-  append(sb, "};\n\n");
+  emitted: [..] *Type_Info_Struct;
+  emit_metal_struct_definitions_for_type(sb, struct_type, *emitted);
 }
 
 print_metal_bindless_arg :: (sb: *String_Builder, arg: *Code_Declaration, binding: s64) {
@@ -369,6 +442,15 @@ print_metal_local_bindings :: (ctx: *Shader_Write_Context, sb: *String_Builder, 
     }
 
     if node_is_fragment_shader(node) && it.name == "gl_Position" continue;
+
+    if !node_is_fragment_shader(node) && member_has_note_contains(it, "vertex_id") {
+      print_metal_local_binding(sb, it.type, it.name, METAL_VERTEX_ID_PARAM_NAME, indent);
+      continue;
+    }
+    if !node_is_fragment_shader(node) && member_has_note_contains(it, "instance_id") {
+      print_metal_local_binding(sb, it.type, it.name, METAL_INSTANCE_ID_PARAM_NAME, indent);
+      continue;
+    }
 
     print_metal_local_binding(sb, it.type, it.name, tprint("%.%", node.arguments[0].name, it.name), indent);
   }
@@ -641,9 +723,81 @@ print_metal_stmt :: (using ctx: *Shader_Write_Context, sb: *String_Builder,
       }
 
       case .RETURN; {
-        if is_main continue;
         add_indents(sb, indent);
         op := cast(*Code_Return) it;
+        if is_main {
+          if op.arguments_sorted.count == 0 continue;
+          if op.arguments_sorted.count != 1 {
+            compiler_report("Multiple Return Arguments Disallowed in Jai Shaders", make_location(op));
+            continue;
+          }
+
+          ret_expr := op.arguments_sorted[0];
+          if ret_expr.kind == .LITERAL {
+            lit := cast(*Code_Literal) ret_expr;
+            if lit.value_type == .STRUCT {
+              out_type := cast(*Type_Info_Struct) ctx.main_fn.header.returns[0].type_inst.result;
+              named_initializers := false;
+              for lit.struct_literal_info.arguments {
+                if it.kind != .BINARY_OPERATOR continue;
+                bn := cast(*Code_Binary_Operator) it;
+                if bn.left && bn.left.kind == .IDENT && operator_string(bn.operator_type) == "=" {
+                  named_initializers = true;
+                  break;
+                }
+              }
+
+              if named_initializers {
+                for *out_type.members {
+                  member := it;
+                  value_expr: *Code_Node = null;
+                  for lit.struct_literal_info.arguments {
+                    arg_node := it;
+                    if arg_node.kind != .BINARY_OPERATOR continue;
+                    bn := cast(*Code_Binary_Operator) arg_node;
+                    if !bn.left || bn.left.kind != .IDENT continue;
+                    if operator_string(bn.operator_type) != "=" continue;
+                    lhs := cast(*Code_Ident) bn.left;
+                    if lhs.name != member.name continue;
+                    value_expr = bn.right;
+                    break;
+                  }
+                  if !value_expr {
+                    compiler_report(tprint("Metal Backend: Missing member '%' in struct literal return for shader '%'.",
+                                           member.name, ctx.main_fn.header.name), make_location(op));
+                    continue;
+                  }
+
+                  add_indents(sb, indent);
+                  append(sb, member.name, " = ");
+                  print_metal_array_member_expr(ctx, sb, value_expr, member.type);
+                  append(sb, ";\n");
+                }
+                continue;
+              }
+
+              if lit.struct_literal_info.arguments.count != out_type.members.count {
+                compiler_report(tprint("Metal Backend: Struct literal return member count mismatch in shader '%' (got %, expected %).",
+                                       ctx.main_fn.header.name,
+                                       lit.struct_literal_info.arguments.count,
+                                       out_type.members.count), make_location(op));
+                continue;
+              }
+
+              for i: 0..out_type.members.count-1 {
+                member := out_type.members[i];
+                add_indents(sb, indent);
+                append(sb, member.name, " = ");
+                print_metal_array_member_expr(ctx, sb, lit.struct_literal_info.arguments[i], member.type);
+                append(sb, ";\n");
+              }
+              continue;
+            }
+          }
+
+          continue;
+        }
+
         append(sb, "return ");
         if op.arguments_sorted.count == 0 {
           append(sb, ";\n");
@@ -710,11 +864,76 @@ print_metal_expr :: (using ctx: *Shader_Write_Context, sb: *String_Builder, node
       print_metal_procedure_call(ctx, sb, pc);
     }
 
-    case; PP.print_expression(sb, node);
+    case; print_metal_fallback_expr(ctx, sb, node);
   }
 }
 
+metal_pointer_member_names_contains :: (names: *[..] string, name: string) -> bool {
+  for names.* if it == name return true;
+  return false;
+}
+
+collect_metal_pointer_member_names :: (type: *Type_Info, names: *[..] string) {
+  if !type return;
+
+  if type.type == .POINTER {
+    pointer := cast(*Type_Info_Pointer) type;
+    collect_metal_pointer_member_names(pointer.pointer_to, names);
+    return;
+  }
+
+  if type.type != .STRUCT return;
+
+  struct_type := cast(*Type_Info_Struct) type;
+  for *struct_type.members {
+    if it.type && it.type.type == .POINTER {
+      if !metal_pointer_member_names_contains(names, it.name) {
+        array_add(names, it.name);
+      }
+      pointer := cast(*Type_Info_Pointer) it.type;
+      collect_metal_pointer_member_names(pointer.pointer_to, names);
+    } else {
+      collect_metal_pointer_member_names(it.type, names);
+    }
+  }
+}
+
+collect_metal_header_pointer_member_names :: (header: *Code_Procedure_Header) -> [..] string {
+  names: [..] string;
+  if !header return names;
+
+  for header.arguments {
+    arg_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
+    collect_metal_pointer_member_names(arg_type, *names);
+  }
+  for header.returns {
+    ret_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
+    collect_metal_pointer_member_names(ret_type, *names);
+  }
+  return names;
+}
+
+rewrite_metal_pointer_member_accesses :: (expr: string, pointer_member_names: [] string) -> string {
+  rewritten := copy_string(expr);
+  for pointer_member_names {
+    rewritten = replace(rewritten, tprint(".%.", it), tprint(".%->", it));
+  }
+  return rewritten;
+}
+
+print_metal_fallback_expr :: (ctx: *Shader_Write_Context, sb: *String_Builder, node: *Code_Node) {
+  raw: String_Builder;
+  PP.print_expression(*raw, node);
+  expr := builder_to_string(*raw);
+
+  pointer_member_names := collect_metal_header_pointer_member_names(ifx ctx && ctx.main_fn then ctx.main_fn.header else null);
+  expr = rewrite_metal_pointer_member_accesses(expr, pointer_member_names);
+  append(sb, expr);
+}
+
 print_metal_binary_operator :: (ctx: *Shader_Write_Context, sb: *String_Builder, bn: *Code_Binary_Operator) {
+  op_str := operator_string(bn.operator_type);
+
   if bn.operator_type == .ARRAY_SUBSCRIPT {
     print_metal_expr(ctx, sb, bn.left);
     append(sb, "[");
@@ -723,11 +942,98 @@ print_metal_binary_operator :: (ctx: *Shader_Write_Context, sb: *String_Builder,
     return;
   }
 
+  if op_str == "." {
+    needs_arrow := metal_member_access_needs_arrow(ctx, bn.left);
+    if !needs_arrow {
+      left_text := expression_to_source_string(bn.left);
+      pointer_member_names := collect_metal_header_pointer_member_names(ifx ctx && ctx.main_fn then ctx.main_fn.header else null);
+      for pointer_member_names {
+        if ends_with(left_text, tprint(".%", it)) {
+          needs_arrow = true;
+          break;
+        }
+      }
+    }
+
+    print_metal_expr(ctx, sb, bn.left);
+    if needs_arrow append(sb, "->");
+    else append(sb, ".");
+    print_metal_expr(ctx, sb, bn.right);
+    return;
+  }
+
   print_metal_expr(ctx, sb, bn.left);
   space := " ";
-  if bn.operator_type == cast(Operator_Type) #char "." space = "";
-  append(sb, space, operator_string(bn.operator_type), space);
+  append(sb, space, op_str, space);
   print_metal_expr(ctx, sb, bn.right);
+}
+
+metal_type_from_main_identifier :: (ctx: *Shader_Write_Context, ident_name: string) -> *Type_Info {
+  if !ctx || !ctx.main_fn return null;
+  header := ctx.main_fn.header;
+  for header.arguments {
+    if it.name != ident_name continue;
+    if it.type_inst return it.type_inst.result;
+    if it.expression return it.expression.type;
+    return null;
+  }
+  for header.returns {
+    if it.name != ident_name continue;
+    if it.type_inst return it.type_inst.result;
+    if it.expression return it.expression.type;
+    return null;
+  }
+  return null;
+}
+
+metal_member_access_needs_arrow :: (ctx: *Shader_Write_Context, left: *Code_Node) -> bool {
+  if !left return false;
+  if left.type && left.type.type == .POINTER return true;
+
+  // Covers expressions like params.fragment_data.color where the immediate left expression
+  // may have been auto-dereferenced by Jai, but the member being chained is still a pointer field.
+  if left.kind == .BINARY_OPERATOR {
+    left_bn := cast(*Code_Binary_Operator) left;
+    if operator_string(left_bn.operator_type) == "." && left_bn.right && left_bn.right.kind == .IDENT {
+      if left_bn.right.type && left_bn.right.type.type == .POINTER return true;
+      member_ident := cast(*Code_Ident) left_bn.right;
+      if member_ident.resolved_declaration {
+        member_decl := member_ident.resolved_declaration;
+        member_type: *Type_Info = null;
+        if member_decl.type_inst member_type = member_decl.type_inst.result;
+        else if member_decl.expression member_type = member_decl.expression.type;
+        if member_type && member_type.type == .POINTER return true;
+      }
+
+      base_type := left_bn.left.type;
+      if !base_type && left_bn.left.kind == .IDENT {
+        left_ident := cast(*Code_Ident) left_bn.left;
+        if left_ident.resolved_declaration {
+          decl := left_ident.resolved_declaration;
+          if decl.type_inst base_type = decl.type_inst.result;
+          else if decl.expression base_type = decl.expression.type;
+        }
+        if !base_type {
+          base_type = metal_type_from_main_identifier(ctx, left_ident.name);
+        }
+      }
+      if base_type && base_type.type == .POINTER {
+        pointer := cast(*Type_Info_Pointer) base_type;
+        base_type = pointer.pointer_to;
+      }
+      if base_type && base_type.type == .STRUCT {
+        struct_type := cast(*Type_Info_Struct) base_type;
+        member_name := cast(*Code_Ident) left_bn.right;
+        for *struct_type.members {
+          if it.name != member_name.name continue;
+          if it.type && it.type.type == .POINTER return true;
+          return false;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 print_metal_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder, pc: *Code_Procedure_Call) {
@@ -759,7 +1065,23 @@ update_metal_helper_usage :: (ctx: *Shader_Write_Context, name: string) {
 }
 
 print_metal_member_with_typename :: (sb: *String_Builder, thing: *Type_Info_Struct_Member) {
-  print_metal_typed_name(sb, thing.type, thing.name);
+  print_metal_struct_member_typed_name(sb, thing.type, thing.name);
+}
+
+print_metal_struct_member_typed_name :: (sb: *String_Builder, type: *Type_Info, name: string) {
+  base_type, array_suffix := split_array_type_and_suffix("Metal", type);
+
+  if base_type.type == .STRUCT {
+    structtype := cast(*Type_Info_Struct) base_type;
+    struct_name := get_struct_type_name(structtype);
+    if struct_name == "Vector3" {
+      append(sb, "packed_float3 ", name, array_suffix);
+      return;
+    }
+  }
+
+  print_metal_type(sb, base_type);
+  append(sb, " ", name, array_suffix);
 }
 
 print_metal_type :: (sb: *String_Builder, type: *Type_Info) {
