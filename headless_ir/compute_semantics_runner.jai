@@ -248,6 +248,14 @@ compute_semantics_helper_struct_chain_shader :: (using in: Compute_Semantics_In,
   }
 } @compute_shader
 
+compute_semantics_helper_struct_direct_assign_shader :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+  if thread_id.x < 64 {
+    idx := thread_id.x;
+    boids[idx] = compute_semantics_boid_advance(boids[idx], 2.0);
+    values[idx] = cast(u32) (boids[idx].pos.x + boids[idx].pos.y);
+  }
+} @compute_shader
+
 compute_semantics_matrix_math_shader :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x < 64 {
     idx := thread_id.x;
@@ -468,6 +476,7 @@ main :: () {
   _ = get_transpiled(.METAL, compute_semantics_vector_index_shader);
   _ = get_transpiled(.METAL, compute_semantics_access_chain_shader);
   _ = get_transpiled(.METAL, compute_semantics_helper_struct_chain_shader);
+  _ = get_transpiled(.METAL, compute_semantics_helper_struct_direct_assign_shader);
   _ = get_transpiled(.METAL, compute_semantics_matrix_math_shader);
   _ = get_transpiled(.METAL, compute_semantics_intrinsics_shader);
 
@@ -487,6 +496,7 @@ main :: () {
   vector_index_source := get_transpiled(.METAL, compute_semantics_vector_index_shader);
   access_chain_source := get_transpiled(.METAL, compute_semantics_access_chain_shader);
   helper_struct_chain_source := get_transpiled(.METAL, compute_semantics_helper_struct_chain_shader);
+  helper_struct_direct_assign_source := get_transpiled(.METAL, compute_semantics_helper_struct_direct_assign_shader);
   matrix_math_source := get_transpiled(.METAL, compute_semantics_matrix_math_shader);
   intrinsics_source := get_transpiled(.METAL, compute_semantics_intrinsics_shader);
 
@@ -499,6 +509,7 @@ main :: () {
   check_spvasm_is_generic("compute_semantics_vector_index_shader");
   check_spvasm_is_generic("compute_semantics_access_chain_shader");
   check_spvasm_is_generic("compute_semantics_helper_struct_chain_shader");
+  check_spvasm_is_generic("compute_semantics_helper_struct_direct_assign_shader");
   check_spvasm_is_generic("compute_semantics_matrix_math_shader");
   check_spvasm_is_generic("compute_semantics_intrinsics_shader");
 
@@ -619,6 +630,13 @@ main :: () {
   check_contains(helper_struct_chain_ir_slang_source, ".pos.x", "compute helper-struct-chain IR slang output");
   check_contains(helper_struct_chain_ir_slang_source, ".pos.y", "compute helper-struct-chain IR slang output");
 
+  helper_struct_direct_assign_ir_slang_path := ".build/ir_slang/compute_semantics_helper_struct_direct_assign_shader_comp.slang";
+  helper_struct_direct_assign_ir_slang_source, helper_struct_direct_assign_ir_ok := read_entire_file(helper_struct_direct_assign_ir_slang_path);
+  if !helper_struct_direct_assign_ir_ok fail("Could not read %", helper_struct_direct_assign_ir_slang_path);
+  check_contains(helper_struct_direct_assign_ir_slang_source, "generated_by_ir_pipeline", "compute helper-struct-direct-assign IR slang output");
+  check_contains(helper_struct_direct_assign_ir_slang_source, "compute_semantics_boid_advance", "compute helper-struct-direct-assign IR slang output");
+  check_contains(helper_struct_direct_assign_ir_slang_source, "boids[idx] = ", "compute helper-struct-direct-assign IR slang output");
+
   matrix_math_ir_slang_path := ".build/ir_slang/compute_semantics_matrix_math_shader_comp.slang";
   matrix_math_ir_slang_source, matrix_math_ir_ok := read_entire_file(matrix_math_ir_slang_path);
   if !matrix_math_ir_ok fail("Could not read %", matrix_math_ir_slang_path);
@@ -669,6 +687,7 @@ main :: () {
   run_compute_case_with_boid_table(vector_index_source, "vector-index", compute_semantics_vector_index_shader);
   run_compute_case_with_boid_table(access_chain_source, "access-chain", compute_semantics_access_chain_shader);
   run_compute_case_with_boid_table(helper_struct_chain_source, "helper-struct-chain", compute_semantics_helper_struct_chain_shader);
+  run_compute_case_with_boid_table(helper_struct_direct_assign_source, "helper-struct-direct-assign", compute_semantics_helper_struct_direct_assign_shader);
   run_compute_case(matrix_math_source, "matrix-math", compute_semantics_matrix_math_shader);
   run_compute_case(intrinsics_source, "intrinsics", compute_semantics_intrinsics_shader);
   log("IR compute semantics test passed (GPU output matches CPU reference for % elements).", ELEMENT_COUNT);
