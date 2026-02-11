@@ -61,6 +61,12 @@ validate_spirv_binary :: (spv_path: string) -> bool {
     .["spirv-val", "--target-env", "vulkan1.2", spv_path]);
 }
 
+optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool {
+  return ir_run_command_checked(
+    tprint("spirv-opt %", input_spv),
+    .["spirv-opt", "-O", input_spv, "-o", output_spv]);
+}
+
 spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
   if stage == .VERTEX return "vert";
   if stage == .FRAGMENT return "frag";

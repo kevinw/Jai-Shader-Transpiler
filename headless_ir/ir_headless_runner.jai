@@ -144,8 +144,6 @@ ir_headless_fragment_boost :: (x: float) -> float {
   }
 
   metal_vertex := get_transpiled(.METAL, ir_headless_vertex_main);
-  check_contains(metal_vertex, "[[vertex_id]]", "vertex metal output");
-  check_contains(metal_vertex, "[[instance_id]]", "vertex metal output");
 
   ir_slang_path := ".build/ir_slang/ir_headless_vertex_main_vert.slang";
   check_slang_file_if_present(ir_slang_path, "generated_by_ir_pipeline", "generated slang output");
@@ -241,6 +239,8 @@ ir_headless_fragment_boost :: (x: float) -> float {
   boids_pair := get_transpiled(.METAL, ir_headless_boids_vertex_main, ir_headless_boids_fragment_main);
   check_contains(boids_pair, "vertex", "boids-like pair metal output");
   check_contains(boids_pair, "fragment", "boids-like pair metal output");
+  check_contains(boids_pair, "[[vertex_id]]", "boids-like pair metal output");
+  check_contains(boids_pair, "[[instance_id]]", "boids-like pair metal output");
   boids_pair_ir_slang_path := ".build/ir_slang/__get_transpiled_pair__metal_ir_headless_boids_vertex_main_ir_headless_boids_fragment_main_pair.slang";
   check_slang_file_if_present(boids_pair_ir_slang_path, "ParameterBlock<IR_Boids_Params> params", "boids-like pair IR slang output");
   check_slang_file_if_present(boids_pair_ir_slang_path, "params.vertex_data.instances[", "boids-like pair IR slang output");

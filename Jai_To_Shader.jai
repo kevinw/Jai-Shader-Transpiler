@@ -710,6 +710,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   stage_short := ir_stage_short_from_context(ctx);
   source_path := tprint("%/%_%.slang", build_dir, ctx.name, stage_short);
   spv_path := tprint("%/%_%.spv", build_dir, ctx.name, stage_short);
+  spv_opt_path := tprint("%/%_%.opt.spv", build_dir, ctx.name, stage_short);
   output_ext := ifx ctx.language == .METAL then "metal" else "glsl";
   output_path := tprint("%/%_%.%", build_dir, ctx.name, stage_short, output_ext);
 
@@ -773,8 +774,19 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  if !validate_spirv_binary(spv_path) {
-    diag.message = tprint("SPIR-V backend: spirv-val failed for '%'. SPIR-V: %", ctx.name, spv_path);
+  spv_for_target := spv_path;
+  if !optimize_spirv_binary(spv_path, spv_opt_path) {
+    diag.message = tprint("SPIR-V backend: spirv-opt failed for '%'. SPIR-V: %", ctx.name, spv_path);
+    if ctx.main_fn && ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", "", false, diag;
+  }
+  spv_for_target = spv_opt_path;
+
+  if !validate_spirv_binary(spv_for_target) {
+    diag.message = tprint("SPIR-V backend: spirv-val failed for '%'. SPIR-V: %", ctx.name, spv_for_target);
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
       diag.has_location = true;
@@ -782,8 +794,8 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  if !emit_spirv_cross_target_source(spv_path, entry_name, stage, target, output_path) {
-    diag.message = tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", ctx.name, spv_path);
+  if !emit_spirv_cross_target_source(spv_for_target, entry_name, stage, target, output_path) {
+    diag.message = tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", ctx.name, spv_for_target);
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
       diag.has_location = true;
@@ -884,6 +896,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   fragment_spvasm_path := tprint("%/%_frag.spvasm", build_dir, pair_ctx.name);
   vertex_spv_path := tprint("%/%_vert.spv", build_dir, pair_ctx.name);
   fragment_spv_path := tprint("%/%_frag.spv", build_dir, pair_ctx.name);
+  vertex_opt_spv_path := tprint("%/%_vert.opt.spv", build_dir, pair_ctx.name);
+  fragment_opt_spv_path := tprint("%/%_frag.opt.spv", build_dir, pair_ctx.name);
   vertex_output_path := tprint("%/%_vert.metal", build_dir, pair_ctx.name);
   fragment_output_path := tprint("%/%_frag.metal", build_dir, pair_ctx.name);
   if !write_entire_file(vertex_spvasm_path, vertex_spvasm) || !write_entire_file(fragment_spvasm_path, fragment_spvasm) {
@@ -898,11 +912,19 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     diag.message = "SPIR-V backend: pair SPIR-V validation failed.";
     return "", false, diag;
   }
-  if !emit_spirv_cross_target_source(vertex_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path) {
+  if !optimize_spirv_binary(vertex_spv_path, vertex_opt_spv_path) || !optimize_spirv_binary(fragment_spv_path, fragment_opt_spv_path) {
+    diag.message = "SPIR-V backend: pair SPIR-V optimization failed.";
+    return "", false, diag;
+  }
+  if !validate_spirv_binary(vertex_opt_spv_path) || !validate_spirv_binary(fragment_opt_spv_path) {
+    diag.message = "SPIR-V backend: pair optimized SPIR-V validation failed.";
+    return "", false, diag;
+  }
+  if !emit_spirv_cross_target_source(vertex_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path) {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
   }
-  if !emit_spirv_cross_target_source(fragment_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path) {
+  if !emit_spirv_cross_target_source(fragment_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path) {
     diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
     return "", false, diag;
   }
