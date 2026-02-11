@@ -47,9 +47,9 @@ run_all_tests :: () {
   }
   if !use_slang_backend {
     // SPIR-V-Cross may fold local array literals, so validate indexed uniform usage instead.
-    check_file_contains(debug_path("array_support_vertex_shader.metal"), "un._m0[2u]");
-    check_file_contains(debug_path("array_support_vertex_shader.metal"), "un._m0[1u]");
-    check_file_contains(debug_path("array_support_fragment_shader.metal"), "un._m0[1u]");
+    check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[2u]", "un._m0[2u]"]);
+    check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[1u]", "un._m0[1u]"]);
+    check_file_contains_any(debug_path("array_support_fragment_shader.metal"), .["un.u_palette[1u]", "un._m0[1u]"]);
     check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(");
     check_file_contains(debug_path("tiles_fragment_shader.metal"), "gl_FragCoord");
   }
@@ -58,8 +58,8 @@ run_all_tests :: () {
   check_file_contains_any(debug_path("tiles_fragment_shader_vk.glsl"), .["layout (location=0) out", "layout(location = 0) out"]);
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout(set = 0, binding = 0");
   check_file_contains(debug_path("compute_write_indices_vk.glsl"), "std430");
-  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "layout(set = 0, binding = 0, std430) buffer params_vertex_data");
-  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "params_vertex_data_1");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "binding = 0, std430) buffer");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "params_vertex_data");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector2");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector3");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector4");

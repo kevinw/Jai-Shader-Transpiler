@@ -233,6 +233,17 @@ IR_SPV_Gen_Loop_Target :: struct {
   continue_label: s64;
 }
 
+IR_SPV_Gen_Debug_Name :: struct {
+  id: s64;
+  name: string;
+}
+
+IR_SPV_Gen_Debug_Member_Name :: struct {
+  type_id: s64;
+  member_index: s64;
+  name: string;
+}
+
 IR_SPV_Gen_State :: struct {
   next_id: s64;
   locals: [..] IR_SPV_Gen_Local;
@@ -250,7 +261,10 @@ IR_SPV_Gen_State :: struct {
   extra_structs: [..] IR_Struct;
   local_var_lines: [..] string;
   op_lines: [..] string;
+  debug_names: [..] IR_SPV_Gen_Debug_Name;
+  debug_member_names: [..] IR_SPV_Gen_Debug_Member_Name;
   stage: IR_SPV_Gen_Stage;
+  debug_type_prefix: string;
   output_struct_type_name: string;
   input_vars: [..] IR_SPV_Gen_Interface_Var;
   output_vars: [..] IR_SPV_Gen_Interface_Var;
@@ -323,6 +337,71 @@ add_op :: (s: *IR_SPV_Gen_State, line: string) {
 add_local_decl :: (s: *IR_SPV_Gen_State, line: string) {
   assert(s != null);
   array_add(*s.local_var_lines, line);
+}
+
+sanitize_debug_name :: (name: string) -> string {
+  if name.count == 0 return "";
+  out: String_Builder;
+  for name {
+    ch := it;
+    if ch == #char "\"" || ch == #char "\\" || ch == #char "\n" || ch == #char "\r" || ch == #char "\t" {
+      append(*out, "_");
+    } else {
+      append(*out, ch);
+    }
+  }
+  return builder_to_string(*out);
+}
+
+sanitize_identifier_name :: (name: string) -> string {
+  if name.count == 0 return "";
+  out: String_Builder;
+  for name {
+    ch := it;
+    is_lower := ch >= #char "a" && ch <= #char "z";
+    is_upper := ch >= #char "A" && ch <= #char "Z";
+    is_digit := ch >= #char "0" && ch <= #char "9";
+    if is_lower || is_upper || is_digit || ch == #char "_" {
+      append(*out, ch);
+    } else {
+      append(*out, "_");
+    }
+  }
+  result := builder_to_string(*out);
+  if result.count > 0 {
+    first := result[0];
+    if first >= #char "0" && first <= #char "9" {
+      result = tprint("_%", result);
+    }
+  }
+  return result;
+}
+
+debug_type_name :: (s: *IR_SPV_Gen_State, base: string) -> string {
+  assert(s != null);
+  base_name := sanitize_identifier_name(base);
+  prefix := sanitize_identifier_name(s.debug_type_prefix);
+  if prefix.count == 0 return base_name;
+  if base_name.count == 0 return prefix;
+  return tprint("%_%", prefix, base_name);
+}
+
+add_debug_name :: (s: *IR_SPV_Gen_State, id: s64, name: string) {
+  assert(s != null);
+  if id == 0 || name.count == 0 return;
+  safe_name := sanitize_debug_name(name);
+  if safe_name.count == 0 return;
+  for *s.debug_names if it.id == id return;
+  array_add(*s.debug_names, .{id=id, name=safe_name});
+}
+
+add_debug_member_name :: (s: *IR_SPV_Gen_State, type_id: s64, member_index: s64, name: string) {
+  assert(s != null);
+  if type_id == 0 || member_index < 0 || name.count == 0 return;
+  safe_name := sanitize_debug_name(name);
+  if safe_name.count == 0 return;
+  for *s.debug_member_names if it.type_id == type_id && it.member_index == member_index return;
+  array_add(*s.debug_member_names, .{type_id=type_id, member_index=member_index, name=safe_name});
 }
 
 find_by_name :: (arr: *[]$T, name: string) -> *T {
@@ -542,6 +621,9 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
         buffer_info.ptr_wrapper_type_id = new_id(s);
         buffer_info.ptr_storage_element_type_id = new_id(s);
         buffer_info.array_stride = byte_size_of_kind(elem_kind);
+        add_debug_name(s, buffer_info.runtimearr_type_id, debug_type_name(s, tprint("%_data_array", buffer_info.name)));
+        add_debug_name(s, buffer_info.wrapper_struct_type_id, debug_type_name(s, tprint("%_buffer", buffer_info.name)));
+        add_debug_member_name(s, buffer_info.wrapper_struct_type_id, 0, "data");
       }
       array_add(*s.buffers, buffer_info);
       continue;
@@ -581,9 +663,14 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
         type = field_type,
         offset = offset,
       });
+      add_debug_member_name(s, buffer_info.element_type_id, it_index, it.name);
       offset += field_size;
     }
     buffer_info.array_stride = offset;
+    add_debug_name(s, buffer_info.element_type_id, debug_type_name(s, buffer_info.element_type_name));
+    add_debug_name(s, buffer_info.runtimearr_type_id, debug_type_name(s, tprint("%_data_array", buffer_info.name)));
+    add_debug_name(s, buffer_info.wrapper_struct_type_id, debug_type_name(s, tprint("%_buffer", buffer_info.name)));
+    add_debug_member_name(s, buffer_info.wrapper_struct_type_id, 0, "data");
     array_add(*s.buffers, buffer_info);
   }
 
@@ -721,6 +808,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
     add_local_decl(s, tprint("         % = OpVariable % Function",
                              id_text(field_ptr),
                              id_text(field_ptr_type)));
+    add_debug_name(s, field_ptr, tprint("%.%", name, it.name));
     array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=field_type});
   }
 
@@ -1116,6 +1204,7 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
       add_local_decl(s, tprint("         % = OpVariable % Function",
                                id_text(arg_ptr),
                                id_text(arg_ptr_type_id)));
+      add_debug_name(s, arg_ptr, it.name);
       add_op(s, tprint("               OpStore % %", id_text(arg_ptr), id_text(final_value)));
       array_add(*s.locals, .{name=it.name, ptr_id=arg_ptr, type=arg_kind});
       continue;
@@ -1190,6 +1279,7 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
       add_local_decl(s, tprint("         % = OpVariable % Function",
                                id_text(field_ptr),
                                id_text(s.id_ptr_func_uint)));
+      add_debug_name(s, field_ptr, tprint("%.%", arg_local_struct.name, it.name));
       add_op(s, tprint("               OpStore % %", id_text(field_ptr), id_text(field_value)));
       array_add(*arg_local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=.UINT});
     }
@@ -1312,6 +1402,7 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
       add_local_decl(s, tprint("         % = OpVariable % Function",
                                id_text(arg_ptr),
                                id_text(arg_ptr_type)));
+      add_debug_name(s, arg_ptr, it.name);
       add_op(s, tprint("               OpStore % %", id_text(arg_ptr), id_text(final_value)));
       array_add(*s.locals, .{name=it.name, ptr_id=arg_ptr, type=arg_type});
       continue;
@@ -2303,6 +2394,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         add_local_decl(s, tprint("         % = OpVariable % Function",
                                  id_text(ptr_id),
                                  id_text(ptr_type_id)));
+        add_debug_name(s, ptr_id, stmt.decl_name);
         array_add(*s.locals, .{name=stmt.decl_name, ptr_id=ptr_id, type=decl_type});
         if stmt.decl_init {
           init_id, init_type, init_ok, init_diag := emit_expr(s, stmt.decl_init);
@@ -2327,9 +2419,12 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         array_type_id := new_id(s);
         ptr_func_array_type_id := new_id(s);
         ptr_id := new_id(s);
+        add_debug_name(s, array_type_id, tprint("%_array", stmt.decl_name));
+        add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", stmt.decl_name));
         add_local_decl(s, tprint("         % = OpVariable % Function",
                                  id_text(ptr_id),
                                  id_text(ptr_func_array_type_id)));
+        add_debug_name(s, ptr_id, stmt.decl_name);
         array_add(*s.local_arrays, .{
           name = stmt.decl_name,
           element_type = elem_type,
@@ -2399,6 +2494,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         add_local_decl(s, tprint("         % = OpVariable % Function",
                                  id_text(field_ptr),
                                  id_text(field_ptr_type)));
+        add_debug_name(s, field_ptr, tprint("%.%", stmt.decl_name, it.name));
         array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=field_type});
       }
 
@@ -2757,6 +2853,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       add_local_decl(s, tprint("         % = OpVariable % Function",
                                           id_text(loop_ptr),
                                           id_text(s.id_ptr_func_uint)));
+      add_debug_name(s, loop_ptr, loop_name);
       array_add(*s.locals, .{name=loop_name, ptr_id=loop_ptr, type=.UINT});
 
       start_id, start_type, start_ok, start_diag := emit_expr(s, stmt.for_start);
@@ -3013,6 +3110,8 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
 
   state: IR_SPV_Gen_State;
   state.stage = stage;
+  stage_prefix := ifx stage == .VERTEX then "vert" else ifx stage == .FRAGMENT then "frag" else "compute";
+  state.debug_type_prefix = tprint("%_%", stage_prefix, source_name);
   state.helpers = helpers;
   for extra_structs array_add(*state.extra_structs, it);
   array_add(*state.extra_structs, input);
@@ -3124,6 +3223,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         array_stride = 16; // std140-style stride for uniform arrays.
         array_length_const_id = get_u32_const(*state, cast(u32) array_count);
         array_type_id = new_id(*state);
+        add_debug_name(*state, array_type_id, debug_type_name(*state, tprint("%_%_array", uniform_block.type_name, field.name)));
         field_type_id = array_type_id;
         field_align = 16;
         field_size = array_stride * array_count;
@@ -3153,9 +3253,11 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         array_length_const_id = array_length_const_id,
         offset = offset,
       });
+      add_debug_member_name(*state, uniform_block.struct_type_id, uniform_block.fields.count-1, field.name);
       offset += field_size;
     }
     if uniform_block.fields.count == 0 continue;
+    add_debug_name(*state, uniform_block.struct_type_id, debug_type_name(*state, uniform_block.type_name));
     array_add(*state.uniform_blocks, uniform_block);
     binding_index += 1;
   }
@@ -3209,6 +3311,8 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   for state.output_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   for state.uniform_blocks append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
+  for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
+  for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
   append_interface_var_decorations(*sb, state.input_vars);
   append_interface_var_decorations(*sb, state.output_vars);
   append(*sb, tprint("               OpDecorate % ArrayStride 4\n", id_text(state.id_runtimearr_uint)));
@@ -3350,6 +3454,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   }
 
   state: IR_SPV_Gen_State;
+  state.debug_type_prefix = tprint("compute_%", shader.source_name);
   state.helpers = shader.helpers;
   for shader.extra_structs array_add(*state.extra_structs, it);
   init_ok, init_diag := init_base(*state, shader.buffers, bound_value);
@@ -3379,6 +3484,8 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   append(*sb, tprint("               OpName % \"ComputeMain\"\n", id_text(state.id_main)));
   append(*sb, tprint("               OpName % \"gl_GlobalInvocationID\"\n", id_text(state.id_gl_global_invocation_id)));
   for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
+  for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
+  for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
   append(*sb, tprint("               OpDecorate % BuiltIn GlobalInvocationId\n", id_text(state.id_gl_global_invocation_id)));
   append(*sb, tprint("               OpDecorate % ArrayStride 4\n", id_text(state.id_runtimearr_uint)));
   append(*sb, tprint("               OpDecorate % Block\n", id_text(state.id_buffer_struct)));
