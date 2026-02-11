@@ -12,6 +12,8 @@ Slang_Stage :: enum {
   COMPUTE;
 }
 
+SLANG_TIMEOUT_MS :: 15_000;
+
 slang_stage_name :: (stage: Slang_Stage) -> string {
   if stage == .VERTEX return "vertex";
   if stage == .FRAGMENT return "fragment";
@@ -19,10 +21,10 @@ slang_stage_name :: (stage: Slang_Stage) -> string {
 }
 
 ir_run_command_checked :: (description: string, args: [] string) -> bool {
-  result, output, error, timeout_reached := P.run_command(..args);
+  result, output, error, timeout_reached := P.run_command(..args, timeout_ms=SLANG_TIMEOUT_MS);
 
   if timeout_reached {
-    log_error("% timed out: %", description, P.get_quoted_command_string(args));
+    log_error("% timed out after %ms: %", description, SLANG_TIMEOUT_MS, P.get_quoted_command_string(args));
     return false;
   }
 

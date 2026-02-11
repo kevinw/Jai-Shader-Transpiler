@@ -246,7 +246,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       phase := cast(*Message_Phase) message;
       if phase.phase == .TYPECHECKED_ALL_WE_CAN {
         if plugin.use_ir_pipeline && !plugin.did_log_ir_pipeline {
-          log("Jai Shader Transpiler: IR Slang pipeline flag is enabled (-use_ir_pipeline). Current experimental subset is METAL vertex/fragment/compute shaders (including vertex+fragment pairs) with non-pointer/non-array interface types and simple bodies; other shaders use legacy backend path.");
+          log("Jai Shader Transpiler: IR Slang pipeline flag is enabled (-use_ir_pipeline). IR-only mode is active: unsupported shaders fail fast (no legacy fallback).");
           plugin.did_log_ir_pipeline = true;
         }
 
@@ -254,15 +254,17 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           s: string;
           used_ir_pipeline := false;
           if plugin.use_ir_pipeline {
-            s2, ok2 := write_shader_pair_ir_slang(pair_ctx);
+            s2, ok2, diag := write_shader_pair_ir_slang(pair_ctx);
             if ok2 {
               s = s2;
               used_ir_pipeline = true;
-            } else if pair_ctx.language == .METAL {
-              if !plugin.did_log_ir_limitations {
-                log("Jai Shader Transpiler: IR Slang pipeline fell back to legacy for at least one shader pair.");
-                plugin.did_log_ir_limitations = true;
-              }
+            } else {
+              report_message := tprint("Jai Shader Transpiler: IR-only mode failed for shader pair '%'. No legacy fallback is allowed in -use_ir_pipeline mode.", pair_ctx.name);
+              if diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, diag.message);
+              if diag.has_location compiler_report(report_message, diag.location);
+              else compiler_report(report_message, make_location(pair_ctx.vertex_fn.header));
+              remove pair_ctx;
+              continue;
             }
           }
 
@@ -294,15 +296,18 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           s: string;
           used_ir_pipeline := false;
           if plugin.use_ir_pipeline {
-            s2, ok2 := write_shader_single_ir_slang(ctx);
+            s2, ok2, diag := write_shader_single_ir_slang(ctx);
             if ok2 {
               s = s2;
               used_ir_pipeline = true;
-            } else if (ctx.type == .Vertex || ctx.type == .Fragment) && (ctx.language == .METAL || (ctx.language == .GLSL && ctx.glsl_target == .VULKAN)) {
-              if !plugin.did_log_ir_limitations {
-                log("Jai Shader Transpiler: IR Slang pipeline fell back to legacy for at least one shader.");
-                plugin.did_log_ir_limitations = true;
-              }
+            } else {
+              report_message := tprint("Jai Shader Transpiler: IR-only mode failed for shader '%' (%). No legacy fallback is allowed in -use_ir_pipeline mode.",
+                                       ctx.name, ctx.type);
+              if diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, diag.message);
+              if diag.has_location compiler_report(report_message, diag.location);
+              else compiler_report(report_message, make_location(ctx.main_fn.header));
+              remove ctx;
+              continue;
             }
           }
 
@@ -361,19 +366,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 ir_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
   if !ctx return false;
   if ctx.language != .METAL && !(ctx.language == .GLSL && ctx.glsl_target == .VULKAN) return false;
-  if ctx.type == .Vertex {
-    _, lowered := ir_lower_vertex_from_shader_context(ctx);
-    return lowered;
-  }
-  if ctx.type == .Fragment {
-    _, lowered := ir_lower_fragment_from_shader_context(ctx);
-    return lowered;
-  }
-  if ctx.type == .Compute {
-    _, lowered := ir_lower_compute_from_shader_context(ctx);
-    return lowered;
-  }
-  return false;
+  return ctx.type == .Vertex || ctx.type == .Fragment || ctx.type == .Compute;
 }
 
 ir_symbol_name_from_context :: (ctx: *Shader_Write_Context) -> string {
@@ -401,56 +394,85 @@ ir_target_from_context :: (ctx: *Shader_Write_Context) -> (Slang_Target, bool) {
   return .METAL, false;
 }
 
-write_shader_single_ir_slang :: (ctx: *Shader_Write_Context) -> (string, bool) {
-  if !ir_supports_single_context(ctx) return "", false;
+write_shader_single_ir_slang :: (ctx: *Shader_Write_Context) -> (string, bool, IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if !ir_supports_single_context(ctx) {
+    diag.message = "IR lowering: unsupported shader context/target combination.";
+    if ctx && ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
 
   stage, stage_ok := ir_stage_from_context(ctx);
   target, target_ok := ir_target_from_context(ctx);
-  if !stage_ok || !target_ok return "", false;
+  if !stage_ok || !target_ok {
+    diag.message = "IR lowering: unsupported shader stage/target combination.";
+    if ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
 
   slang_source: string;
   entry_name: string;
   if ctx.type == .Vertex {
-    ir_vertex, lowered := ir_lower_vertex_from_shader_context(ctx);
+    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(ctx);
     if !lowered {
       #if VERBOSE log("IR lowering failed for %", ctx.name);
-      return "", false;
+      return "", false, lowered_diag;
     }
     emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
     if !emitted {
       #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
-      return "", false;
+      diag.message = tprint("IR->Slang emission failed for vertex shader '%'.", ctx.name);
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+      return "", false, diag;
     }
     slang_source = emitted_source;
     entry_name = ir_vertex.entry_name;
   } else if ctx.type == .Fragment {
-    ir_fragment, lowered := ir_lower_fragment_from_shader_context(ctx);
+    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(ctx);
     if !lowered {
       #if VERBOSE log("IR lowering failed for %", ctx.name);
-      return "", false;
+      return "", false, lowered_diag;
     }
     emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
     if !emitted {
       #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
-      return "", false;
+      diag.message = tprint("IR->Slang emission failed for fragment shader '%'.", ctx.name);
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+      return "", false, diag;
     }
     slang_source = emitted_source;
     entry_name = ir_fragment.entry_name;
   } else if ctx.type == .Compute {
-    ir_compute, lowered := ir_lower_compute_from_shader_context(ctx);
+    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
     if !lowered {
       #if VERBOSE log("IR lowering failed for %", ctx.name);
-      return "", false;
+      return "", false, lowered_diag;
     }
     emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
     if !emitted {
       #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
-      return "", false;
+      diag.message = tprint("IR->Slang emission failed for compute shader '%'.", ctx.name);
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+      return "", false, diag;
     }
     slang_source = emitted_source;
     entry_name = ir_compute.entry_name;
   } else {
-    return "", false;
+    diag.message = "IR lowering: unsupported shader type.";
+    if ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
   }
 
   build_dir := ".build/ir_slang";
@@ -465,63 +487,97 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context) -> (string, bool) {
 
   if !write_entire_file(source_path, slang_source) {
     #if VERBOSE log("Failed writing IR Slang source %", source_path);
-    return "", false;
+    diag.message = tprint("IR pipeline: failed writing Slang source file '%'.", source_path);
+    return "", false, diag;
   }
 
-  if entry_name.count == 0 return "", false;
+  if entry_name.count == 0 {
+    diag.message = "IR pipeline: entry name is empty.";
+    if ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
   if !emit_slang_target_source(source_path, entry_name, stage, target, output_path) {
     #if VERBOSE log("Slang target emission failed for %", ctx.name);
-    return "", false;
+    diag.message = tprint("IR pipeline: Slang target emission failed for shader '%'.", ctx.name);
+    if ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
   }
 
   target_source, ok := read_entire_file(output_path);
-  if !ok return "", false;
+  if !ok {
+    diag.message = tprint("IR pipeline: failed reading emitted target source '%'.", output_path);
+    return "", false, diag;
+  }
   if ctx.type == .Compute && ctx.language == .METAL {
     target_source = replace(target_source, "[[kernel]] void", "kernel void");
   }
 
   symbol_name := ir_symbol_name_from_context(ctx);
   decl := tprint("% :: #string END\n%\nEND", symbol_name, target_source);
-  return decl, true;
+  return decl, true, diag;
 }
 
 ir_supports_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> bool {
   if !pair_ctx return false;
   if pair_ctx.language != .METAL return false;
-  if !pair_ctx.vertex_fn || !pair_ctx.fragment_fn return false;
-
-  vertex_ctx := create_shader_write_context(.METAL, pair_ctx.vertex_fn, pair_ctx.glsl_target);
-  fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
-  _, vertex_ok := ir_lower_vertex_from_shader_context(*vertex_ctx);
-  _, fragment_ok := ir_lower_fragment_from_shader_context(*fragment_ctx);
-  return vertex_ok && fragment_ok;
+  return pair_ctx.vertex_fn != null && pair_ctx.fragment_fn != null;
 }
 
-write_shader_pair_ir_slang :: (pair_ctx: *Shader_Write_Pair_Context) -> (string, bool) {
-  if !ir_supports_pair_context(pair_ctx) return "", false;
+write_shader_pair_ir_slang :: (pair_ctx: *Shader_Write_Pair_Context) -> (string, bool, IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if !ir_supports_pair_context(pair_ctx) {
+    diag.message = "IR lowering: unsupported shader pair context/target combination.";
+    if pair_ctx && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+      diag.location = make_location(pair_ctx.vertex_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
 
   vertex_ctx := create_shader_write_context(.METAL, pair_ctx.vertex_fn, pair_ctx.glsl_target);
   fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
-  ir_vertex, vertex_ok := ir_lower_vertex_from_shader_context(*vertex_ctx);
-  if !vertex_ok return "", false;
-  ir_fragment, fragment_ok := ir_lower_fragment_from_shader_context(*fragment_ctx);
-  if !fragment_ok return "", false;
+  ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(*vertex_ctx);
+  if !vertex_ok return "", false, vertex_diag;
+  ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(*fragment_ctx);
+  if !fragment_ok return "", false, fragment_diag;
 
   slang_source, emitted := emit_ir_graphics_pair_to_slang(ir_vertex, ir_fragment);
-  if !emitted return "", false;
+  if !emitted {
+    diag.message = tprint("IR->Slang emission failed for shader pair '%'.", pair_ctx.name);
+    diag.location = make_location(pair_ctx.vertex_fn.header);
+    diag.has_location = true;
+    return "", false, diag;
+  }
 
   build_dir := ".build/ir_slang";
   make_directory_if_it_does_not_exist(build_dir, recursive=true);
 
   source_path := tprint("%/%_pair.slang", build_dir, pair_ctx.name);
   output_path := tprint("%/%_pair.metal", build_dir, pair_ctx.name);
-  if !write_entire_file(source_path, slang_source) return "", false;
-  if !emit_slang_module_target_source(source_path, .METAL, output_path) return "", false;
+  if !write_entire_file(source_path, slang_source) {
+    diag.message = tprint("IR pipeline: failed writing Slang source file '%'.", source_path);
+    return "", false, diag;
+  }
+  if !emit_slang_module_target_source(source_path, .METAL, output_path) {
+    diag.message = tprint("IR pipeline: Slang module emission failed for pair '%'.", pair_ctx.name);
+    diag.location = make_location(pair_ctx.vertex_fn.header);
+    diag.has_location = true;
+    return "", false, diag;
+  }
 
   target_source, ok := read_entire_file(output_path);
-  if !ok return "", false;
+  if !ok {
+    diag.message = tprint("IR pipeline: failed reading emitted target source '%'.", output_path);
+    return "", false, diag;
+  }
   decl := tprint("%_metal_string :: #string END\n%\nEND", pair_ctx.name, target_source);
-  return decl, true;
+  return decl, true, diag;
 }
 
 shader_request_name_to_language :: (name: string) -> (Shader_Language, GLSL_Target, bool) {

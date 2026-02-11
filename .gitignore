@@ -16,3 +16,6 @@ headless/ir_toolchain_headless_runner
 headless/option1_headless_runner
 headless_ir/ir_compute_semantics_runner
 headless_ir/ir_headless_runner
+ir_smoke_metal_pair
+ir_smoke_vk_bindless
+ir_smoke_vk_compute

@@ -1,6 +1,7 @@
 #import "Basic";
 #import "File";
 #import "String";
+#import "Math";
 #import "Metal";
 #import "Objective_C";
 #import "Compiler";
@@ -9,7 +10,6 @@
 
 ELEMENT_COUNT :: 64;
 UVector3 :: struct { x, y, z: u32; }
-Vector2 :: struct { x, y: float; }
 
 Compute_Boid_State :: struct {
   pos: Vector2;
@@ -248,6 +248,29 @@ compute_semantics_helper_struct_chain_shader :: (using in: Compute_Semantics_In,
   }
 } @compute_shader
 
+compute_semantics_matrix_math_shader :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x < 64 {
+    idx := thread_id.x;
+    m := Matrix2.{2.0, 1.0, -1.0, 3.0};
+    v := Vector2.{cast(float) (idx % 8), cast(float) ((idx * 3) % 7)};
+    r := m * v;
+    values[idx] = cast(u32) (r.x * 4.0 + r.y * 2.0 + 17.0);
+  }
+} @compute_shader
+
+compute_semantics_intrinsics_shader :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x < 64 {
+    idx := thread_id.x;
+    x := cast(float) (idx % 16);
+    a := floor(x * 0.5);
+    b := min(max(x - 3.0, 0.0), 5.0);
+    c := abs(x - 7.0);
+    d := sqrt((x + 1.0) * (x + 1.0));
+    e := sin(0.0) + cos(0.0);
+    values[idx] = cast(u32) (a + b + c + d + e);
+  }
+} @compute_shader
+
 log_nserror :: (label: string, error: *NSError) -> bool {
   if !error return false;
   desc := NSError.localizedDescription(error);
@@ -431,6 +454,8 @@ main :: () {
   _ = get_transpiled(.METAL, compute_semantics_vector_index_shader);
   _ = get_transpiled(.METAL, compute_semantics_access_chain_shader);
   _ = get_transpiled(.METAL, compute_semantics_helper_struct_chain_shader);
+  _ = get_transpiled(.METAL, compute_semantics_matrix_math_shader);
+  _ = get_transpiled(.METAL, compute_semantics_intrinsics_shader);
 
   compute_source := get_transpiled(.METAL, compute_semantics_shader);
   loop_source := get_transpiled(.METAL, compute_semantics_loop_shader);
@@ -448,6 +473,8 @@ main :: () {
   vector_index_source := get_transpiled(.METAL, compute_semantics_vector_index_shader);
   access_chain_source := get_transpiled(.METAL, compute_semantics_access_chain_shader);
   helper_struct_chain_source := get_transpiled(.METAL, compute_semantics_helper_struct_chain_shader);
+  matrix_math_source := get_transpiled(.METAL, compute_semantics_matrix_math_shader);
+  intrinsics_source := get_transpiled(.METAL, compute_semantics_intrinsics_shader);
 
   ir_slang_path := ".build/ir_slang/compute_semantics_shader_comp.slang";
   ir_slang_source, ir_slang_ok := read_entire_file(ir_slang_path);
@@ -569,6 +596,25 @@ main :: () {
   check_contains(helper_struct_chain_ir_slang_source, ".pos.x", "compute helper-struct-chain IR slang output");
   check_contains(helper_struct_chain_ir_slang_source, ".pos.y", "compute helper-struct-chain IR slang output");
 
+  matrix_math_ir_slang_path := ".build/ir_slang/compute_semantics_matrix_math_shader_comp.slang";
+  matrix_math_ir_slang_source, matrix_math_ir_ok := read_entire_file(matrix_math_ir_slang_path);
+  if !matrix_math_ir_ok fail("Could not read %", matrix_math_ir_slang_path);
+  check_contains(matrix_math_ir_slang_source, "generated_by_ir_pipeline", "compute matrix-math IR slang output");
+  check_contains(matrix_math_ir_slang_source, "float2x2", "compute matrix-math IR slang output");
+  check_contains(matrix_math_ir_slang_source, "mul(", "compute matrix-math IR slang output");
+
+  intrinsics_ir_slang_path := ".build/ir_slang/compute_semantics_intrinsics_shader_comp.slang";
+  intrinsics_ir_slang_source, intrinsics_ir_ok := read_entire_file(intrinsics_ir_slang_path);
+  if !intrinsics_ir_ok fail("Could not read %", intrinsics_ir_slang_path);
+  check_contains(intrinsics_ir_slang_source, "generated_by_ir_pipeline", "compute intrinsics IR slang output");
+  check_contains(intrinsics_ir_slang_source, "floor(", "compute intrinsics IR slang output");
+  check_contains(intrinsics_ir_slang_source, "min(", "compute intrinsics IR slang output");
+  check_contains(intrinsics_ir_slang_source, "max(", "compute intrinsics IR slang output");
+  check_contains(intrinsics_ir_slang_source, "abs(", "compute intrinsics IR slang output");
+  check_contains(intrinsics_ir_slang_source, "sqrt(", "compute intrinsics IR slang output");
+  check_contains(intrinsics_ir_slang_source, "sin(", "compute intrinsics IR slang output");
+  check_contains(intrinsics_ir_slang_source, "cos(", "compute intrinsics IR slang output");
+
   init_objective_c();
   init_metal();
 
@@ -600,5 +646,7 @@ main :: () {
   run_compute_case_with_boid_table(vector_index_source, "vector-index", compute_semantics_vector_index_shader);
   run_compute_case_with_boid_table(access_chain_source, "access-chain", compute_semantics_access_chain_shader);
   run_compute_case_with_boid_table(helper_struct_chain_source, "helper-struct-chain", compute_semantics_helper_struct_chain_shader);
+  run_compute_case(matrix_math_source, "matrix-math", compute_semantics_matrix_math_shader);
+  run_compute_case(intrinsics_source, "intrinsics", compute_semantics_intrinsics_shader);
   log("IR compute semantics test passed (GPU output matches CPU reference for % elements).", ELEMENT_COUNT);
 }

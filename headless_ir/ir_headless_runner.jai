@@ -258,7 +258,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
   boids_pair_ir_slang_path := ".build/ir_slang/__get_transpiled_pair__metal_ir_headless_boids_vertex_main_ir_headless_boids_fragment_main_pair.slang";
   boids_pair_ir_slang_source, boids_pair_ir_ok := read_entire_file(boids_pair_ir_slang_path);
   if !boids_pair_ir_ok fail("Could not read %", boids_pair_ir_slang_path);
-  check_contains(boids_pair_ir_slang_source, "IR_Boids_Params params", "boids-like pair IR slang output");
+  check_contains(boids_pair_ir_slang_source, "ParameterBlock<IR_Boids_Params> params", "boids-like pair IR slang output");
   check_contains(boids_pair_ir_slang_source, "params.vertex_data.instances[", "boids-like pair IR slang output");
   check_contains(boids_pair_ir_slang_source, "params.fragment_data.color[", "boids-like pair IR slang output");
   boids_pair_path := tprint("%/ir_boids_like_pair.metal", HEADLESS_IR_DIR);
