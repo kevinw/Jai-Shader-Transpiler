@@ -3,6 +3,7 @@
 #import "Metal";
 #import "Objective_C";
 Process :: #import "Process";
+String :: #import "String";
 
 #import,file "../module.jai";
 
@@ -38,9 +39,26 @@ compute_branch_shader_alt :: (using in: Compute_Semantics_In, values: *u32) {
   }
 } @compute_shader
 
+compute_min_shader :: (using in: Compute_Semantics_In, values: *u32) {
+  idx := thread_id.x;
+  values[idx] = values[idx] + 1;
+} @compute_shader
+
 fail :: (message: string, args: .. Any) {
   log_error(message, ..args);
   exit(1);
+}
+
+check_contains :: (source: string, pattern: string, where: string) {
+  ok, _ := String.contains(source, pattern);
+  if !ok fail("Expected '%' in %", pattern, where);
+}
+
+check_spvasm_is_generic :: (shader_name: string) {
+  spvasm_path := tprint(".build/ir_slang/%_comp.spvasm", shader_name);
+  source, ok := read_entire_file(spvasm_path);
+  if !ok fail("Could not read generated SPIR-V text at %", spvasm_path);
+  check_contains(source, "Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1", spvasm_path);
 }
 
 run_command_checked :: (description: string, args: [] string) {
@@ -162,6 +180,7 @@ main :: () {
 
     metal_source := get_transpiled(.METAL, compute_branch_shader);
     vulkan_glsl_source := get_transpiled(.VULKAN_GLSL, compute_branch_shader);
+    check_spvasm_is_generic("compute_branch_shader");
 
     if !write_entire_file(metal_path, metal_source) fail("Could not write %", metal_path);
     if !write_entire_file(vulkan_glsl_path, vulkan_glsl_source) fail("Could not write %", vulkan_glsl_path);
@@ -183,6 +202,7 @@ main :: () {
 
     metal_source := get_transpiled(.METAL, compute_branch_shader_alt);
     vulkan_glsl_source := get_transpiled(.VULKAN_GLSL, compute_branch_shader_alt);
+    check_spvasm_is_generic("compute_branch_shader_alt");
 
     if !write_entire_file(metal_path, metal_source) fail("Could not write %", metal_path);
     if !write_entire_file(vulkan_glsl_path, vulkan_glsl_source) fail("Could not write %", vulkan_glsl_path);
@@ -193,6 +213,28 @@ main :: () {
       .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", "comp", vulkan_glsl_path]);
 
     run_metal_compute_and_compare(metal_path, metal_source, case_name, compute_branch_shader_alt);
+  }
+
+  // Case: min (smallest shape, no branches).
+  {
+    case_name :: "min";
+    metal_path := tprint("%/%_metal.comp.metal", SPIRV_OUT_DIR, case_name);
+    vulkan_glsl_path := tprint("%/%_vk.comp.glsl", SPIRV_OUT_DIR, case_name);
+    air_path := tprint("%/%_metal.comp.air", SPIRV_OUT_DIR, case_name);
+
+    metal_source := get_transpiled(.METAL, compute_min_shader);
+    vulkan_glsl_source := get_transpiled(.VULKAN_GLSL, compute_min_shader);
+    check_spvasm_is_generic("compute_min_shader");
+
+    if !write_entire_file(metal_path, metal_source) fail("Could not write %", metal_path);
+    if !write_entire_file(vulkan_glsl_path, vulkan_glsl_source) fail("Could not write %", vulkan_glsl_path);
+
+    run_command_checked(tprint("[%] Compile generated Metal source", case_name),
+      .["xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-c", metal_path, "-o", air_path]);
+    run_command_checked(tprint("[%] Compile generated Vulkan GLSL", case_name),
+      .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", "comp", vulkan_glsl_path]);
+
+    run_metal_compute_and_compare(metal_path, metal_source, case_name, compute_min_shader);
   }
 
   log("[SPIR-V][compute] Passed plugin path: Jai -> IR -> SPIR-V -> spirv-cross -> Metal/GLSL + GPU match.");
