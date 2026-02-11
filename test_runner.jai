@@ -8,6 +8,7 @@ DEBUG_OUTDIR :: ".generated_shaders";
 
 run_all_tests :: () {
   log("Running tests...");
+  run_command_checked("Clean legacy GLSL SPIR-V outputs", .["rm", "-f", "frag.spv", "vert.spv", "comp.spv"]);
   run_command_checked("Clean IR Slang output dirs", .["rm", "-rf", ".build/ir_slang", "headless_ir/.build/ir_slang"]);
   run_command_checked("Run headless IR smoke tests", .["bash", "headless_ir/test_ir_headless.sh"]);
   run_command_checked("Run headless IR compute semantics tests", .["bash", "headless_ir/test_ir_compute_semantics.sh"]);
@@ -219,14 +220,21 @@ compile_generated_glsl_shaders :: () {
         is_vulkan_glsl := false;
         found, _ := contains(it, "_vk.glsl");
         if found is_vulkan_glsl = true;
+        stem := path_filename(it);
+        if ends_with(stem, ".glsl") {
+            stem.count -= ".glsl".count;
+        }
+        spv_path := tprint("%/%.spv", DEBUG_OUTDIR, stem);
 
         if is_vulkan_glsl {
             run_command_checked(tprint("Compile Vulkan GLSL %", it),
-                .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", stage, it]);
+                .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", stage, it, "-o", spv_path]);
         } else {
             run_command_checked(tprint("Compile GLSL %", it),
-                .["glslangValidator", "-S", stage, it]);
+                .["glslangValidator", "-S", stage, it, "-o", spv_path]);
         }
+        assert(spv_path[0] != #char "/");
+        run_command_checked(tprint("Delete GLSL SPIR-V output %", spv_path), .["rm", "-f", spv_path]);
     }
 }
 
