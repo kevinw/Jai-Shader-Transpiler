@@ -5,10 +5,8 @@
 // This should be an import for actual apps
 #load "../Jai_To_Shader.jai";
 
-_request_testing_vertex_hlsl :: testing_vertex_shader; @shader_to_hlsl
-
 main :: () {
-  print("Vertex Shader:\n%\n\n=========\n\n", testing_vertex_shader_string);
+  print("Vertex Shader:\n%\n\n=========\n\n", get_transpiled(.HLSL, testing_vertex_shader));
   // print("Fragment Shader:\n%\n", testing_fragment_shader_string);
 }
 

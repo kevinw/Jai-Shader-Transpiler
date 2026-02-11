@@ -13,12 +13,20 @@
     if it == "-run_tests" run_tests = true;
   }
 
-  build("example/glsl_example.jai", "glsl_example");
-  build("example/cpu_example.jai", "cpu_example");
-  build("example/hlsl_example.jai", "hlsl_example");
-  build("example/vulkan_example.jai", "vulkan_example");
-  #if OS == .MACOS {
-    build("example/metal_example.jai", "metal_example");
+  {
+    start_time := current_time_monotonic();
+    defer {
+      elapsed_time := to_float64_seconds(current_time_monotonic() - start_time);
+      log("All examples built in %s", elapsed_time);
+    }
+    
+    build("example/glsl_example.jai", "glsl_example");
+    build("example/cpu_example.jai", "cpu_example");
+    build("example/hlsl_example.jai", "hlsl_example");
+    build("example/vulkan_example.jai", "vulkan_example");
+    #if OS == .MACOS {
+      build("example/metal_example.jai", "metal_example");
+    }
   }
 
   if run_tests {
@@ -72,7 +80,10 @@ build :: (build_file: string, output_exe_name: string) {
   defer compiler_end_intercept(w);
   add_build_file(build_file, w);
   compile_ok := message_loop(w, jai_to_shader_plugin);
-  if compile_ok && autorun {
+  if !compile_ok {
+    exit(1);
+  }
+  if autorun {
     run_command(output_exe_name);
   }
 }

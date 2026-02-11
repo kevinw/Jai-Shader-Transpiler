@@ -13,27 +13,18 @@ Input :: #import "Input";
 #load "example_gl_backend.jai";
 #load "example_common.jai";
 
-_request_tiles_vertex_glsl :: tiles_vertex_shader; @shader_to_glsl
-_request_tiles_fragment_glsl :: tiles_fragment_shader; @shader_to_glsl
-_request_array_vertex_glsl :: array_support_vertex_shader; @shader_to_glsl
-_request_array_fragment_glsl :: array_support_fragment_shader; @shader_to_glsl
-_request_compute_glsl :: compute_write_indices; @shader_to_glsl
-
 run_gl_compute_sanity_check :: () -> bool {
   #if OS == .MACOS {
     log("Skipping GLSL compute runtime check on macOS (OpenGL 4.1 does not support compute shaders).");
     return true;
   }
 
-  _ = compute_write_indices;
-  _ = compute_write_indices_string;
-
   program := glCreateProgram();
   compute_module := glCreateShader(GL_COMPUTE_SHADER);
   defer glDeleteProgram(program);
   defer glDeleteShader(compute_module);
 
-  source := compute_write_indices_string;
+  source := get_transpiled(.OPENGL_GLSL, compute_write_indices);
   glShaderSource(compute_module, 1, *source.data, xx *source.count);
   glCompileShader(compute_module);
 
@@ -93,6 +84,12 @@ run_gl_compute_sanity_check :: () -> bool {
 }
 
 main :: () {
+  _ = get_transpiled(.OPENGL_GLSL, tiles_vertex_shader);
+  _ = get_transpiled(.OPENGL_GLSL, tiles_fragment_shader);
+  _ = get_transpiled(.OPENGL_GLSL, array_support_vertex_shader);
+  _ = get_transpiled(.OPENGL_GLSL, array_support_fragment_shader);
+  _ = get_transpiled(.OPENGL_GLSL, compute_write_indices);
+
   args_ok, args, is_set := parse_arguments(struct { singleframe: bool; test_readback: bool; });
   singleframe := args_ok && is_set.singleframe;
   test_readback := args_ok && is_set.test_readback;
@@ -108,8 +105,8 @@ main :: () {
   // Force array support test shaders to typecheck and generate.
   _ := array_support_vertex_shader(.{}, .{});
   _ = array_support_fragment_shader(.{}, .{});
-  _ = array_support_vertex_shader_string;
-  _ = array_support_fragment_shader_string;
+  _ = get_transpiled(.OPENGL_GLSL, array_support_vertex_shader);
+  _ = get_transpiled(.OPENGL_GLSL, array_support_fragment_shader);
 
   vao: u32;
   buffer: u32;
@@ -136,8 +133,8 @@ main :: () {
   shader = glCreateProgram();
   vert_module := glCreateShader(GL_VERTEX_SHADER);
   frag_module := glCreateShader(GL_FRAGMENT_SHADER);
-  vscode := tiles_vertex_shader_string;
-  fscode := tiles_fragment_shader_string;
+  vscode := get_transpiled(.OPENGL_GLSL, tiles_vertex_shader);
+  fscode := get_transpiled(.OPENGL_GLSL, tiles_fragment_shader);
   glShaderSource(vert_module, 1, *vscode.data, xx *vscode.count);
   glShaderSource(frag_module, 1, *fscode.data, xx *fscode.count);
   glCompileShader(vert_module);

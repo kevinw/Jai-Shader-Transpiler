@@ -11,10 +11,6 @@ using Vulkan;
 #load "vulkan_shaders.jai";
 #load "example_common.jai";
 
-_request_tiles_vertex_vulkan :: tiles_vertex_shader_vk; @shader_to_vulkan
-_request_tiles_fragment_vulkan :: tiles_fragment_shader_vk; @shader_to_vulkan
-_request_compute_vulkan :: compute_write_indices_vk; @shader_to_vulkan
-
 SDL_Vulkan_LoadLibrary :: (path: *u8) -> s32 #foreign SDL2;
 SDL_Vulkan_UnloadLibrary :: () #foreign SDL2;
 SDL_Vulkan_GetInstanceExtensions :: (window: *SDL_Window, pCount: *u32, pNames: **u8) -> SDL_bool #foreign SDL2;
@@ -141,6 +137,10 @@ choose_present_mode :: (modes: [] VkPresentModeKHR) -> VkPresentModeKHR {
 }
 
 main :: () {
+    _ = get_transpiled(.VULKAN_GLSL, tiles_vertex_shader_vk);
+    _ = get_transpiled(.VULKAN_GLSL, tiles_fragment_shader_vk);
+    _ = get_transpiled(.VULKAN_GLSL, compute_write_indices_vk);
+
     args_ok, args, is_set := parse_arguments(struct { single_frame: bool; test_readback: bool; });
     single_frame := args_ok && is_set.single_frame;
     test_readback := args_ok && is_set.test_readback;
@@ -155,9 +155,9 @@ main :: () {
         fail("Failed to create output directory %", output_dir);
     }
 
-    vertex_glsl := write_shader_source(output_dir, "tiles_vertex_shader_vk", "vert.glsl", tiles_vertex_shader_vk_string);
-    fragment_glsl := write_shader_source(output_dir, "tiles_fragment_shader_vk", "frag.glsl", tiles_fragment_shader_vk_string);
-    compute_glsl := write_shader_source(output_dir, "compute_write_indices_vk", "comp.glsl", compute_write_indices_vk_string);
+    vertex_glsl := write_shader_source(output_dir, "tiles_vertex_shader_vk", "vert.glsl", get_transpiled(.VULKAN_GLSL, tiles_vertex_shader_vk));
+    fragment_glsl := write_shader_source(output_dir, "tiles_fragment_shader_vk", "frag.glsl", get_transpiled(.VULKAN_GLSL, tiles_fragment_shader_vk));
+    compute_glsl := write_shader_source(output_dir, "compute_write_indices_vk", "comp.glsl", get_transpiled(.VULKAN_GLSL, compute_write_indices_vk));
 
     vertex_spv := compile_glsl_to_spirv(vertex_glsl, "vert");
     fragment_spv := compile_glsl_to_spirv(fragment_glsl, "frag");

@@ -13,6 +13,13 @@
 VERBOSE      :: false;
 DEBUG_OUTDIR :: ".generated_shaders";
 
+Transpiled_Target :: enum {
+  METAL;
+  HLSL;
+  OPENGL_GLSL;
+  VULKAN_GLSL;
+}
+
 #load "backend_shared.jai";
 #load "glsl_backend.jai";
 #load "hlsl_backend.jai";
@@ -28,7 +35,18 @@ Jai_To_Shader_Plugin :: struct {
       currently_waiting_contexts: [..] Shader_Write_Context;
       currently_waiting_pair_contexts: [..] Shader_Write_Pair_Context;
       pending_request_declarations: [..] *Code_Declaration;
+      known_procedure_bodies: [..] *Code_Procedure_Body;
+      generated_module_import: *Message_Import;
+      lookup_entries: [..] Transpiled_Lookup_Entry;
+      did_emit_lookup_overloads: bool;
     }
+}
+
+Transpiled_Lookup_Entry :: struct {
+  target_name: string;
+  primary_name: string;
+  secondary_name: string;
+  symbol_name: string;
 }
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
@@ -39,19 +57,174 @@ get_plugin :: () -> *Jai_To_Shader_Plugin {
   return p;
 }
 
+Generated_Shader_Strings_Module :: #import "generated";
+
+get_transpiled_requests_seen: Table(string, bool);
+
+expression_to_source_string :: (node: *Code_Node) -> string {
+  sb: String_Builder;
+  PP.print_expression(*sb, node);
+  return builder_to_string(*sb);
+}
+
+transpiled_target_from_expr_string :: (expr: string) -> (single_note: string, pair_note: string, supports_pair: bool, is_metal: bool, ok: bool) {
+  if expr == {
+    case ".METAL";       return "shader_to_metal",  "shader_pair_to_metal",  true,  true,  true;
+    case ".HLSL";        return "shader_to_hlsl",   "",                      false, false, true;
+    case ".OPENGL_GLSL"; return "shader_to_glsl",   "shader_pair_to_glsl",   true,  false, true;
+    case ".VULKAN_GLSL"; return "shader_to_vulkan", "shader_pair_to_vulkan", true,  false, true;
+  }
+  return "", "", false, false, false;
+}
+
+shader_name_from_call_arg :: (arg: *Code_Node) -> (string, bool) {
+  if !arg return "", false;
+  if arg.kind == {
+    case .IDENT;
+      ident := cast(*Code_Ident) arg;
+      return ident.name, true;
+    case .PROCEDURE_BODY;
+      proc := cast(*Code_Procedure_Body) arg;
+      return proc.header.name, true;
+    case .PROCEDURE_HEADER;
+      header := cast(*Code_Procedure_Header) arg;
+      return header.name, true;
+  }
+
+  expr := trim_ascii_whitespace(expression_to_source_string(arg));
+  if expr.count == 0 return "", false;
+
+  end := expr.count - 1;
+  while end >= 0 {
+    ch := expr[end];
+    if (ch >= #char "a" && ch <= #char "z") || (ch >= #char "A" && ch <= #char "Z") || (ch >= #char "0" && ch <= #char "9") || ch == #char "_" {
+      break;
+    }
+    end -= 1;
+  }
+  if end < 0 return "", false;
+
+  start := end;
+  while start >= 0 {
+    ch := expr[start];
+    if !((ch >= #char "a" && ch <= #char "z") || (ch >= #char "A" && ch <= #char "Z") || (ch >= #char "0" && ch <= #char "9") || ch == #char "_") {
+      break;
+    }
+    start -= 1;
+  }
+  start += 1;
+
+  name: string;
+  name.data = expr.data + start;
+  name.count = end - start + 1;
+  if name.count == 0 return "", false;
+  return name, true;
+}
+
+sanitize_identifier_component :: (in: string) -> string {
+  out := copy_string(in);
+  out = replace(out, ".", "_");
+  out = replace(out, " ", "_");
+  out = replace(out, "(", "_");
+  out = replace(out, ")", "_");
+  out = replace(out, ",", "_");
+  return out;
+}
+
+ensure_get_transpiled_request_registered :: (key: string, source: string) #compile_time {
+  found, _ := table_find(*get_transpiled_requests_seen, key);
+  if found return;
+  table_add(*get_transpiled_requests_seen, key, true);
+  add_build_string(source, get_current_workspace());
+}
+
+get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) -> string #compile_time {
+  root := compiler_get_nodes(call);
+  if root.kind != .PROCEDURE_CALL {
+    compiler_report("Jai Shader Transpiler: get_transpiled must be called directly (e.g. get_transpiled(.METAL, vertex_fn, fragment_fn)).", loc=loc);
+    return "";
+  }
+
+  pc := cast(*Code_Procedure_Call) root;
+  if pc.arguments_unsorted.count != 2 && pc.arguments_unsorted.count != 3 {
+    compiler_report("Jai Shader Transpiler: get_transpiled expects 2 args (target, stage_fn) or 3 args (target, vertex_fn, fragment_fn).", loc=loc);
+    return "";
+  }
+
+  target_expr := trim_ascii_whitespace(expression_to_source_string(pc.arguments_unsorted[0].expression));
+  target_ident := sanitize_identifier_component(target_expr);
+  single_note, pair_note, supports_pair, _, target_ok := transpiled_target_from_expr_string(target_expr);
+  if !target_ok {
+    compiler_report("Jai Shader Transpiler: First argument to get_transpiled must be .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.", loc=loc);
+    return "";
+  }
+
+  shader_name, shader_ok := shader_name_from_call_arg(pc.arguments_unsorted[1].expression);
+  if !shader_ok {
+    compiler_report("Jai Shader Transpiler: get_transpiled shader arguments must be procedure identifiers.", loc=loc);
+    return "";
+  }
+
+  if pc.arguments_unsorted.count == 2 {
+    request_name := tprint("__get_transpiled_single_%_%", target_ident, shader_name);
+    to_lower_in_place(request_name);
+    key := tprint("single|%|%", single_note, shader_name);
+    request_source := tprint("% :: %; @%\n", request_name, shader_name, single_note);
+    ensure_get_transpiled_request_registered(key, request_source);
+    return tprint("G.lookup_transpiled(\"%\", \"%\", \"\")", target_expr, shader_name);
+  }
+
+  if !supports_pair {
+    compiler_report("Jai Shader Transpiler: get_transpiled target does not support paired graphics shaders for this backend.", loc=loc);
+    return "";
+  }
+
+  fragment_name, fragment_ok := shader_name_from_call_arg(pc.arguments_unsorted[2].expression);
+  if !fragment_ok {
+    compiler_report("Jai Shader Transpiler: get_transpiled fragment argument must be a procedure identifier.", loc=loc);
+    return "";
+  }
+
+  request_name := tprint("__get_transpiled_pair_%_%_%", target_ident, shader_name, fragment_name);
+  to_lower_in_place(request_name);
+  key := tprint("pair|%|%|%", pair_note, shader_name, fragment_name);
+  request_source := tprint("% :: %; @%(%)\n", request_name, shader_name, pair_note, fragment_name);
+  ensure_get_transpiled_request_registered(key, request_source);
+  return tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", target_expr, shader_name, fragment_name);
+}
+
+get_transpiled :: (target: Transpiled_Target, args: ..Any, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> string #expand {
+  #insert #run tprint("G :: #import \"generated\";\nreturn %;",
+                      get_transpiled_result_expr_from_call(call, loc));
+}
+
 convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
   plugin := cast(*Jai_To_Shader_Plugin) p;
 
   if message.kind == {
+    case .IMPORT; {
+      import_message := cast(*Message_Import) message;
+      if import_message.module_name == "generated" || import_message.module_name == "Jai-Shader-Transpiler/generated" {
+        plugin.generated_module_import = import_message;
+      }
+    }
+
     case .TYPECHECKED; {
       tc := cast(*Message_Typechecked) message;
+      for tc.procedure_bodies {
+        proc := it.expression;
+        already := false;
+        for plugin.known_procedure_bodies if it == proc { already = true; break; }
+        if !already array_add(*plugin.known_procedure_bodies, proc);
+      }
+
       for tc.declarations {
-        resolved := collect_shader_requests_from_declaration(plugin, it.expression, tc.procedure_bodies);
+        resolved := collect_shader_requests_from_declaration(plugin, it.expression, plugin.known_procedure_bodies);
         if !resolved add_pending_request_declaration(plugin, it.expression);
       }
 
       for plugin.pending_request_declarations {
-        if collect_shader_requests_from_declaration(plugin, it, tc.procedure_bodies) {
+        if collect_shader_requests_from_declaration(plugin, it, plugin.known_procedure_bodies) {
           remove it;
         }
       }
@@ -62,7 +235,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       if phase.phase == .TYPECHECKED_ALL_WE_CAN {
         for * pair_ctx: plugin.currently_waiting_pair_contexts {
           s := write_shader_pair(pair_ctx);
-          add_build_string(s, p.workspace);
+          if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
+          else add_build_string(s, p.workspace);
 
           if plugin.output_shaders {
             ext := tprint("%", pair_ctx.language);
@@ -94,7 +268,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
                             make_location(ctx.main_fn.header));
           }
 
-          add_build_string(s, p.workspace);
+          if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
+          else add_build_string(s, p.workspace);
           if plugin.output_shaders {
             ext := tprint("%", ctx.language);
             to_lower_in_place(ext);
@@ -110,6 +285,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           }
           remove ctx;
         }
+
+        emit_lookup_overloads(plugin, p.workspace);
       }
     }
     
@@ -120,6 +297,11 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       array_reset(*plugin.currently_waiting_contexts);
       array_reset(*plugin.currently_waiting_pair_contexts);
       array_reset(*plugin.pending_request_declarations);
+      array_reset(*plugin.known_procedure_bodies);
+      plugin.generated_module_import = null;
+      array_reset(*plugin.lookup_entries);
+      plugin.did_emit_lookup_overloads = false;
+      table_reset(*get_transpiled_requests_seen);
     }
   }
 }
@@ -132,6 +314,15 @@ shader_request_name_to_language :: (name: string) -> (Shader_Language, GLSL_Targ
     case "shader_to_metal";  return .METAL, .OPENGL, true;
     case; return .NONE, .OPENGL, false;
   }
+}
+
+target_name_from_language :: (language: Shader_Language, glsl_target: GLSL_Target) -> string {
+  if language == {
+    case .METAL; return ".METAL";
+    case .HLSL;  return ".HLSL";
+    case .GLSL;  return ifx glsl_target == .VULKAN then ".VULKAN_GLSL" else ".OPENGL_GLSL";
+  }
+  return "";
 }
 
 trim_ascii_whitespace :: (in: string) -> string {
@@ -148,6 +339,46 @@ trim_ascii_whitespace :: (in: string) -> string {
   ret.data = in.data + start;
   ret.count = end - start + 1;
   return ret;
+}
+
+lookup_entry_already_queued :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, symbol_name: string) -> bool {
+  for plugin.lookup_entries {
+    if it.target_name != target_name continue;
+    if it.primary_name != primary_name continue;
+    if it.secondary_name != secondary_name continue;
+    if it.symbol_name != symbol_name continue;
+    return true;
+  }
+  return false;
+}
+
+queue_lookup_entry :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, symbol_name: string) {
+  if lookup_entry_already_queued(plugin, target_name, primary_name, secondary_name, symbol_name) return;
+  array_add(*plugin.lookup_entries, .{
+    target_name = target_name,
+    primary_name = primary_name,
+    secondary_name = secondary_name,
+    symbol_name = symbol_name,
+  });
+}
+
+emit_lookup_overloads :: (plugin: *Jai_To_Shader_Plugin, workspace: Workspace) {
+  if plugin.did_emit_lookup_overloads return;
+  if plugin.lookup_entries.count == 0 return;
+
+  sb: String_Builder;
+  append(*sb, "G :: #import \"generated\";\n");
+  append(*sb, "#poke_name G lookup_transpiled_impl;\n");
+  append(*sb, "lookup_transpiled_impl :: (target_name: string, primary_name: string, secondary_name: string) -> string {\n");
+  for plugin.lookup_entries {
+    append(*sb, tprint("  if target_name == \"%\" && primary_name == \"%\" && secondary_name == \"%\" return %;\n",
+                       it.target_name, it.primary_name, it.secondary_name, it.symbol_name));
+  }
+  append(*sb, "  return \"\";\n}\n");
+
+  if plugin.generated_module_import add_build_string(builder_to_string(*sb), workspace, plugin.generated_module_import);
+  else add_build_string(builder_to_string(*sb), workspace);
+  plugin.did_emit_lookup_overloads = true;
 }
 
 parse_shader_pair_note :: (note_text: string) -> (Shader_Language, GLSL_Target, string, bool, bool) {
@@ -223,7 +454,7 @@ add_pending_request_declaration :: (plugin: *Jai_To_Shader_Plugin, decl: *Code_D
   array_add(*plugin.pending_request_declarations, decl);
 }
 
-resolve_shader_request_target :: (arg: *Code_Node, procedure_bodies: [] Typechecked(Code_Procedure_Body)) -> *Code_Procedure_Body {
+resolve_shader_request_target :: (arg: *Code_Node, procedure_bodies: [] *Code_Procedure_Body) -> *Code_Procedure_Body {
   if !arg return null;
   if arg.kind == {
     case .PROCEDURE_BODY;
@@ -246,7 +477,7 @@ resolve_shader_request_target :: (arg: *Code_Node, procedure_bodies: [] Typechec
 
       // Some top-level declarations can be visited before ident.resolved_declaration is available.
       for procedure_bodies {
-        if it.expression.header.name == ident.name return it.expression;
+        if it.header.name == ident.name return it;
       }
     }
     case;
@@ -255,14 +486,14 @@ resolve_shader_request_target :: (arg: *Code_Node, procedure_bodies: [] Typechec
   return null;
 }
 
-resolve_shader_request_target_by_name :: (name: string, procedure_bodies: [] Typechecked(Code_Procedure_Body)) -> *Code_Procedure_Body {
+resolve_shader_request_target_by_name :: (name: string, procedure_bodies: [] *Code_Procedure_Body) -> *Code_Procedure_Body {
   for procedure_bodies {
-    if it.expression.header.name == name return it.expression;
+    if it.header.name == name return it;
   }
   return null;
 }
 
-collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl: *Code_Declaration, procedure_bodies: [] Typechecked(Code_Procedure_Body)) -> bool {
+collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl: *Code_Declaration, procedure_bodies: [] *Code_Procedure_Body) -> bool {
   if !decl return true;
 
   requested_languages: [..] Shader_Language;
@@ -301,6 +532,11 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
     glsl_target := requested_glsl_targets[it_index];
     if context_already_queued(plugin, language, vertex_proc, glsl_target) continue;
     array_add(*plugin.currently_waiting_contexts, create_shader_write_context(language, vertex_proc, glsl_target));
+    target_name := target_name_from_language(language, glsl_target);
+    if target_name.count != 0 {
+      symbol_name := ifx language == .METAL then tprint("%_metal_string", vertex_proc.header.name) else tprint("%_string", vertex_proc.header.name);
+      queue_lookup_entry(plugin, target_name, vertex_proc.header.name, "", symbol_name);
+    }
   }
 
   for pair_requested_languages {
@@ -329,6 +565,11 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
       vertex_fn = vertex_proc,
       fragment_fn = fragment_proc,
     });
+    target_name := target_name_from_language(language, glsl_target);
+    if target_name.count != 0 {
+      symbol_name := ifx language == .METAL then tprint("%_metal_string", pair_name) else tprint("%_string", pair_name);
+      queue_lookup_entry(plugin, target_name, vertex_proc.header.name, fragment_proc.header.name, symbol_name);
+    }
   }
   return true;
 }

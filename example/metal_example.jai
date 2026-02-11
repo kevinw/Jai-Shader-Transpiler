@@ -12,13 +12,6 @@ Debug :: #import "Debug";
 #load "compute_shader_tests.jai";
 #load "example_common.jai";
 
-_request_tiles_vertex_metal :: tiles_vertex_shader; @shader_to_metal
-_request_tiles_fragment_metal :: tiles_fragment_shader; @shader_to_metal
-tiles_pair_shader :: tiles_vertex_shader; @shader_pair_to_metal(tiles_fragment_shader)
-_request_array_vertex_metal :: array_support_vertex_shader; @shader_to_metal
-_request_array_fragment_metal :: array_support_fragment_shader; @shader_to_metal
-_request_compute_metal :: compute_write_indices; @shader_to_metal
-
 Fragment_Shader_Uniforms :: struct {
     u_resolution: Vector2;
     u_time: float32;
@@ -30,11 +23,10 @@ VERTEX_ATTRIBUTE_BUFFER_INDEX  :: 1;
 FRAGMENT_UNIFORM_BUFFER_INDEX  :: 0;
 
 run_compute_sanity_check :: (device: *MTLDevice, queue: *MTLCommandQueue, compile_options: *MTLCompileOptions) -> bool {
-    _ = compute_write_indices;
-    _ = compute_write_indices_metal_string;
+    compute_source := get_transpiled(.METAL, compute_write_indices);
 
     error: *NSError = null;
-    lib_compute := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(compute_write_indices_metal_string), compile_options, *error);
+    lib_compute := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(compute_source), compile_options, *error);
     if log_nserror("Failed to compile compute shader library", error) || !lib_compute {
         if !lib_compute && error == null log_error("Failed to compile compute shader library");
         return false;
@@ -107,6 +99,13 @@ run_compute_sanity_check :: (device: *MTLDevice, queue: *MTLCommandQueue, compil
 }
 
 metal_example_with_window :: () -> (success: bool) {
+    _ = get_transpiled(.METAL, tiles_vertex_shader, tiles_fragment_shader);
+    vertex_metal_source := get_transpiled(.METAL, tiles_vertex_shader);
+    fragment_metal_source := get_transpiled(.METAL, tiles_fragment_shader);
+    _ = get_transpiled(.METAL, array_support_vertex_shader);
+    _ = get_transpiled(.METAL, array_support_fragment_shader);
+    _ = get_transpiled(.METAL, compute_write_indices);
+
     args_ok, args, is_set := parse_arguments(struct { singleframe: bool; test_readback: bool; });
     singleframe := args_ok && is_set.singleframe;
     test_readback := args_ok && is_set.test_readback;
@@ -165,12 +164,12 @@ metal_example_with_window :: () -> (success: bool) {
     // Force array support test shaders to typecheck and generate.
     _ := array_support_vertex_shader(.{}, .{});
     _ = array_support_fragment_shader(.{}, .{});
-    _ = array_support_vertex_shader_metal_string;
-    _ = array_support_fragment_shader_metal_string;
+    _ = get_transpiled(.METAL, array_support_vertex_shader);
+    _ = get_transpiled(.METAL, array_support_fragment_shader);
 
     if !run_compute_sanity_check(device, queue, compile_options) return false;
 
-    lib_vertex := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(tiles_vertex_shader_metal_string), compile_options, *error);
+    lib_vertex := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_metal_source), compile_options, *error);
     if log_nserror("Failed to compile vertex shader library", error) || !lib_vertex {
         if !lib_vertex && error == null log_error("Failed to compile vertex shader library");
         return false;
@@ -178,7 +177,7 @@ metal_example_with_window :: () -> (success: bool) {
     defer release(lib_vertex);
 
     error = null;
-    lib_fragment := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(tiles_fragment_shader_metal_string), compile_options, *error);
+    lib_fragment := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_metal_source), compile_options, *error);
     if log_nserror("Failed to compile fragment shader library", error) || !lib_fragment {
         if !lib_fragment && error == null log_error("Failed to compile fragment shader library");
         return false;
