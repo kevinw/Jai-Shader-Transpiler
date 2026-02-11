@@ -18,11 +18,13 @@ Track missing/partial IR lowering coverage needed for reliable Jai -> IR -> Slan
 - `todo` Broader cast coverage (compound/nested casts and edge type forms).
 - `done` Basic helper-function call dependencies (called compute helpers emitted ahead of `ComputeMain`).
 - `done` Explicit helper prototypes + definitions emitted before entry points (shared IR path).
-- `todo` Helper-function coverage expansion (recursive/nested helper graphs, wider type coverage).
+- `partial` Helper-function coverage expansion (supports scalar + struct args/returns for current compute semantics tests; recursive/nested helper graphs still todo).
 - `done` More statement kinds (`while`, `break`, `continue`, `switch/case` with `#through` semantics).
 - `todo` Robust integer type-cast behavior across signed/unsigned paths.
 - `done` Compound assignment operators in statement lowering/emission (`+=`, `-=`, `*=`, `/=`, `%=` and bitwise assign variants).
 - `done` Bitwise operator coverage in IR expression lowering (`^`, `&`, `|`, shifts) with runtime semantics test.
+- `done` Vector/matrix math coverage used by current semantics tests (`float2`, `float2x2`, matrix-vector multiply).
+- `done` Struct-buffer access-chain coverage used by current semantics tests (load/store/copy of struct fields in storage buffers).
 
 ## Vertex/Fragment
 - `done` Basic interface lowering (input/output structs + semantics).
