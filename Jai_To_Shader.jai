@@ -492,6 +492,43 @@ ir_mark_metal_device_pointers_const :: (source: string) -> string {
   return replace(source, " device*", " const device*");
 }
 
+ir_source_file_from_proc :: (proc: *Code_Procedure_Body) -> string {
+  if !proc || !proc.header return "";
+  loc := make_location(proc.header);
+  return loc.fully_pathed_filename;
+}
+
+ir_source_file_from_context :: (ctx: *Shader_Write_Context) -> string {
+  if !ctx return "";
+  return ir_source_file_from_proc(ctx.main_fn);
+}
+
+ir_source_file_from_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> string {
+  if !pair_ctx return "";
+  vertex_file := ir_source_file_from_proc(pair_ctx.vertex_fn);
+  fragment_file := ir_source_file_from_proc(pair_ctx.fragment_fn);
+  if vertex_file.count == 0 return fragment_file;
+  if fragment_file.count == 0 return vertex_file;
+  if vertex_file == fragment_file return vertex_file;
+  return tprint("% | %", vertex_file, fragment_file);
+}
+
+ir_pipeline_label_slang :: (target: Slang_Target) -> string {
+  if target == .METAL return "Jai -> IR -> Slang -> Metal";
+  return "Jai -> IR -> Slang -> GLSL";
+}
+
+ir_pipeline_label_spirv :: (target: Slang_Target) -> string {
+  if target == .METAL return "Jai -> IR -> SPIRV -> SPIRV-Cross -> Metal";
+  return "Jai -> IR -> SPIRV -> SPIRV-Cross -> GLSL";
+}
+
+ir_prepend_generated_comment :: (target_source: string, source_jai_file: string, pipeline_label: string) -> string {
+  jai_file := source_jai_file;
+  if jai_file.count == 0 jai_file = "<unknown>";
+  return tprint("// Generated from % with (<<%>>)\n%", jai_file, pipeline_label, target_source);
+}
+
 write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directives := false) -> (string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   if !ir_supports_single_context(ctx) {
@@ -620,6 +657,9 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
   if ctx.type == .Compute && ctx.language == .METAL {
     target_source = replace(target_source, "[[kernel]] void", "kernel void");
   }
+  target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_context(ctx), ir_pipeline_label_slang(target));
+  // Keep .build/ir_slang output aligned with the embedded string for debugging and test checks.
+  write_entire_file(output_path, target_source);
 
   symbol_name := ir_symbol_name_from_context(ctx);
   decl := tprint("% :: #string END\n%\nEND", symbol_name, target_source);
@@ -800,6 +840,8 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_te
   if ctx.type == .Compute && ctx.language == .METAL {
     target_source = replace(target_source, "[[kernel]] void", "kernel void");
   }
+  target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_context(ctx), ir_pipeline_label_spirv(target));
+  write_entire_file(output_path, target_source);
 
   symbol_name := ir_symbol_name_from_context(ctx);
   decl := tprint("% :: #string END\n%\nEND", symbol_name, target_source);
@@ -867,6 +909,7 @@ write_shader_pair_ir_slang :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     return "", false, diag;
   }
   target_source = ir_mark_metal_device_pointers_const(target_source);
+  target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_slang(.METAL));
   // Keep .build/ir_slang output aligned with the embedded string for debugging and test checks.
   write_entire_file(output_path, target_source);
   decl := tprint("%_metal_string :: #string END\n%\nEND", pair_ctx.name, target_source);
