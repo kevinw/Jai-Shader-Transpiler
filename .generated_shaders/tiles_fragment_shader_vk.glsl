@@ -1,33 +1,31 @@
-#version 450 core
+// Generated from /Users/kev/src/peel/modules/Jai-Shader-Transpiler/example/vulkan_shaders.jai with (<<Jai -> IR -> SPIRV -> SPIRV-Cross -> GLSL>>)
+#version 450
 
-layout(set = 0, binding = 0) uniform FragmentShaderVk_Uniforms_Block {
+layout(set = 0, binding = 0, std140) uniform FragmentShaderVk_Uniforms_std140
+{
     vec2 u_resolution;
     float u_time;
 } un;
 
-layout (location=0) out vec4 out_color;
+layout(location = 0) out vec4 entryPointParam_FragmentMain_out_color;
 
-
-void main() {
-     vec2 u_resolution = un.u_resolution;
-     float u_time = un.u_time;
-     float aspect_ratio = u_resolution.y / u_resolution.x;
-     vec2 uv = vec2(gl_FragCoord.x, gl_FragCoord.y) / u_resolution.x;
-     uv -= vec2(0.5, 0.5 * aspect_ratio);
-     float rot = radians(-30 - u_time);
-     mat2 rotation_matrix = mat2(cos(rot), -sin(rot), sin(rot), cos(rot));
-     uv = rotation_matrix * uv;
-     vec2 scaled_uv = 20 * uv;
-     vec2 tile = fract(scaled_uv);
-     float tile_dist = min(min(tile.x, 1 - tile.x), min(tile.y, 1 - tile.y));
-     float square_dist = length(floor(scaled_uv));
-     float edge = sin(u_time - square_dist * 20);
-     edge = mod(edge * edge, edge / edge);
-     float value = mix(tile_dist, 1 - tile_dist, step(1, edge));
-     edge = pow(abs(1 - edge), 2.2) * 0.5;
-     value = smoothstep(edge - 0.05, edge, 0.95 * value);
-     value += square_dist * 0.1;
-     value *= 0.8 - 0.2;
-     out_color = vec4(pow(value, 2), pow(value, 1.5), pow(value, 1.2), 1);
+void main()
+{
+    float _47 = radians((-30.0) - un.u_time);
+    float _49 = cos(_47);
+    float _50 = sin(_47);
+    vec2 scaled_uv = (mat2(vec2(_49, _50), vec2(-_50, _49)) * ((vec2(gl_FragCoord.xy) / vec2(un.u_resolution.x)) - vec2(0.5, 0.5 * (un.u_resolution.y / un.u_resolution.x)))) * 20.0;
+    vec2 _59 = fract(scaled_uv);
+    float _60 = _59.x;
+    float _64 = _59.y;
+    float _67 = min(min(_60, 1.0 - _60), min(_64, 1.0 - _64));
+    float _69 = length(floor(scaled_uv));
+    float _73 = sin(un.u_time - (_69 * 20.0));
+    float _74 = _73 * _73;
+    float _75 = _73 / _73;
+    float _76 = _74 - _75 * trunc(_74 / _75);
+    float edge = pow(abs(1.0 - _76), 2.2000000476837158203125) * 0.5;
+    float value = (smoothstep(edge - 0.0500000007450580596923828125, edge, 0.949999988079071044921875 * mix(_67, 1.0 - _67, step(1.0, _76))) + (_69 * 0.100000001490116119384765625)) * 0.60000002384185791015625;
+    entryPointParam_FragmentMain_out_color = vec4(pow(value, 2.0), pow(value, 1.5), pow(value, 1.2000000476837158203125), 1.0);
 }
 

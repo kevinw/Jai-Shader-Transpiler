@@ -1,3 +1,4 @@
+// Generated from /Users/kev/src/peel/modules/Jai-Shader-Transpiler/example/vulkan_shaders.jai with (<<Jai -> IR -> SPIRV -> SPIRV-Cross -> GLSL>>)
 #version 450
 
 struct BindlessNestedVk_VertexData_std430_logical

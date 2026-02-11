@@ -1,32 +1,33 @@
+// Generated from /Users/kev/src/peel/modules/Jai-Shader-Transpiler/example/array_shader_tests.jai with (<<Jai -> IR -> SPIRV -> SPIRV-Cross -> Metal>>)
 #include <metal_stdlib>
+#include <simd/simd.h>
+
 using namespace metal;
 
-struct Array_Test_Vertex_Out {
-    float4 gl_FragCoord [[position]];
-    float2 sample_offset [[user(sample_offset)]];
+struct _Array_std140_vector_float_4_2
+{
+    float4 data[2];
 };
 
-struct Array_Test_Fragment_Uniforms {
-    float4 u_palette[2];
+struct Array_Test_Fragment_Uniforms_std140
+{
+    _Array_std140_vector_float_4_2 u_palette;
 };
 
-struct Array_Test_Fragment_Out {
-    float4 out_color [[color(0)]];
+struct FragmentMain_out
+{
+    float4 entryPointParam_FragmentMain_out_color [[color(0)]];
 };
 
+struct FragmentMain_in
+{
+    float2 input_sample_offset [[user(locn0)]];
+};
 
-fragment Array_Test_Fragment_Out FragmentMain(Array_Test_Vertex_Out in [[stage_in]], constant Array_Test_Fragment_Uniforms& un [[buffer(0)]]) {
-     float4 gl_FragCoord = in.gl_FragCoord;
-     float2 sample_offset = in.sample_offset;
-     float4 u_palette[2];
-     u_palette[0] = un.u_palette[0];
-     u_palette[1] = un.u_palette[1];
-     float4 out_color;
-
-     float4 local_palette[2] = {float4(1, 0.0, 0.0, 1), float4(0.0, 1, 0.0, 1)};
-     out_color = local_palette[0] * sample_offset.x + 0.5 + u_palette[1] * 0.5;
-          Array_Test_Fragment_Out out;
-     out.out_color = out_color;
-     return out;
+fragment FragmentMain_out FragmentMain(FragmentMain_in in [[stage_in]], constant Array_Test_Fragment_Uniforms_std140& un [[buffer(0)]])
+{
+    FragmentMain_out out = {};
+    out.entryPointParam_FragmentMain_out_color = (float4(1.0, 0.0, 0.0, 1.0) * (in.input_sample_offset.x + 0.5)) + (un.u_palette.data[1] * 0.5);
+    return out;
 }
 

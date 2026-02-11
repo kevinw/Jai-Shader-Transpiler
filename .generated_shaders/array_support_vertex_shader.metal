@@ -1,37 +1,37 @@
+// Generated from /Users/kev/src/peel/modules/Jai-Shader-Transpiler/example/array_shader_tests.jai with (<<Jai -> IR -> SPIRV -> SPIRV-Cross -> Metal>>)
 #include <metal_stdlib>
+#include <simd/simd.h>
+
 using namespace metal;
 
-struct Array_Test_Vertex_In {
-    float2 a_pos [[attribute(0)]];
+struct _Array_std140_vector_float_2_3
+{
+    float4 data[3];
 };
 
-struct Array_Test_Vertex_Uniforms {
-    float2 u_offsets[3];
+struct Array_Test_Vertex_Uniforms_std140
+{
+    _Array_std140_vector_float_2_3 u_offsets;
 };
 
-struct Array_Test_Vertex_Out {
+struct VertexMain_out
+{
+    float4 entryPointParam_VertexMain_gl_FragCoord [[user(locn0)]];
+    float2 entryPointParam_VertexMain_sample_offset [[user(locn1)]];
     float4 gl_Position [[position]];
-    float4 gl_FragCoord [[user(gl_FragCoord)]];
-    float2 sample_offset [[user(sample_offset)]];
 };
 
+struct VertexMain_in
+{
+    float2 input_a_pos [[attribute(0)]];
+};
 
-vertex Array_Test_Vertex_Out VertexMain(Array_Test_Vertex_In in [[stage_in]], constant Array_Test_Vertex_Uniforms& un [[buffer(0)]]) {
-     float2 a_pos = in.a_pos;
-     float2 u_offsets[3];
-     u_offsets[0] = un.u_offsets[0];
-     u_offsets[1] = un.u_offsets[1];
-     u_offsets[2] = un.u_offsets[2];
-     float4 gl_Position;
-     float2 sample_offset;
-
-     float2 positions[3] = {float2(0.0, 0.5), float2(-0.5, -0.5), float2(0.5, -0.5)};
-     sample_offset = positions[0] + u_offsets[1];
-     gl_Position = float4(a_pos.x + positions[2].x, a_pos.y + u_offsets[2].y, 0.0, 1);
-          Array_Test_Vertex_Out out;
-     out.gl_Position = gl_Position;
-     out.gl_FragCoord = gl_Position;
-     out.sample_offset = sample_offset;
-     return out;
+vertex VertexMain_out VertexMain(VertexMain_in in [[stage_in]], constant Array_Test_Vertex_Uniforms_std140& un [[buffer(0)]])
+{
+    VertexMain_out out = {};
+    out.gl_Position = float4(in.input_a_pos.x + 0.5, in.input_a_pos.y + un.u_offsets.data[2].y, 0.0, 1.0);
+    out.entryPointParam_VertexMain_gl_FragCoord = float4(0.0);
+    out.entryPointParam_VertexMain_sample_offset = float2(0.0, 0.5) + un.u_offsets.data[1].xy;
+    return out;
 }
 

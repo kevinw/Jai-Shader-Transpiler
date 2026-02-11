@@ -1,51 +1,46 @@
+// Generated from /Users/kev/src/peel/modules/Jai-Shader-Transpiler/example/glsl_shaders.jai with (<<Jai -> IR -> SPIRV -> SPIRV-Cross -> Metal>>)
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+
 #include <metal_stdlib>
+#include <simd/simd.h>
+
 using namespace metal;
 
-inline float jai_radians(float v) { return v * 0.01745329251994329577f; }
-inline float2 jai_radians(float2 v) { return v * 0.01745329251994329577f; }
-inline float3 jai_radians(float3 v) { return v * 0.01745329251994329577f; }
-inline float4 jai_radians(float4 v) { return v * 0.01745329251994329577f; }
+// Implementation of the GLSL radians() function
+template<typename T>
+inline T radians(T d)
+{
+    return d * T(0.01745329251);
+}
 
-struct VertexShader_Out {
-    float4 gl_FragCoord [[position]];
-};
-
-struct FragmentShader_Uniforms {
+struct FragmentShader_Uniforms_std140
+{
     float2 u_resolution;
     float u_time;
 };
 
-struct FragmentShader_Out {
-    float4 out_color [[color(0)]];
+struct FragmentMain_out
+{
+    float4 entryPointParam_FragmentMain_out_color [[color(0)]];
 };
 
-
-fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], constant FragmentShader_Uniforms& un [[buffer(0)]]) {
-     float4 gl_FragCoord = in.gl_FragCoord;
-     float2 u_resolution = un.u_resolution;
-     float u_time = un.u_time;
-     float4 out_color;
-
-     float aspect_ratio = u_resolution.y / u_resolution.x;
-     float2 uv = gl_FragCoord.xy / u_resolution.x;
-     uv -= float2(0.5, 0.5 * aspect_ratio);
-     float rot = jai_radians(-30 - u_time);
-     float2x2 rotation_matrix = float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)));
-     uv = rotation_matrix * uv;
-     float2 scaled_uv = 20 * uv;
-     float2 tile = fract(scaled_uv);
-     float tile_dist = min(min(tile.x, 1 - tile.x), min(tile.y, 1 - tile.y));
-     float square_dist = length(floor(scaled_uv));
-     float edge = sin(u_time - square_dist * 20);
-     edge = fmod(edge * edge, edge / edge);
-     float value = mix(tile_dist, 1 - tile_dist, step(1, edge));
-     edge = pow(abs(1 - edge), 2.2) * 0.5;
-     value = smoothstep(edge - 0.05, edge, 0.95 * value);
-     value += square_dist * 0.1;
-     value *= 0.8 - 0.2;
-     out_color = float4(pow(value, 2), pow(value, 1.5), pow(value, 1.2), 1);
-          FragmentShader_Out out;
-     out.out_color = out_color;
-     return out;
+fragment FragmentMain_out FragmentMain(constant FragmentShader_Uniforms_std140& un [[buffer(0)]], float4 gl_FragCoord [[position]])
+{
+    FragmentMain_out out = {};
+    float _45 = radians((-30.0) - un.u_time);
+    float _47 = cos(_45);
+    float _48 = sin(_45);
+    float2 scaled_uv = (float2x2(float2(_47, _48), float2(-_48, _47)) * ((gl_FragCoord.xy / float2(un.u_resolution.x)) - float2(0.5, 0.5 * (un.u_resolution.y / un.u_resolution.x)))) * 20.0;
+    float2 _57 = fract(scaled_uv);
+    float _58 = _57.x;
+    float _62 = _57.y;
+    float _65 = fast::min(fast::min(_58, 1.0 - _58), fast::min(_62, 1.0 - _62));
+    float _67 = length(floor(scaled_uv));
+    float _71 = sin(un.u_time - (_67 * 20.0));
+    float _74 = fmod(_71 * _71, _71 / _71);
+    float edge = powr(abs(1.0 - _74), 2.2000000476837158203125) * 0.5;
+    float value = (smoothstep(edge - 0.0500000007450580596923828125, edge, 0.949999988079071044921875 * mix(_65, 1.0 - _65, step(1.0, _74))) + (_67 * 0.100000001490116119384765625)) * 0.60000002384185791015625;
+    out.entryPointParam_FragmentMain_out_color = float4(powr(value, 2.0), powr(value, 1.5), powr(value, 1.2000000476837158203125), 1.0);
+    return out;
 }
 
