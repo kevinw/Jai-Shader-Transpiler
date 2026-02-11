@@ -11,6 +11,15 @@ emit_ir_compute_to_spirv_text_branch :: (shader: IR_Compute_Shader) -> (string, 
   return "", false, generic_diag;
 }
 
+emit_ir_graphics_pair_to_spirv_text_branch :: (vertex: IR_Vertex_Shader, fragment: IR_Fragment_Shader) -> (vertex_spvasm: string, fragment_spvasm: string, ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  assert(vertex.entry_name.count != 0);
+  assert(fragment.entry_name.count != 0);
+  diag.message = tprint("SPIR-V text backend: graphics pair emission is not implemented yet ('%' + '%').",
+                       vertex.source_name, fragment.source_name);
+  return "", "", false, diag;
+}
+
 #scope_file
 // Direct IR -> SPIR-V text prototype (compute-only, narrow subset).
 
@@ -2338,4 +2347,3 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (string, bool
   out := builder_to_string(*sb);
   return out, true, diag;
 }
-

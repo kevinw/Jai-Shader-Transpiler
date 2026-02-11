@@ -849,10 +849,41 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_te
 }
 
 write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false) -> (string, bool, IR_Diagnostic) {
-  // Graphics pairs remain module-emitted for now so callers can keep a single combined Metal string.
-  // Single-stage vertex/fragment requests do go through the SPIR-V toolchain.
-  s, ok, diag := write_shader_pair_ir_slang(pair_ctx, emit_line_directives);
-  return s, ok, diag;
+  _ = emit_line_directives;
+
+  diag: IR_Diagnostic;
+  if !ir_supports_pair_context(pair_ctx) {
+    diag.message = "SPIR-V backend: unsupported shader pair context/target combination.";
+    if pair_ctx && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+      diag.location = make_location(pair_ctx.vertex_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
+
+  vertex_ctx := create_shader_write_context(.METAL, pair_ctx.vertex_fn, pair_ctx.glsl_target);
+  fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
+  ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(*vertex_ctx);
+  if !vertex_ok return "", false, vertex_diag;
+  ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(*fragment_ctx);
+  if !fragment_ok return "", false, fragment_diag;
+
+  _, _, emitted, emit_diag := emit_ir_graphics_pair_to_spirv_text_branch(ir_vertex, ir_fragment);
+  if !emitted {
+    if emit_diag.message.count == 0 emit_diag.message = tprint("SPIR-V backend: failed to emit SPIR-V text for shader pair '%'.", pair_ctx.name);
+    if !emit_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+      emit_diag.location = make_location(pair_ctx.vertex_fn.header);
+      emit_diag.has_location = true;
+    }
+    return "", false, emit_diag;
+  }
+
+  diag.message = "SPIR-V backend: graphics pair emitter returned no output.";
+  if pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+    diag.location = make_location(pair_ctx.vertex_fn.header);
+    diag.has_location = true;
+  }
+  return "", false, diag;
 }
 
 ir_supports_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> bool {
