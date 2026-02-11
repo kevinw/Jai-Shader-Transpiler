@@ -25,6 +25,7 @@ Transpiled_Target :: enum {
 #load "hlsl_backend.jai";
 #load "metal_backend.jai";
 #load "ir_pipeline/slang_toolchain.jai";
+#load "ir_pipeline/ir_shared.jai";
 #load "ir_pipeline/ir_lowering.jai";
 
 Jai_To_Shader_Plugin :: struct {
@@ -359,7 +360,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 
 ir_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
   if !ctx return false;
-  if ctx.language != .METAL return false;
+  if ctx.language != .METAL && !(ctx.language == .GLSL && ctx.glsl_target == .VULKAN) return false;
   if ctx.type == .Vertex {
     _, lowered := ir_lower_vertex_from_shader_context(ctx);
     return lowered;

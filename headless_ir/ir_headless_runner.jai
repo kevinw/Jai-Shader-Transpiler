@@ -54,6 +54,13 @@ ir_headless_vertex_math_main :: (using input: IR_Headless_Vertex_In, using un: I
   return out;
 } @vertex_shader
 
+ir_headless_vertex_helpers_main :: (using input: IR_Headless_Vertex_In, using un: IR_Headless_Vertex_Uniforms) -> IR_Headless_Vertex_Out {
+  using out: IR_Headless_Vertex_Out;
+  position = Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
+  color = Vector4.{ir_headless_chain_mid(a_pos.x), ir_headless_chain_mid(a_pos.x) * 0.5, 0.0, 1.0};
+  return out;
+} @vertex_shader
+
 IR_Headless_Fragment_Out :: struct {
   out_color: Vector4; @semantic_SV_Target0
 }
@@ -63,6 +70,25 @@ ir_headless_fragment_main :: (using input: IR_Headless_Vertex_Out) -> IR_Headles
   out_color = input.color;
   return out;
 } @fragment_shader
+
+ir_headless_fragment_helpers_main :: (using input: IR_Headless_Vertex_Out) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  out_color = Vector4.{ir_headless_fragment_boost(input.color.x), input.color.y, input.color.z, input.color.w};
+  return out;
+} @fragment_shader
+
+// Intentionally declared after the entry points above to validate order-independence.
+ir_headless_chain_leaf :: (x: float) -> float {
+  return x * 2.0;
+}
+
+ir_headless_chain_mid :: (x: float) -> float {
+  return ir_headless_chain_leaf(x) + 0.25;
+}
+
+ir_headless_fragment_boost :: (x: float) -> float {
+  return x + 0.1;
+}
 
 #run,stallable {
   if !make_directory_if_it_does_not_exist(HEADLESS_IR_DIR, recursive=true) {
@@ -95,6 +121,26 @@ ir_headless_fragment_main :: (using input: IR_Headless_Vertex_Out) -> IR_Headles
     compile_metal(math_path);
   }
 
+  metal_vertex_helpers := get_transpiled(.METAL, ir_headless_vertex_helpers_main);
+  check_contains(metal_vertex_helpers, "ir_headless_chain_leaf", "vertex helper metal output");
+  check_contains(metal_vertex_helpers, "ir_headless_chain_mid", "vertex helper metal output");
+  helper_vert_ir_slang_path := ".build/ir_slang/ir_headless_vertex_helpers_main_vert.slang";
+  helper_vert_ir_slang_source, helper_vert_ir_ok := read_entire_file(helper_vert_ir_slang_path);
+  if !helper_vert_ir_ok fail("Could not read %", helper_vert_ir_slang_path);
+  check_contains(helper_vert_ir_slang_source, "float ir_headless_chain_leaf(float x);", "vertex helper IR slang output");
+  check_contains(helper_vert_ir_slang_source, "float ir_headless_chain_mid(float x);", "vertex helper IR slang output");
+  check_contains(helper_vert_ir_slang_source, "float ir_headless_chain_leaf(float x) {", "vertex helper IR slang output");
+  helper_vert_path := tprint("%/ir_vertex_helpers.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(helper_vert_path, metal_vertex_helpers) fail("Could not write %", helper_vert_path);
+  #if OS == .MACOS {
+    compile_metal(helper_vert_path);
+  }
+
+  vulkan_vertex_helpers := get_transpiled(.VULKAN_GLSL, ir_headless_vertex_helpers_main);
+  check_contains(vulkan_vertex_helpers, "#version", "vertex helper Vulkan GLSL output");
+  check_contains(vulkan_vertex_helpers, "ir_headless_chain_mid", "vertex helper Vulkan GLSL output");
+  check_contains(vulkan_vertex_helpers, "void main()", "vertex helper Vulkan GLSL output");
+
   metal_fragment := get_transpiled(.METAL, ir_headless_fragment_main);
   check_contains(metal_fragment, "fragment", "fragment metal output");
   ir_frag_slang_path := ".build/ir_slang/ir_headless_fragment_main_frag.slang";
@@ -106,6 +152,24 @@ ir_headless_fragment_main :: (using input: IR_Headless_Vertex_Out) -> IR_Headles
   #if OS == .MACOS {
     compile_metal(frag_path);
   }
+
+  metal_fragment_helpers := get_transpiled(.METAL, ir_headless_fragment_helpers_main);
+  check_contains(metal_fragment_helpers, "ir_headless_fragment_boost", "fragment helper metal output");
+  helper_frag_ir_slang_path := ".build/ir_slang/ir_headless_fragment_helpers_main_frag.slang";
+  helper_frag_ir_slang_source, helper_frag_ir_ok := read_entire_file(helper_frag_ir_slang_path);
+  if !helper_frag_ir_ok fail("Could not read %", helper_frag_ir_slang_path);
+  check_contains(helper_frag_ir_slang_source, "float ir_headless_fragment_boost(float x);", "fragment helper IR slang output");
+  check_contains(helper_frag_ir_slang_source, "float ir_headless_fragment_boost(float x) {", "fragment helper IR slang output");
+  helper_frag_path := tprint("%/ir_fragment_helpers.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(helper_frag_path, metal_fragment_helpers) fail("Could not write %", helper_frag_path);
+  #if OS == .MACOS {
+    compile_metal(helper_frag_path);
+  }
+
+  vulkan_fragment_helpers := get_transpiled(.VULKAN_GLSL, ir_headless_fragment_helpers_main);
+  check_contains(vulkan_fragment_helpers, "#version", "fragment helper Vulkan GLSL output");
+  check_contains(vulkan_fragment_helpers, "ir_headless_fragment_boost", "fragment helper Vulkan GLSL output");
+  check_contains(vulkan_fragment_helpers, "void main()", "fragment helper Vulkan GLSL output");
 
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
   check_contains(metal_pair, "vertex", "pair metal output");

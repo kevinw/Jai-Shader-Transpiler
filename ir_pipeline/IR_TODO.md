@@ -17,9 +17,11 @@ Track missing/partial IR lowering coverage needed for reliable Jai -> IR -> Slan
 - `done` Basic cast expressions (`cast(...)`) lowering in expression emission.
 - `todo` Broader cast coverage (compound/nested casts and edge type forms).
 - `done` Basic helper-function call dependencies (called compute helpers emitted ahead of `ComputeMain`).
+- `done` Explicit helper prototypes + definitions emitted before entry points (shared IR path).
 - `todo` Helper-function coverage expansion (recursive/nested helper graphs, wider type coverage).
-- `todo` More statement kinds (`while`, `switch/case`, break/continue behavior tests).
+- `done` More statement kinds (`while`, `break`, `continue`, `switch/case` with `#through` semantics).
 - `todo` Robust integer type-cast behavior across signed/unsigned paths.
+- `done` Compound assignment operators in statement lowering/emission (`+=`, `-=`, `*=`, `/=`, `%=` and bitwise assign variants).
 - `done` Bitwise operator coverage in IR expression lowering (`^`, `&`, `|`, shifts) with runtime semantics test.
 
 ## Vertex/Fragment
@@ -31,7 +33,7 @@ Track missing/partial IR lowering coverage needed for reliable Jai -> IR -> Slan
 - `todo` Struct literal edge cases (named/positional mixed forms in more paths).
 - `todo` Matrix/vector operation breadth (swizzles, matrix constructors/mults, builtins).
 - `todo` More robust uniform/local variable handling for complex shaders.
-- `todo` Shared helper/function prototype emission strategy across stages (Jai order-independence vs C-like declaration order).
+- `done` Shared helper/function prototype emission strategy across stages (Jai order-independence vs C-like declaration order).
 
 ## Semantics Mapping
 - `done` Vertex/fragment basics in current tests.
