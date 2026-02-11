@@ -1,6 +1,8 @@
-// Direct IR -> SPIR-V text prototype (compute-only, narrow subset).
+//
+// Jai IR -> SPIR-V text
+// 
 
-emit_ir_compute_to_spirv_text_branch :: (shader: IR_Compute_Shader) -> (string, bool, IR_Diagnostic) {
+emit_ir_compute_to_spirv_text_branch :: (shader: IR_Compute_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
   generic_out, generic_ok, generic_diag := emit_compute_generic_uint_buffer(shader);
   if generic_ok return generic_out, true, diag;
@@ -21,7 +23,9 @@ emit_ir_graphics_pair_to_spirv_text_branch :: (vertex: IR_Vertex_Shader, fragmen
 }
 
 #scope_file
-// Direct IR -> SPIR-V text prototype (compute-only, narrow subset).
+// -----------------------------------------------------------------------------
+// Parsing / Text Helpers
+// -----------------------------------------------------------------------------
 
 parse_u32_literal_text :: (text: string) -> (u32, bool) {
   if text.count == 0 return 0, false;
@@ -85,6 +89,10 @@ match_branch_condition_outer :: (expr: *IR_Expr) -> (u32, bool) {
   if !ok return 0, false;
   return bound, true;
 }
+
+// -----------------------------------------------------------------------------
+// IR Data Model
+// -----------------------------------------------------------------------------
 
 IR_SPV_Gen_Type :: enum {
   UNKNOWN;
@@ -205,50 +213,63 @@ IR_SPV_Gen_State :: struct {
   bound_value: u32;
 }
 
+// -----------------------------------------------------------------------------
+// Core State Helpers
+// -----------------------------------------------------------------------------
+
 id_text :: (id: s64) -> string {
   return tprint("%%", "%", id);
 }
 
 new_id :: (s: *IR_SPV_Gen_State) -> s64 {
+  assert(s != null);
   id := s.next_id;
   s.next_id += 1;
   return id;
 }
 
 add_op :: (s: *IR_SPV_Gen_State, line: string) {
+  assert(s != null);
   array_add(*s.op_lines, line);
 }
 
 add_local_decl :: (s: *IR_SPV_Gen_State, line: string) {
+  assert(s != null);
   array_add(*s.local_var_lines, line);
 }
 
 find_local :: (s: *IR_SPV_Gen_State, name: string) -> (*IR_SPV_Gen_Local, bool) {
+  assert(s != null);
   for *s.locals if it.name == name return it, true;
   return null, false;
 }
 
 find_buffer :: (s: *IR_SPV_Gen_State, name: string) -> (*IR_SPV_Gen_Buffer, bool) {
+  assert(s != null);
   for *s.buffers if it.name == name return it, true;
   return null, false;
 }
 
 find_helper :: (s: *IR_SPV_Gen_State, name: string) -> (*IR_Helper_Function, bool) {
+  assert(s != null);
   for *s.helpers if it.name == name return it, true;
   return null, false;
 }
 
 find_struct :: (s: *IR_SPV_Gen_State, name: string) -> (*IR_Struct, bool) {
+  assert(s != null);
   for *s.extra_structs if it.name == name return it, true;
   return null, false;
 }
 
 find_local_struct :: (s: *IR_SPV_Gen_State, name: string) -> (*IR_SPV_Gen_Local_Struct, bool) {
+  assert(s != null);
   for *s.local_structs if it.name == name return it, true;
   return null, false;
 }
 
 find_local_struct_field :: (s: *IR_SPV_Gen_Local_Struct, name: string) -> (*IR_SPV_Gen_Local_Struct_Field, bool) {
+  assert(s != null);
   for *s.fields if it.name == name return it, true;
   return null, false;
 }
@@ -307,7 +328,13 @@ get_current_break_target :: (s: *IR_SPV_Gen_State) -> (s64, bool) {
   return s.break_targets[s.break_targets.count-1], true;
 }
 
-init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: u32) -> (bool, IR_Diagnostic) {
+// -----------------------------------------------------------------------------
+// Type Mapping / Layout
+// -----------------------------------------------------------------------------
+
+init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: u32) -> (ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return false, { message = sprint(msg, ..args) }; }
+
   diag: IR_Diagnostic;
   assert(s != null);
   assert(buffers.count > 0);
@@ -366,8 +393,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 
     struct_def, struct_ok := find_struct(s, it.element_type_name);
     if !struct_ok {
-      diag.message = tprint("SPIR-V generic backend: buffer '%' has unsupported element type '%'.", it.name, it.element_type_name);
-      return false, diag;
+      return_err("SPIR-V generic backend: buffer '%' has unsupported element type '%'.", it.name, it.element_type_name);
     }
 
     element_struct_type_id := new_id(s);
@@ -387,13 +413,11 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     for struct_def.fields {
       field_type := expr_type_from_decl(it.type_name);
       if field_type == .UNKNOWN {
-        diag.message = tprint("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, it.type_name);
-        return false, diag;
+        return_err("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, it.type_name);
       }
       field_size := byte_size_of_kind(field_type);
       if field_size <= 0 {
-        diag.message = tprint("SPIR-V generic backend: buffer struct '%' field '%' has unsupported layout type '%'.", struct_def.name, it.name, it.type_name);
-        return false, diag;
+        return_err("SPIR-V generic backend: buffer struct '%' field '%' has unsupported layout type '%'.", struct_def.name, it.name, it.type_name);
       }
       array_add(*buffer_info.fields, .{
         name = it.name,
@@ -411,18 +435,19 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 }
 
 load_thread_x :: (s: *IR_SPV_Gen_State) -> s64 {
-  ptr := new_id(s);
+  assert(s != null);
+  thread_id_ptr := new_id(s);
   add_op(s, tprint("         % = OpAccessChain % % %",
-                              id_text(ptr),
+                              id_text(thread_id_ptr),
                               id_text(s.id_ptr_input_uint),
                               id_text(s.id_gl_global_invocation_id),
                               id_text(s.id_uint_0)));
-  out := new_id(s);
+  thread_id := new_id(s);
   add_op(s, tprint("         % = OpLoad % %",
-                              id_text(out),
+                              id_text(thread_id),
                               id_text(s.id_uint),
-                              id_text(ptr)));
-  return out;
+                              id_text(thread_id_ptr)));
+  return thread_id;
 }
 
 expr_type_from_decl :: (name: string) -> IR_SPV_Gen_Type {
@@ -438,6 +463,7 @@ expr_type_from_decl :: (name: string) -> IR_SPV_Gen_Type {
 }
 
 type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
+  assert(s != null);
   if kind == .UINT return s.id_uint;
   if kind == .FLOAT return s.id_float;
   if kind == .FLOAT2 return s.id_float2;
@@ -447,6 +473,7 @@ type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
 }
 
 storage_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
+  assert(s != null);
   if kind == .UINT return s.id_ptr_storage_uint;
   if kind == .FLOAT return s.id_ptr_storage_float;
   if kind == .FLOAT2 return s.id_ptr_storage_float2;
@@ -454,6 +481,7 @@ storage_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -
 }
 
 func_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
+  assert(s != null);
   if kind == .UINT return s.id_ptr_func_uint;
   if kind == .FLOAT return s.id_ptr_func_float;
   if kind == .FLOAT2 return s.id_ptr_func_float2;
@@ -475,7 +503,8 @@ find_buffer_field :: (buffer: *IR_SPV_Gen_Buffer, name: string) -> (*IR_SPV_Gen_
   return null, false;
 }
 
-alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) -> (*IR_SPV_Gen_Local_Struct, bool, IR_Diagnostic) {
+alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) -> (local_struct: *IR_SPV_Gen_Local_Struct, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
   struct_def, struct_ok := find_struct(s, type_name);
   if !struct_ok {
@@ -513,7 +542,8 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
   return out_struct, true, diag;
 }
 
-copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, src: *IR_SPV_Gen_Local_Struct) -> (bool, IR_Diagnostic) {
+copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, src: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
   if !dst || !src {
     diag.message = "SPIR-V backend: null struct while copying fields.";
@@ -546,7 +576,8 @@ copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct
   return true, diag;
 }
 
-emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, field_name: string) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, field_name: string) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
   if !subscript || subscript.kind != .SUBSCRIPT {
     diag.message = "SPIR-V backend: expected subscript expression for buffer struct field access.";
@@ -596,29 +627,31 @@ emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, fiel
   return ptr, field.type, true, diag;
 }
 
-emit_uint_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+emit_uint_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
-  result := new_id(s);
-  if op == "+" { add_op(s, tprint("         % = OpIAdd % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == "-" { add_op(s, tprint("         % = OpISub % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == "*" { add_op(s, tprint("         % = OpIMul % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == "%" { add_op(s, tprint("         % = OpUMod % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == "|" { add_op(s, tprint("         % = OpBitwiseOr % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == "&" { add_op(s, tprint("         % = OpBitwiseAnd % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == "^" { add_op(s, tprint("         % = OpBitwiseXor % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == "<<" { add_op(s, tprint("         % = OpShiftLeftLogical % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == ">>" { add_op(s, tprint("         % = OpShiftRightLogical % % %", id_text(result), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result, .UINT, true, diag; }
-  if op == "<"  { add_op(s, tprint("         % = OpULessThan % % %", id_text(result), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result, .BOOL, true, diag; }
-  if op == ">"  { add_op(s, tprint("         % = OpUGreaterThan % % %", id_text(result), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result, .BOOL, true, diag; }
-  if op == "<=" { add_op(s, tprint("         % = OpULessThanEqual % % %", id_text(result), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result, .BOOL, true, diag; }
-  if op == ">=" { add_op(s, tprint("         % = OpUGreaterThanEqual % % %", id_text(result), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result, .BOOL, true, diag; }
-  if op == "==" { add_op(s, tprint("         % = OpIEqual % % %", id_text(result), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result, .BOOL, true, diag; }
-  if op == "!=" { add_op(s, tprint("         % = OpINotEqual % % %", id_text(result), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result, .BOOL, true, diag; }
+  result_id := new_id(s);
+  if op == "+" { add_op(s, tprint("         % = OpIAdd % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == "-" { add_op(s, tprint("         % = OpISub % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == "*" { add_op(s, tprint("         % = OpIMul % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == "%" { add_op(s, tprint("         % = OpUMod % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == "|" { add_op(s, tprint("         % = OpBitwiseOr % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == "&" { add_op(s, tprint("         % = OpBitwiseAnd % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == "^" { add_op(s, tprint("         % = OpBitwiseXor % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == "<<" { add_op(s, tprint("         % = OpShiftLeftLogical % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == ">>" { add_op(s, tprint("         % = OpShiftRightLogical % % %", id_text(result_id), id_text(s.id_uint), id_text(left_id), id_text(right_id))); return result_id, .UINT, true, diag; }
+  if op == "<"  { add_op(s, tprint("         % = OpULessThan % % %", id_text(result_id), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result_id, .BOOL, true, diag; }
+  if op == ">"  { add_op(s, tprint("         % = OpUGreaterThan % % %", id_text(result_id), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result_id, .BOOL, true, diag; }
+  if op == "<=" { add_op(s, tprint("         % = OpULessThanEqual % % %", id_text(result_id), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result_id, .BOOL, true, diag; }
+  if op == ">=" { add_op(s, tprint("         % = OpUGreaterThanEqual % % %", id_text(result_id), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result_id, .BOOL, true, diag; }
+  if op == "==" { add_op(s, tprint("         % = OpIEqual % % %", id_text(result_id), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result_id, .BOOL, true, diag; }
+  if op == "!=" { add_op(s, tprint("         % = OpINotEqual % % %", id_text(result_id), id_text(s.id_bool), id_text(left_id), id_text(right_id))); return result_id, .BOOL, true, diag; }
   diag.message = tprint("SPIR-V backend: unsupported uint binary op '%'.", op);
   return 0, .UNKNOWN, false, diag;
 }
 
-coerce_to_float :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (s64, bool, IR_Diagnostic) {
+coerce_to_float :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float_id: s64, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
   if value_type == .FLOAT return value_id, true, diag;
   if value_type == .UINT {
@@ -633,7 +666,8 @@ coerce_to_float :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_
   return 0, false, diag;
 }
 
-emit_float_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+emit_float_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
   result := new_id(s);
   if op == "+" { add_op(s, tprint("         % = OpFAdd % % %", id_text(result), id_text(s.id_float), id_text(left_id), id_text(right_id))); return result, .FLOAT, true, diag; }
@@ -650,7 +684,8 @@ emit_float_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_i
   return 0, .UNKNOWN, false, diag;
 }
 
-emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: [] *IR_Expr) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
   if builtin_name == "min" || builtin_name == "max" {
     if args.count != 2 {
@@ -698,7 +733,8 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
   return result, .FLOAT, true, diag;
 }
 
-eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
   if !helper {
     diag.message = "SPIR-V backend: missing helper metadata for inline call.";
@@ -863,7 +899,8 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
   return return_id, return_type, true, diag;
 }
 
-eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr, out_struct: *IR_SPV_Gen_Local_Struct) -> (bool, IR_Diagnostic) {
+eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr, out_struct: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
   diag: IR_Diagnostic;
   if !helper {
     diag.message = "SPIR-V backend: missing helper metadata for inline struct call.";
@@ -1111,12 +1148,16 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
   return true, diag;
 }
 
-emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+// -----------------------------------------------------------------------------
+// Expression Emission
+// -----------------------------------------------------------------------------
+
+emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, { message = sprint(msg, ..args) }; }
+
+  assert(s != null);
   diag: IR_Diagnostic;
-  if !expr {
-    diag.message = "SPIR-V backend: null IR expression.";
-    return 0, .UNKNOWN, false, diag;
-  }
+  if !expr return_err("SPIR-V backend: null IR expression.");
 
   if expr.kind == {
     case .LITERAL; {
@@ -1129,25 +1170,18 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
       }
       ftext, fok := parse_f32_literal_text(expr.text);
       if fok return get_f32_const(s, ftext), .FLOAT, true, diag;
-      diag.message = tprint("SPIR-V backend: unsupported literal '%'.", expr.text);
-      return 0, .UNKNOWN, false, diag;
+      return_err("SPIR-V backend: unsupported literal '%'.", expr.text);
     }
 
     case .IDENT; {
       local, found := find_local(s, expr.text);
-      if !found {
-        diag.message = tprint("SPIR-V backend: unknown identifier '%'.", expr.text);
-        return 0, .UNKNOWN, false, diag;
-      }
+      if !found return_err("SPIR-V backend: unknown identifier '%'.", expr.text);
       value_id := new_id(s);
-      result_type := s.id_uint;
-      if local.type == .BOOL result_type = s.id_bool;
-      if local.type == .FLOAT result_type = s.id_float;
-      if local.type == .FLOAT2 result_type = s.id_float2;
-      if local.type == .FLOAT2X2 result_type = s.id_float2x2;
+      result_type_id := type_id_from_kind(s, local.type);
+      assert(result_type_id != 0);
       add_op(s, tprint("         % = OpLoad % %",
                                   id_text(value_id),
-                                  id_text(result_type),
+                                  id_text(result_type_id),
                                   id_text(local.ptr_id)));
       return value_id, local.type, true, diag;
     }
@@ -1159,29 +1193,17 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
       }
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
         helper, helper_ok := find_helper(s, expr.left.left.text);
-        if !helper_ok {
-          diag.message = tprint("SPIR-V backend: unknown helper '%'.", expr.left.left.text);
-          return 0, .UNKNOWN, false, diag;
-        }
-        if expr_type_from_decl(helper.return_type_name) != .UNKNOWN {
-          diag.message = tprint("SPIR-V backend: member access on non-struct call return '%'.", helper.return_type_name);
-          return 0, .UNKNOWN, false, diag;
-        }
+        if !helper_ok return_err("SPIR-V backend: unknown helper '%'.", expr.left.left.text);
+        if expr_type_from_decl(helper.return_type_name) != .UNKNOWN return_err("SPIR-V backend: member access on non-struct call return '%'.", helper.return_type_name);
         temp_name := tprint("__call_ret_%", new_id(s));
         temp_struct, temp_ok, temp_diag := alloc_local_struct(s, temp_name, helper.return_type_name);
         if !temp_ok return 0, .UNKNOWN, false, temp_diag;
         call_ok, call_diag := eval_inline_helper_to_struct(s, helper, expr.left.args, temp_struct);
         if !call_ok return 0, .UNKNOWN, false, call_diag;
         temp_struct, temp_ok = find_local_struct(s, temp_name);
-        if !temp_ok {
-          diag.message = tprint("SPIR-V backend: inline helper result struct '%' went missing.", temp_name);
-          return 0, .UNKNOWN, false, diag;
-        }
+        if !temp_ok return_err("SPIR-V backend: inline helper result struct '%' went missing.", temp_name);
         field, field_ok := find_local_struct_field(temp_struct, expr.text);
-        if !field_ok {
-          diag.message = tprint("SPIR-V backend: helper call return type '%' has no field '%'.", helper.return_type_name, expr.text);
-          return 0, .UNKNOWN, false, diag;
-        }
+        if !field_ok return_err("SPIR-V backend: helper call return type '%' has no field '%'.", helper.return_type_name, expr.text);
         value_id := new_id(s);
         type_id := type_id_from_kind(s, field.type);
         add_op(s, tprint("         % = OpLoad % %",
@@ -1195,10 +1217,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
         if field_ok {
           value_id := new_id(s);
           value_type_id := type_id_from_kind(s, field_type);
-          if value_type_id == 0 {
-            diag.message = tprint("SPIR-V backend: unsupported loaded field type for '%'.", path);
-            return 0, .UNKNOWN, false, diag;
-          }
+          if value_type_id == 0 return_err("SPIR-V backend: unsupported loaded field type for '%'.", path);
           add_op(s, tprint("         % = OpLoad % %",
                            id_text(value_id),
                            id_text(value_type_id),
@@ -1253,60 +1272,43 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
         local_struct, struct_ok := find_local_struct(s, expr.left.text);
         if struct_ok {
           field, field_ok := find_local_struct_field(local_struct, expr.text);
-          if !field_ok {
-            diag.message = tprint("SPIR-V backend: unknown struct field '%.%'.", expr.left.text, expr.text);
-            return 0, .UNKNOWN, false, diag;
-          }
+          if !field_ok return_err("SPIR-V backend: unknown struct field '%.%'.", expr.left.text, expr.text);
           value_id := new_id(s);
-          result_type := s.id_uint;
-          if field.type == .BOOL result_type = s.id_bool;
-          if field.type == .FLOAT result_type = s.id_float;
-          if field.type == .FLOAT2 result_type = s.id_float2;
-          if field.type == .FLOAT2X2 result_type = s.id_float2x2;
+          result_type_id := type_id_from_kind(s, field.type);
+          assert(result_type_id != 0);
           add_op(s, tprint("         % = OpLoad % %",
                            id_text(value_id),
-                           id_text(result_type),
+                           id_text(result_type_id),
                            id_text(field.ptr_id)));
           return value_id, field.type, true, diag;
         }
       }
-      diag.message = tprint("SPIR-V backend: unsupported member expression '%'.", path);
-      return 0, .UNKNOWN, false, diag;
+      return_err("SPIR-V backend: unsupported member expression '%'.", path);
     }
 
     case .SUBSCRIPT; {
-      if !expr.left || expr.left.kind != .IDENT {
-        diag.message = "SPIR-V backend: subscript base must be an identifier.";
-        return 0, .UNKNOWN, false, diag;
-      }
+      if !expr.left || expr.left.kind != .IDENT return_err("SPIR-V backend: subscript base must be an identifier.");
       buffer, found := find_buffer(s, expr.left.text);
-      if !found {
-        diag.message = tprint("SPIR-V backend: unknown subscript base '%'.", expr.left.text);
-        return 0, .UNKNOWN, false, diag;
-      }
+      if !found return_err("SPIR-V backend: unknown subscript base '%'.", expr.left.text);
       idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
       if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-      if idx_type != .UINT {
-        diag.message = "SPIR-V backend: subscript index must be uint.";
-        return 0, .UNKNOWN, false, diag;
-      }
+      if idx_type != .UINT return_err("SPIR-V backend: subscript index must be uint.");
       if buffer.element_kind == .UINT {
-        ptr := new_id(s);
+        value_ptr_id := new_id(s);
         add_op(s, tprint("         % = OpAccessChain % % % %",
-                                    id_text(ptr),
+                                    id_text(value_ptr_id),
                                     id_text(buffer.ptr_storage_element_type_id),
                                     id_text(buffer.var_id),
                                     id_text(s.id_int_0),
                                     id_text(idx)));
-        value := new_id(s);
+        value_id := new_id(s);
         add_op(s, tprint("         % = OpLoad % %",
-                                    id_text(value),
+                                    id_text(value_id),
                                     id_text(s.id_uint),
-                                    id_text(ptr)));
-        return value, .UINT, true, diag;
+                                    id_text(value_ptr_id)));
+        return value_id, .UINT, true, diag;
       }
-      diag.message = tprint("SPIR-V backend: subscript value access for struct buffer '%' is unsupported; access a field instead.", buffer.name);
-      return 0, .UNKNOWN, false, diag;
+      return_err("SPIR-V backend: subscript value access for struct buffer '%' is unsupported; access a field instead.", buffer.name);
     }
 
     case .BINARY; {
@@ -1338,8 +1340,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
         return result_id, result_type, result_ok, result_diag;
       }
 
-      diag.message = tprint("SPIR-V backend: unsupported binary op '%' for emitted types.", op);
-      return 0, .UNKNOWN, false, diag;
+      return_err("SPIR-V backend: unsupported binary op '%' for emitted types.", op);
     }
 
     case .CAST; {
@@ -1373,21 +1374,14 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
         }
       }
 
-      diag.message = tprint("SPIR-V backend: unsupported cast to '%' from emitted type %.", expr.text, inner_type);
-      return 0, .UNKNOWN, false, diag;
+      return_err("SPIR-V backend: unsupported cast to '%' from emitted type %.", expr.text, inner_type);
     }
 
     case .CALL; {
-      if !expr.left || expr.left.kind != .IDENT {
-        diag.message = "SPIR-V backend: unsupported call target expression.";
-        return 0, .UNKNOWN, false, diag;
-      }
+      if !expr.left || expr.left.kind != .IDENT return_err("SPIR-V backend: unsupported call target expression.");
       callee := expr.left.text;
       if callee == "mul" {
-        if expr.args.count != 2 {
-          diag.message = "SPIR-V backend: mul expects 2 args.";
-          return 0, .UNKNOWN, false, diag;
-        }
+        if expr.args.count != 2 return_err("SPIR-V backend: mul expects 2 args.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
         if !a_ok return 0, .UNKNOWN, false, a_diag;
         b_id, b_type, b_ok, b_diag := emit_expr(s, expr.args[1]);
@@ -1411,8 +1405,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
                            id_text(b_id)));
           return out, .FLOAT2, true, diag;
         }
-        diag.message = tprint("SPIR-V backend: unsupported mul argument types (%, %).", a_type, b_type);
-        return 0, .UNKNOWN, false, diag;
+        return_err("SPIR-V backend: unsupported mul argument types (%, %).", a_type, b_type);
       }
       if callee == "floor" || callee == "min" || callee == "max" ||
          callee == "abs" || callee == "sqrt" || callee == "sin" || callee == "cos" {
@@ -1421,10 +1414,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
         return builtin_id, builtin_type, true, diag;
       }
       helper, helper_found := find_helper(s, callee);
-      if !helper_found {
-        diag.message = tprint("SPIR-V backend: unsupported call target '%'.", callee);
-        return 0, .UNKNOWN, false, diag;
-      }
+      if !helper_found return_err("SPIR-V backend: unsupported call target '%'.", callee);
       helper_id, helper_type, helper_ok, helper_diag := eval_inline_helper(s, helper, expr.args);
       return helper_id, helper_type, helper_ok, helper_diag;
     }
@@ -1432,10 +1422,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
     case .CONSTRUCTOR; {
       ctor_type := expr_type_from_decl(expr.text);
       if ctor_type == .FLOAT2 {
-        if expr.args.count != 2 {
-          diag.message = tprint("SPIR-V backend: float2 constructor expects 2 args, got %.", expr.args.count);
-          return 0, .UNKNOWN, false, diag;
-        }
+        if expr.args.count != 2 return_err("SPIR-V backend: float2 constructor expects 2 args, got %.", expr.args.count);
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
         if !a_ok return 0, .UNKNOWN, false, a_diag;
         b_id, b_type, b_ok, b_diag := emit_expr(s, expr.args[1]);
@@ -1453,10 +1440,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
         return out, .FLOAT2, true, diag;
       }
       if ctor_type == .FLOAT2X2 {
-        if expr.args.count != 4 {
-          diag.message = tprint("SPIR-V backend: float2x2 constructor expects 4 scalar args, got %.", expr.args.count);
-          return 0, .UNKNOWN, false, diag;
-        }
+        if expr.args.count != 4 return_err("SPIR-V backend: float2x2 constructor expects 4 scalar args, got %.", expr.args.count);
         a0_id, a0_type, a0_ok, a0_diag := emit_expr(s, expr.args[0]);
         if !a0_ok return 0, .UNKNOWN, false, a0_diag;
         a1_id, a1_type, a1_ok, a1_diag := emit_expr(s, expr.args[1]);
@@ -1496,45 +1480,31 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bo
                          id_text(col1)));
         return out, .FLOAT2X2, true, diag;
       }
-      diag.message = tprint("SPIR-V backend: unsupported constructor type '%'.", expr.text);
-      return 0, .UNKNOWN, false, diag;
+      return_err("SPIR-V backend: unsupported constructor type '%'.", expr.text);
     }
   }
 
-  diag.message = tprint("SPIR-V backend: unsupported expression kind %.", expr.kind);
-  return 0, .UNKNOWN, false, diag;
+  return_err("SPIR-V backend: unsupported expression kind %.", expr.kind);
 }
 
-emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, { message = sprint(msg, ..args) }; }
+
+  assert(s != null);
   diag: IR_Diagnostic;
-  if !expr {
-    diag.message = "SPIR-V backend: null lvalue expression.";
-    return 0, .UNKNOWN, false, diag;
-  }
+  if !expr return_err("SPIR-V backend: null lvalue expression.");
   if expr.kind == .IDENT {
     local, found := find_local(s, expr.text);
-    if !found {
-      diag.message = tprint("SPIR-V backend: unknown lvalue identifier '%'.", expr.text);
-      return 0, .UNKNOWN, false, diag;
-    }
+    if !found return_err("SPIR-V backend: unknown lvalue identifier '%'.", expr.text);
     return local.ptr_id, local.type, true, diag;
   }
   if expr.kind == .SUBSCRIPT {
-    if !expr.left || expr.left.kind != .IDENT {
-      diag.message = "SPIR-V backend: unsupported lvalue subscript base.";
-      return 0, .UNKNOWN, false, diag;
-    }
+    if !expr.left || expr.left.kind != .IDENT return_err("SPIR-V backend: unsupported lvalue subscript base.");
     buffer, found := find_buffer(s, expr.left.text);
-    if !found {
-      diag.message = tprint("SPIR-V backend: unknown lvalue subscript base '%'.", expr.left.text);
-      return 0, .UNKNOWN, false, diag;
-    }
+    if !found return_err("SPIR-V backend: unknown lvalue subscript base '%'.", expr.left.text);
     idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
     if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-    if idx_type != .UINT {
-      diag.message = "SPIR-V backend: lvalue subscript index must be uint.";
-      return 0, .UNKNOWN, false, diag;
-    }
+    if idx_type != .UINT return_err("SPIR-V backend: lvalue subscript index must be uint.");
     if buffer.element_kind == .UINT {
       ptr := new_id(s);
       add_op(s, tprint("         % = OpAccessChain % % % %",
@@ -1545,8 +1515,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Ty
                                   id_text(idx)));
       return ptr, .UINT, true, diag;
     }
-    diag.message = tprint("SPIR-V backend: struct buffer '%' requires member access on lvalue.", buffer.name);
-    return 0, .UNKNOWN, false, diag;
+    return_err("SPIR-V backend: struct buffer '%' requires member access on lvalue.", buffer.name);
   }
   if expr.kind == .MEMBER {
     if expr.left && expr.left.kind == .SUBSCRIPT {
@@ -1556,17 +1525,11 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Ty
     if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .SUBSCRIPT {
       field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
       if !field_ok return 0, .UNKNOWN, false, field_diag;
-      if field_type != .FLOAT2 {
-        diag.message = tprint("SPIR-V backend: lvalue component access requires float2 field, got %.", field_type);
-        return 0, .UNKNOWN, false, diag;
-      }
+      if field_type != .FLOAT2 return_err("SPIR-V backend: lvalue component access requires float2 field, got %.", field_type);
       comp_index: u32 = 0;
       if expr.text == "x" comp_index = 0;
       else if expr.text == "y" comp_index = 1;
-      else {
-        diag.message = tprint("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
-        return 0, .UNKNOWN, false, diag;
-      }
+      else return_err("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
       comp_index_id := get_u32_const(s, comp_index);
       ptr := new_id(s);
       add_op(s, tprint("         % = OpAccessChain % % %",
@@ -1580,10 +1543,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Ty
       local_struct, struct_ok := find_local_struct(s, expr.left.text);
       if struct_ok {
         field, field_ok := find_local_struct_field(local_struct, expr.text);
-        if !field_ok {
-          diag.message = tprint("SPIR-V backend: unknown struct field '%.%'.", expr.left.text, expr.text);
-          return 0, .UNKNOWN, false, diag;
-        }
+        if !field_ok return_err("SPIR-V backend: unknown struct field '%.%'.", expr.left.text, expr.text);
         return field.ptr_id, field.type, true, diag;
       }
     }
@@ -1591,21 +1551,12 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Ty
       local_struct, struct_ok := find_local_struct(s, expr.left.left.text);
       if struct_ok {
         field, field_ok := find_local_struct_field(local_struct, expr.left.text);
-        if !field_ok {
-          diag.message = tprint("SPIR-V backend: unknown struct field '%.%'.", expr.left.left.text, expr.left.text);
-          return 0, .UNKNOWN, false, diag;
-        }
-        if field.type != .FLOAT2 {
-          diag.message = tprint("SPIR-V backend: component lvalue requires float2 field, got %.", field.type);
-          return 0, .UNKNOWN, false, diag;
-        }
+        if !field_ok return_err("SPIR-V backend: unknown struct field '%.%'.", expr.left.left.text, expr.left.text);
+        if field.type != .FLOAT2 return_err("SPIR-V backend: component lvalue requires float2 field, got %.", field.type);
         comp_index: u32 = 0;
         if expr.text == "x" comp_index = 0;
         else if expr.text == "y" comp_index = 1;
-        else {
-          diag.message = tprint("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
-          return 0, .UNKNOWN, false, diag;
-        }
+        else return_err("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
         comp_index_id := get_u32_const(s, comp_index);
         ptr := new_id(s);
         add_op(s, tprint("         % = OpAccessChain % % %",
@@ -1616,29 +1567,29 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (s64, IR_SPV_Gen_Ty
         return ptr, .FLOAT, true, diag;
       }
     }
-    diag.message = tprint("SPIR-V backend: unsupported lvalue member expression '%'.", expr_text(expr));
-    return 0, .UNKNOWN, false, diag;
+    return_err("SPIR-V backend: unsupported lvalue member expression '%'.", expr_text(expr));
   }
-  diag.message = tprint("SPIR-V backend: unsupported lvalue expression kind %.", expr.kind);
-  return 0, .UNKNOWN, false, diag;
+  return_err("SPIR-V backend: unsupported lvalue expression kind %.", expr.kind);
 }
 
-emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnostic) {
+// -----------------------------------------------------------------------------
+// Statement Emission
+// -----------------------------------------------------------------------------
+
+emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return false, false, { message = sprint(msg, ..args) }; }
+  
+  assert(s != null);
   diag: IR_Diagnostic;
-  if !stmt {
-    diag.message = "SPIR-V backend: null statement.";
-    return false, false, diag;
-  }
+  if !stmt return_err("SPIR-V backend: null statement.");
+  
   if stmt.kind == {
     case .DECL; {
       decl_type := expr_type_from_decl(stmt.decl_type_name);
       if decl_type == .UINT || decl_type == .BOOL || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT2X2 {
         ptr_id := new_id(s);
-        ptr_type_id := s.id_ptr_func_uint;
-        if decl_type == .BOOL ptr_type_id = s.id_ptr_func_bool;
-        if decl_type == .FLOAT ptr_type_id = s.id_ptr_func_float;
-        if decl_type == .FLOAT2 ptr_type_id = s.id_ptr_func_float2;
-        if decl_type == .FLOAT2X2 ptr_type_id = s.id_ptr_func_float2x2;
+        ptr_type_id := func_ptr_type_id_from_kind(s, decl_type);
+        assert(ptr_type_id != 0);
         add_local_decl(s, tprint("         % = OpVariable % Function",
                                  id_text(ptr_id),
                                  id_text(ptr_type_id)));
@@ -1647,8 +1598,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
           init_id, init_type, init_ok, init_diag := emit_expr(s, stmt.decl_init);
           if !init_ok return false, false, init_diag;
           if init_type != decl_type {
-            diag.message = tprint("SPIR-V backend: declaration type mismatch for '%'.", stmt.decl_name);
-            return false, false, diag;
+            return_err("SPIR-V backend: declaration type mismatch for '%'.", stmt.decl_name);
           }
           add_op(s, tprint("               OpStore % %",
                            id_text(ptr_id),
@@ -1659,8 +1609,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
 
       struct_def, struct_ok := find_struct(s, stmt.decl_type_name);
       if !struct_ok {
-        diag.message = tprint("SPIR-V backend: unsupported declaration type '%'.", stmt.decl_type_name);
-        return false, false, diag;
+        return_err("SPIR-V backend: unsupported declaration type '%'.", stmt.decl_type_name);
       }
       local_struct: IR_SPV_Gen_Local_Struct;
       local_struct.name = stmt.decl_name;
@@ -1668,14 +1617,12 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
       for struct_def.fields {
         field_type := expr_type_from_decl(it.type_name);
         if field_type == .UNKNOWN || field_type == .STRUCT {
-          diag.message = tprint("SPIR-V backend: struct '%' field '%' type '%' is unsupported in generic path.", struct_def.name, it.name, it.type_name);
-          return false, false, diag;
+          return_err("SPIR-V backend: struct '%' field '%' type '%' is unsupported in generic path.", struct_def.name, it.name, it.type_name);
         }
         field_ptr := new_id(s);
         field_ptr_type := func_ptr_type_id_from_kind(s, field_type);
         if field_ptr_type == 0 {
-          diag.message = tprint("SPIR-V backend: struct '%' field '%' type '%' has no function pointer type.", struct_def.name, it.name, it.type_name);
-          return false, false, diag;
+          return_err("SPIR-V backend: struct '%' field '%' type '%' has no function pointer type.", struct_def.name, it.name, it.type_name);
         }
         add_local_decl(s, tprint("         % = OpVariable % Function",
                                  id_text(field_ptr),
@@ -1686,16 +1633,14 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
       if stmt.decl_init {
         if stmt.decl_init.kind == .CONSTRUCTOR && stmt.decl_init.text == stmt.decl_type_name {
           if stmt.decl_init.args.count != struct_def.fields.count {
-            diag.message = tprint("SPIR-V backend: struct constructor for '%' has wrong argument count.", stmt.decl_name);
-            return false, false, diag;
+            return_err("SPIR-V backend: struct constructor for '%' has wrong argument count.", stmt.decl_name);
           }
           for struct_def.fields {
             field := local_struct.fields[it_index];
             init_id, init_type, init_ok, init_diag := emit_expr(s, stmt.decl_init.args[it_index]);
             if !init_ok return false, false, init_diag;
             if init_type != field.type {
-              diag.message = tprint("SPIR-V backend: struct constructor field '%' type mismatch for '%'.", it.name, stmt.decl_name);
-              return false, false, diag;
+              return_err("SPIR-V backend: struct constructor field '%' type mismatch for '%'.", it.name, stmt.decl_name);
             }
             add_op(s, tprint("               OpStore % %",
                              id_text(field.ptr_id),
@@ -1704,21 +1649,18 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
         } else if stmt.decl_init.kind == .IDENT {
           src_struct, src_ok := find_local_struct(s, stmt.decl_init.text);
           if !src_ok || src_struct.type_name != stmt.decl_type_name {
-            diag.message = tprint("SPIR-V backend: struct declaration '%': unsupported initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
-            return false, false, diag;
+            return_err("SPIR-V backend: struct declaration '%': unsupported initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
           for struct_def.fields {
             dst_field := local_struct.fields[it_index];
             src_field, src_field_ok := find_local_struct_field(src_struct, it.name);
             if !src_field_ok {
-              diag.message = tprint("SPIR-V backend: missing struct field '%' on initializer '%'.", it.name, stmt.decl_init.text);
-              return false, false, diag;
+              return_err("SPIR-V backend: missing struct field '%' on initializer '%'.", it.name, stmt.decl_init.text);
             }
             src_value := new_id(s);
             src_type_id := type_id_from_kind(s, src_field.type);
             if src_type_id == 0 {
-              diag.message = tprint("SPIR-V backend: unsupported struct field type while copying '%'.", it.name);
-              return false, false, diag;
+              return_err("SPIR-V backend: unsupported struct field type while copying '%'.", it.name);
             }
             add_op(s, tprint("         % = OpLoad % %",
                              id_text(src_value),
@@ -1731,16 +1673,14 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
         } else if stmt.decl_init.kind == .SUBSCRIPT && stmt.decl_init.left && stmt.decl_init.left.kind == .IDENT {
           buffer, buffer_ok := find_buffer(s, stmt.decl_init.left.text);
           if !buffer_ok || buffer.element_kind != .STRUCT || buffer.element_type_name != stmt.decl_type_name {
-            diag.message = tprint("SPIR-V backend: struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
-            return false, false, diag;
+            return_err("SPIR-V backend: struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
           for struct_def.fields {
             dst_field := local_struct.fields[it_index];
             src_ptr, src_type, src_ok, src_diag := emit_buffer_struct_field_ptr(s, stmt.decl_init, it.name);
             if !src_ok return false, false, src_diag;
             if src_type != dst_field.type {
-              diag.message = tprint("SPIR-V backend: struct declaration '%': field '%' type mismatch in buffer initializer.", stmt.decl_name, it.name);
-              return false, false, diag;
+              return_err("SPIR-V backend: struct declaration '%': field '%' type mismatch in buffer initializer.", stmt.decl_name, it.name);
             }
             src_value := new_id(s);
             src_type_id := type_id_from_kind(s, src_type);
@@ -1755,14 +1695,12 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
         } else if stmt.decl_init.kind == .CALL && stmt.decl_init.left && stmt.decl_init.left.kind == .IDENT {
           helper, helper_ok := find_helper(s, stmt.decl_init.left.text);
           if !helper_ok || helper.return_type_name != stmt.decl_type_name {
-            diag.message = tprint("SPIR-V backend: struct declaration '%': unsupported call initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
-            return false, false, diag;
+            return_err("SPIR-V backend: struct declaration '%': unsupported call initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
           call_ok, call_diag := eval_inline_helper_to_struct(s, helper, stmt.decl_init.args, *local_struct);
           if !call_ok return false, false, call_diag;
         } else {
-          diag.message = tprint("SPIR-V backend: struct declaration '%': unsupported initializer expression kind %.", stmt.decl_name, stmt.decl_init.kind);
-          return false, false, diag;
+          return_err("SPIR-V backend: struct declaration '%': unsupported initializer expression kind %.", stmt.decl_name, stmt.decl_init.kind);
         }
       }
 
@@ -1782,20 +1720,17 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
           if stmt.binary_right && stmt.binary_right.kind == .IDENT {
             src_struct, src_ok = find_local_struct(s, stmt.binary_right.text);
             if !src_ok {
-              diag.message = tprint("SPIR-V backend: assignment source '%' is not a local struct.", stmt.binary_right.text);
-              return false, false, diag;
+              return_err("SPIR-V backend: assignment source '%' is not a local struct.", stmt.binary_right.text);
             }
             if src_struct.type_name != dst_buffer.element_type_name {
-              diag.message = tprint("SPIR-V backend: struct buffer assignment type mismatch ('%' vs '%').",
-                                    dst_buffer.element_type_name, src_struct.type_name);
-              return false, false, diag;
+              return_err("SPIR-V backend: struct buffer assignment type mismatch ('%' vs '%').",
+                         dst_buffer.element_type_name, src_struct.type_name);
             }
           } else if stmt.binary_right && stmt.binary_right.kind == .CALL &&
                     stmt.binary_right.left && stmt.binary_right.left.kind == .IDENT {
             helper, helper_ok := find_helper(s, stmt.binary_right.left.text);
             if !helper_ok || helper.return_type_name != dst_buffer.element_type_name {
-              diag.message = tprint("SPIR-V backend: struct buffer assignment call '%' has incompatible return type.", expr_text(stmt.binary_right));
-              return false, false, diag;
+              return_err("SPIR-V backend: struct buffer assignment call '%' has incompatible return type.", expr_text(stmt.binary_right));
             }
             tmp_name := tprint("__assign_src_%", new_id(s));
             tmp_struct, tmp_ok, tmp_diag := alloc_local_struct(s, tmp_name, helper.return_type_name);
@@ -1804,29 +1739,24 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
             if !call_ok return false, false, call_diag;
             src_struct, src_ok = find_local_struct(s, tmp_name);
             if !src_ok {
-              diag.message = tprint("SPIR-V backend: inline helper assignment source struct '%' went missing.", tmp_name);
-              return false, false, diag;
+              return_err("SPIR-V backend: inline helper assignment source struct '%' went missing.", tmp_name);
             }
           } else {
-            diag.message = tprint("SPIR-V backend: unsupported struct buffer assignment rhs '%'.", expr_text(stmt.binary_right));
-            return false, false, diag;
+            return_err("SPIR-V backend: unsupported struct buffer assignment rhs '%'.", expr_text(stmt.binary_right));
           }
 
           for dst_buffer.fields {
             dst_ptr, dst_type, dst_ok, dst_diag := emit_buffer_struct_field_ptr(s, stmt.binary_left, it.name);
             if !dst_ok return false, false, dst_diag;
             if dst_type != it.type {
-              diag.message = tprint("SPIR-V backend: struct buffer field '%' type mismatch on destination.", it.name);
-              return false, false, diag;
+              return_err("SPIR-V backend: struct buffer field '%' type mismatch on destination.", it.name);
             }
             src_field, src_field_ok := find_local_struct_field(src_struct, it.name);
             if !src_field_ok {
-              diag.message = tprint("SPIR-V backend: struct assignment source missing field '%'.", it.name);
-              return false, false, diag;
+              return_err("SPIR-V backend: struct assignment source missing field '%'.", it.name);
             }
             if src_field.type != it.type {
-              diag.message = tprint("SPIR-V backend: struct assignment field '%' type mismatch.", it.name);
-              return false, false, diag;
+              return_err("SPIR-V backend: struct assignment field '%' type mismatch.", it.name);
             }
             value_id := new_id(s);
             value_type_id := type_id_from_kind(s, it.type);
@@ -1849,8 +1779,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
         rhs_id, rhs_type, rhs_ok, rhs_diag := emit_expr(s, stmt.binary_right);
         if !rhs_ok return false, false, rhs_diag;
         if lhs_type != rhs_type {
-          diag.message = "SPIR-V backend: assignment type mismatch.";
-          return false, false, diag;
+          return_err("SPIR-V backend: assignment type mismatch.");
         }
         add_op(s, tprint("               OpStore % %",
                                     id_text(ptr_id),
@@ -1858,10 +1787,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
         return true, false, diag;
       }
 
-      if lhs_type != .UINT {
-        diag.message = "SPIR-V backend: non-uint compound assignment is not supported yet.";
-        return false, false, diag;
-      }
+      if lhs_type != .UINT return_err("SPIR-V backend: non-uint compound assignment is not supported yet.");
 
       base_op: string = "";
       if op == "+=" base_op = "+";
@@ -1874,8 +1800,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
       if op == "<<=" base_op = "<<";
       if op == ">>=" base_op = ">>";
       if base_op.count == 0 {
-        diag.message = tprint("SPIR-V backend: unsupported statement binary op '%'.", stmt.binary_op);
-        return false, false, diag;
+        return_err("SPIR-V backend: unsupported statement binary op '%'.", stmt.binary_op);
       }
 
       lhs_value := new_id(s);
@@ -1886,14 +1811,12 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
       rhs_id, rhs_type, rhs_ok, rhs_diag := emit_expr(s, stmt.binary_right);
       if !rhs_ok return false, false, rhs_diag;
       if rhs_type != .UINT {
-        diag.message = "SPIR-V backend: compound assignment rhs must be uint.";
-        return false, false, diag;
+        return_err("SPIR-V backend: compound assignment rhs must be uint.");
       }
       result_id, result_type, result_ok, result_diag := emit_uint_binary_op(s, base_op, lhs_value, rhs_id);
       if !result_ok return false, false, result_diag;
       if result_type != .UINT {
-        diag.message = "SPIR-V backend: compound assignment operator must produce uint.";
-        return false, false, diag;
+        return_err("SPIR-V backend: compound assignment operator must produce uint.");
       }
 
       add_op(s, tprint("               OpStore % %",
@@ -1905,10 +1828,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
     case .IF; {
       cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.if_condition);
       if !cond_ok return false, false, cond_diag;
-      if cond_type != .BOOL {
-        diag.message = "SPIR-V backend: if condition must be bool.";
-        return false, false, diag;
-      }
+      if cond_type != .BOOL return_err("SPIR-V backend: if condition must be bool.");
 
       then_label := new_id(s);
       merge_label := new_id(s);
@@ -1950,10 +1870,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
     case .SWITCH; {
       cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.switch_condition);
       if !cond_ok return false, false, cond_diag;
-      if cond_type != .UINT {
-        diag.message = "SPIR-V backend: switch condition must be uint.";
-        return false, false, diag;
-      }
+      if cond_type != .UINT return_err("SPIR-V backend: switch condition must be uint.");
 
       merge_label := new_id(s);
       case_labels: [..] s64;
@@ -1970,10 +1887,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
       for stmt.switch_cases {
         if !it.condition continue;
         value, value_ok := parse_u32_literal_expr(it.condition);
-        if !value_ok {
-          diag.message = "SPIR-V backend: switch case values must be uint literals.";
-          return false, false, diag;
-        }
+        if !value_ok return_err("SPIR-V backend: switch case values must be uint literals.");
         append(*switch_line_sb, tprint(" % %", value, id_text(case_labels[it_index])));
       }
       add_op(s, builder_to_string(*switch_line_sb));
@@ -1983,8 +1897,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
         case_block := it.body;
         if !case_block {
           if s.break_targets.count > 0 s.break_targets.count -= 1;
-          diag.message = "SPIR-V backend: switch case body is missing.";
-          return false, false, diag;
+          return_err("SPIR-V backend: switch case body is missing.");
         }
         add_op(s, tprint("         % = OpLabel", id_text(case_labels[it_index])));
         case_ok, case_terminated, case_diag := emit_stmt_block(s, case_block);
@@ -2007,10 +1920,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
     }
 
     case .FOR; {
-      if !stmt.for_body {
-        diag.message = "SPIR-V backend: for-loop body is missing.";
-        return false, false, diag;
-      }
+      if !stmt.for_body return_err("SPIR-V backend: for-loop body is missing.");
 
       loop_name := stmt.for_loop_name;
       if loop_name.count == 0 loop_name = "__for_it";
@@ -2025,10 +1935,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
 
       start_id, start_type, start_ok, start_diag := emit_expr(s, stmt.for_start);
       if !start_ok return false, false, start_diag;
-      if start_type != .UINT {
-        diag.message = "SPIR-V backend: for-loop start expression must be uint.";
-        return false, false, diag;
-      }
+      if start_type != .UINT return_err("SPIR-V backend: for-loop start expression must be uint.");
       add_op(s, tprint("               OpStore % %", id_text(loop_ptr), id_text(start_id)));
 
       header_label := new_id(s);
@@ -2043,16 +1950,10 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
       add_op(s, tprint("         % = OpLoad % %", id_text(it_value), id_text(s.id_uint), id_text(loop_ptr)));
       end_id, end_type, end_ok, end_diag := emit_expr(s, stmt.for_end);
       if !end_ok return false, false, end_diag;
-      if end_type != .UINT {
-        diag.message = "SPIR-V backend: for-loop end expression must be uint.";
-        return false, false, diag;
-      }
+      if end_type != .UINT return_err("SPIR-V backend: for-loop end expression must be uint.");
       cmp_id, cmp_type, cmp_ok, cmp_diag := emit_uint_binary_op(s, stmt.for_cmp, it_value, end_id);
       if !cmp_ok return false, false, cmp_diag;
-      if cmp_type != .BOOL {
-        diag.message = tprint("SPIR-V backend: for-loop comparison '%' must produce bool.", stmt.for_cmp);
-        return false, false, diag;
-      }
+      if cmp_type != .BOOL return_err("SPIR-V backend: for-loop comparison '%' must produce bool.", stmt.for_cmp);
       add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
       add_op(s, tprint("               OpBranchConditional % % %",
                                   id_text(cmp_id),
@@ -2078,18 +1979,14 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
       } else if compact_step == "-=1" {
         step_op = "-";
       } else {
-        diag.message = tprint("SPIR-V backend: unsupported for-loop step '%'.", stmt.for_step);
-        return false, false, diag;
+        return_err("SPIR-V backend: unsupported for-loop step '%'.", stmt.for_step);
       }
       step_id := get_u32_const(s, 1);
       it_current := new_id(s);
       add_op(s, tprint("         % = OpLoad % %", id_text(it_current), id_text(s.id_uint), id_text(loop_ptr)));
       next_it, next_type, next_ok, next_diag := emit_uint_binary_op(s, step_op, it_current, step_id);
       if !next_ok return false, false, next_diag;
-      if next_type != .UINT {
-        diag.message = "SPIR-V backend: for-loop step must produce uint.";
-        return false, false, diag;
-      }
+      if next_type != .UINT return_err("SPIR-V backend: for-loop step must produce uint.");
       add_op(s, tprint("               OpStore % %", id_text(loop_ptr), id_text(next_it)));
       add_op(s, tprint("               OpBranch %", id_text(header_label)));
 
@@ -2099,10 +1996,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
     }
 
     case .WHILE; {
-      if !stmt.while_body {
-        diag.message = "SPIR-V backend: while-loop body is missing.";
-        return false, false, diag;
-      }
+      if !stmt.while_body return_err("SPIR-V backend: while-loop body is missing.");
 
       header_label := new_id(s);
       body_label := new_id(s);
@@ -2114,10 +2008,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
 
       cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.while_condition);
       if !cond_ok return false, false, cond_diag;
-      if cond_type != .BOOL {
-        diag.message = "SPIR-V backend: while condition must be bool.";
-        return false, false, diag;
-      }
+      if cond_type != .BOOL return_err("SPIR-V backend: while condition must be bool.");
       add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
       add_op(s, tprint("               OpBranchConditional % % %",
                                   id_text(cond_id),
@@ -2144,44 +2035,36 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (bool, bool, IR_Diagnosti
 
     case .BREAK; {
       break_target, found := get_current_break_target(s);
-      if !found {
-        diag.message = "SPIR-V backend: break used outside loop.";
-        return false, false, diag;
-      }
+      if !found return_err("SPIR-V backend: break used outside loop.");
       add_op(s, tprint("               OpBranch %", id_text(break_target)));
       return true, true, diag;
     }
 
     case .CONTINUE; {
       loop_target, found := get_current_loop_target(s);
-      if !found {
-        diag.message = "SPIR-V backend: continue used outside loop.";
-        return false, false, diag;
-      }
+      if !found return_err("SPIR-V backend: continue used outside loop.");
       add_op(s, tprint("               OpBranch %", id_text(loop_target.continue_label)));
       return true, true, diag;
     }
 
     case .RETURN; {
       if stmt.return_expr {
-        diag.message = "SPIR-V backend: return with value is not supported yet for compute.";
-        return false, false, diag;
+        return_err("SPIR-V backend: return with value is not supported yet for compute.");
       }
       add_op(s, "               OpReturn");
       return true, true, diag;
     }
   }
 
-  diag.message = tprint("SPIR-V backend: unsupported statement kind %.", stmt.kind);
-  return false, false, diag;
+  return_err("SPIR-V backend: unsupported statement kind %.", stmt.kind);
 }
 
-emit_stmt_block :: (s: *IR_SPV_Gen_State, block: *IR_Block) -> (bool, bool, IR_Diagnostic) {
+emit_stmt_block :: (s: *IR_SPV_Gen_State, block: *IR_Block) -> (ok: bool, terminated: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return false, false, { message = sprint(msg, ..args) }; }
+
+  assert(s != null);
   diag: IR_Diagnostic;
-  if !block {
-    diag.message = "SPIR-V backend: null statement block.";
-    return false, false, diag;
-  }
+  if !block return_err("SPIR-V backend: null statement block.");
   local_count_before := s.locals.count;
   local_struct_count_before := s.local_structs.count;
   for block.statements {
@@ -2202,16 +2085,16 @@ emit_stmt_block :: (s: *IR_SPV_Gen_State, block: *IR_Block) -> (bool, bool, IR_D
   return true, false, diag;
 }
 
-emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (string, bool, IR_Diagnostic) {
+// -----------------------------------------------------------------------------
+// Module Assembly
+// -----------------------------------------------------------------------------
+
+emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return "", false, { message = sprint(msg, ..args) }; }
+
   diag: IR_Diagnostic;
-  if shader.buffers.count == 0 {
-    diag.message = "SPIR-V generic backend: expected at least one compute buffer.";
-    return "", false, diag;
-  }
-  if shader.body.statements.count == 0 {
-    diag.message = "SPIR-V generic backend: empty compute body.";
-    return "", false, diag;
-  }
+  if shader.buffers.count == 0 return_err("SPIR-V generic backend: expected at least one compute buffer.");
+  if shader.body.statements.count == 0 return_err("SPIR-V generic backend: empty compute body.");
 
   bound_value := cast(u32) 64;
   if shader.body.statements[0].kind == .IF {
