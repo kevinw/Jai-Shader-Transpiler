@@ -27,9 +27,6 @@ Proc :: #import "Process";
     if it == "-output_shaders" {
       plugin.output_shaders = true;
     }
-    if it == "-use_ir_pipeline" {
-      plugin.use_ir_pipeline = true;
-    }
     if it == "-use_spirv_backend" {
       plugin.use_spirv_backend = true;
     }

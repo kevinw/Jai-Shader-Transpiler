@@ -32,23 +32,28 @@ run_all_tests :: () {
       return tprint("%/%", DEBUG_OUTDIR, name);
   }
   
-  check_file_contains(debug_path("array_support_vertex_shader.glsl"), "vec2 positions[3] = vec2[](");
+  if !use_spirv_backend {
+    check_file_contains(debug_path("array_support_vertex_shader.glsl"), "vec2 positions[3] = vec2[](");
+    check_file_contains(debug_path("array_support_fragment_shader.glsl"), "uniform vec4 u_palette[2];");
+    check_file_contains(debug_path("array_support_vertex_shader.metal"), "float2 positions[3] = {");
+    check_file_contains(debug_path("compute_write_indices.glsl"), "#version 430 core");
+    check_file_contains(debug_path("compute_write_indices.glsl"), "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;");
+    check_file_contains(debug_path("compute_write_indices.glsl"), "gl_GlobalInvocationID");
+    check_file_contains(debug_path("tiles_pair_shader.metal"), "vertex VertexShader_Out VertexMain(");
+    check_file_contains(debug_path("tiles_pair_shader.metal"), "fragment FragmentShader_Out FragmentMain(");
+    check_file_contains(debug_path("tiles_pair_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
+    check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
+    check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
+    check_file_contains(debug_path("array_support_fragment_shader.metal"), "float4 u_palette[2];");
+  }
   if use_spirv_backend {
     // SPIR-V-Cross may fold local array literals, so validate indexed uniform usage instead.
     check_file_contains(debug_path("array_support_vertex_shader.metal"), "un.u_offsets.data[2]");
     check_file_contains(debug_path("array_support_vertex_shader.metal"), "un.u_offsets.data[1]");
-  } else {
-    check_file_contains(debug_path("array_support_vertex_shader.metal"), "float2 positions[3] = {");
-  }
-  check_file_contains(debug_path("array_support_fragment_shader.glsl"), "uniform vec4 u_palette[2];");
-  if use_spirv_backend {
     check_file_contains(debug_path("array_support_fragment_shader.metal"), "un.u_palette.data[1]");
-  } else {
-    check_file_contains(debug_path("array_support_fragment_shader.metal"), "float4 u_palette[2];");
+    check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(");
+    check_file_contains(debug_path("tiles_fragment_shader.metal"), "gl_FragCoord");
   }
-  check_file_contains(debug_path("compute_write_indices.glsl"), "#version 430 core");
-  check_file_contains(debug_path("compute_write_indices.glsl"), "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;");
-  check_file_contains(debug_path("compute_write_indices.glsl"), "gl_GlobalInvocationID");
   check_file_contains(debug_path("tiles_vertex_shader_vk.glsl"), "#version 450");
   check_file_contains_any(debug_path("tiles_vertex_shader_vk.glsl"), .["layout (location=0) in", "layout(location = 0) in"]);
   check_file_contains_any(debug_path("tiles_fragment_shader_vk.glsl"), .["layout (location=0) out", "layout(location = 0) out"]);
@@ -56,20 +61,9 @@ run_all_tests :: () {
   check_file_contains(debug_path("compute_write_indices_vk.glsl"), "std430");
   check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "readonly buffer StructuredBuffer");
   check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "params_vertex_data");
-  if use_spirv_backend {
-    check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(");
-    check_file_contains(debug_path("tiles_fragment_shader.metal"), "gl_FragCoord");
-  } else {
-    check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
-  }
-  check_file_contains(debug_path("tiles_pair_shader.metal"), "vertex VertexShader_Out VertexMain(");
-  check_file_contains(debug_path("tiles_pair_shader.metal"), "fragment FragmentShader_Out FragmentMain(");
-  check_file_contains(debug_path("tiles_pair_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector2");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector3");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector4");
-
-  check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "<operator_not_supported>");
 
   for collect_generated_files(".glsl") check_file_not_contains(it, "#string END");

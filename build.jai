@@ -9,15 +9,12 @@
 #run,stallable {
   command_line_opts := get_build_options();
   run_tests := false;
-  use_ir_pipeline := true; // IR pipeline is the default.
   use_spirv_backend := false;
   verbose_build_progress := false;
   ir_case := "";
   for command_line_opts.compile_time_command_line {
     if it == "-run_tests" run_tests = true;
-    if it == "-use_ir_pipeline" use_ir_pipeline = true;
     if it == "-use_spirv_backend" use_spirv_backend = true;
-    if it == "-legacy_pipeline" use_ir_pipeline = false;
     if it == "-verbose_build_progress" verbose_build_progress = true;
     if begins_with(it, "-ir_case=") {
       ir_case = slice(it, 9, it.count);
@@ -101,7 +98,6 @@ build :: (build_file: string, output_exe_name: string, verbose_build_progress: b
       if it == {
         case "-run"; autorun = true;
         case "-output_shaders"; jai_to_shader_plugin.output_shaders = true;
-        case "-use_ir_pipeline"; jai_to_shader_plugin.use_ir_pipeline = true;
       }
   }
 

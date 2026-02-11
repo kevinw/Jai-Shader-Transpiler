@@ -22,9 +22,6 @@
     if it == "-output_shaders" {
       plugin.output_shaders = true;
     }
-    if it == "-use_ir_pipeline" {
-      plugin.use_ir_pipeline = true;
-    }
   }
 
   compiler_begin_intercept(w);

@@ -21,9 +21,6 @@ Transpiled_Target :: enum {
 }
 
 #load "backend_shared.jai";
-#load "glsl_backend.jai";
-#load "hlsl_backend.jai";
-#load "metal_backend.jai";
 #load "ir_pipeline/slang_toolchain.jai";
 #load "ir_pipeline/ir_shared.jai";
 #load "ir_pipeline/ir_lowering.jai";
@@ -34,7 +31,6 @@ Jai_To_Shader_Plugin :: struct {
     
     // options
     output_shaders: bool;
-    use_ir_pipeline: bool = true;
     use_spirv_backend: bool;
     use_direct_spirv_text: bool;
     slang_emit_line_directives: bool;
@@ -257,7 +253,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     case .PHASE; {
       phase := cast(*Message_Phase) message;
       if phase.phase == .TYPECHECKED_ALL_WE_CAN {
-        if plugin.use_ir_pipeline && !plugin.did_log_ir_pipeline {
+        if !plugin.did_log_ir_pipeline {
           plugin.did_log_ir_pipeline = true;
         }
 
@@ -277,13 +273,13 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
               remove pair_ctx;
               continue;
             }
-          } else if plugin.use_ir_pipeline {
+          } else {
             s2, ok2, diag := write_shader_pair_ir_slang(pair_ctx, plugin.slang_emit_line_directives);
             if ok2 {
               s = s2;
               used_ir_pipeline = true;
             } else {
-              report_message := tprint("Jai Shader Transpiler: IR-only mode failed for shader pair '%'. No legacy fallback is allowed in -use_ir_pipeline mode.", pair_ctx.name);
+              report_message := tprint("Jai Shader Transpiler: IR-only mode failed for shader pair '%'.", pair_ctx.name);
               if diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, diag.message);
               if diag.has_location compiler_report(report_message, diag.location);
               else compiler_report(report_message, make_location(pair_ctx.vertex_fn.header));
@@ -292,9 +288,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             }
           }
 
-          if !used_ir_pipeline {
-            s = write_shader_pair(pair_ctx);
-          }
+          assert(s != "");
           if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
           else add_build_string(s, p.workspace);
 
@@ -303,20 +297,14 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             to_lower_in_place(ext);
             make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
             filename := tprint("%/%.%", DEBUG_OUTDIR, pair_ctx.name, ext);
-            file_source: string;
             ok := false;
-            if used_ir_pipeline {
-              ir_source_path := ir_output_path_from_pair_context(pair_ctx);
-              file_source, read_ok := read_entire_file(ir_source_path);
-              if !read_ok {
-                log_error("Error reading IR output file '%'", ir_source_path);
-                file_source = write_shader_pair_code(pair_ctx, as_jai_string=false);
-              }
-              ok = write_entire_file(filename, file_source);
-            } else {
-              file_source = write_shader_pair_code(pair_ctx, as_jai_string=false);
-              ok = write_entire_file(filename, file_source);
+            ir_source_path := ir_output_path_from_pair_context(pair_ctx);
+            file_source, read_ok := read_entire_file(ir_source_path);
+            if !read_ok {
+              log_error("Error reading IR output file '%'", ir_source_path);
+              assert(false);
             }
+            ok = write_entire_file(filename, file_source);
             if !ok {
               log_error("Error writing file to '%'", filename);
             } else {
@@ -330,12 +318,10 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
         for * ctx: plugin.currently_waiting_contexts {
           
           s: string;
-          used_ir_pipeline := false;
           if plugin.use_spirv_backend {
             s2, ok2, diag := write_shader_single_ir_spirv(ctx, plugin.use_direct_spirv_text);
             if ok2 {
               s = s2;
-              used_ir_pipeline = true;
             } else {
               report_message := tprint("Jai Shader Transpiler: SPIR-V backend mode failed for shader '%' (%).",
                                        ctx.name, ctx.type);
@@ -345,13 +331,12 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
               remove ctx;
               continue;
             }
-          } else if plugin.use_ir_pipeline {
+          } else {
             s2, ok2, diag := write_shader_single_ir_slang(ctx, plugin.slang_emit_line_directives);
             if ok2 {
               s = s2;
-              used_ir_pipeline = true;
             } else {
-              report_message := tprint("Jai Shader Transpiler: IR-only mode failed for shader '%' (%). No legacy fallback is allowed in -use_ir_pipeline mode.",
+              report_message := tprint("Jai Shader Transpiler: IR-only mode failed for shader '%' (%).",
                                        ctx.name, ctx.type);
               if diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, diag.message);
               if diag.has_location compiler_report(report_message, diag.location);
@@ -361,39 +346,21 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             }
           }
 
-          if !used_ir_pipeline {
-            if ctx.type == {
-              case .Vertex;   #through;
-              case .Fragment; #through;
-              case .Compute;
-                s = write_shader(ctx, ctx.main_fn);
-                
-              case; compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader",
-                              make_location(ctx.main_fn.header));
-            }
-          }
-
           if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
           else add_build_string(s, p.workspace);
-          if plugin.output_shaders && !(used_ir_pipeline && is_internal_transpiled_request_name(ctx.name)) {
+          if plugin.output_shaders && !is_internal_transpiled_request_name(ctx.name) {
             ext := tprint("%", ctx.language);
             to_lower_in_place(ext);
             make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
             filename := tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ext);
-            file_source: string;
             ok := false;
-            if used_ir_pipeline {
-              ir_source_path := ir_output_path_from_context(ctx);
-              file_source, read_ok := read_entire_file(ir_source_path);
-              if !read_ok {
-                log_error("Error reading IR output file '%'", ir_source_path);
-                file_source = write_shader_code(ctx, ctx.main_fn, as_jai_string=false);
-              }
-              ok = write_entire_file(filename, file_source);
-            } else {
-              file_source = write_shader_code(ctx, ctx.main_fn, as_jai_string=false);
-              ok = write_entire_file(filename, file_source);
+            ir_source_path := ir_output_path_from_context(ctx);
+            file_source, read_ok := read_entire_file(ir_source_path);
+            if !read_ok {
+              log_error("Error reading IR output file '%'", ir_source_path);
+              assert(false);
             }
+            ok = write_entire_file(filename, file_source);
             if !ok {
               log_error("Error writing file to '%'", filename);
             } else {
@@ -1248,66 +1215,6 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
     }
   }
   return true;
-}
-
-write_shader :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body) -> string {
-  reset_unnamed_struct_cache();
-  // log("Converting % Shader: %", ctx.type, node.header.name);
-  
-  if ctx.language == {
-    case .GLSL;  return write_glsl_shader (ctx, node, ctx.type);
-    case .HLSL;  return write_hlsl_shader (ctx, node, ctx.type);
-    case .METAL; return write_metal_shader(ctx, node, ctx.type);
-  }
-  
-  return "";
-}
-
-write_procedure_call :: (ctx: *Shader_Write_Context, node: *String_Builder, pc: *Code_Procedure_Call) {
-  if ctx.language == {
-    case .GLSL;  print_glsl_procedure_call (ctx, node, pc);
-    case .HLSL;  print_hlsl_procedure_call (ctx, node, pc);
-    case .METAL; print_metal_procedure_call(ctx, node, pc);
-  }
-}
-
-write_function :: (ctx: *Shader_Write_Context, sb: *String_Builder, called_fn: *Code_Procedure_Header) {
-  if ctx.language == {
-    case .GLSL;  print_glsl_function (ctx, sb, called_fn);
-    case .HLSL;  print_hlsl_function (ctx, sb, called_fn);
-    case .METAL; print_metal_function(ctx, sb, called_fn);
-  }
-}
-
-write_shader_code :: (ctx: *Shader_Write_Context, node: *Code_Procedure_Body, as_jai_string := true) -> string {
-  if ctx.language == {
-    case .GLSL;  return write_glsl_shader_code (ctx, node, as_jai_string=as_jai_string);
-    case .HLSL;  return write_hlsl_shader_code (ctx, node, as_jai_string=as_jai_string);
-    case .METAL; return write_metal_shader_code(ctx, node, as_jai_string=as_jai_string);
-  }
-
-  return "";
-}
-
-write_shader_pair :: (ctx: *Shader_Write_Pair_Context) -> string {
-  reset_unnamed_struct_cache();
-  return write_shader_pair_code(ctx, as_jai_string=true);
-}
-
-write_shader_pair_code :: (ctx: *Shader_Write_Pair_Context, as_jai_string := true) -> string {
-  vertex_ctx := create_shader_write_context(ctx.language, ctx.vertex_fn, ctx.glsl_target);
-  fragment_ctx := create_shader_write_context(ctx.language, ctx.fragment_fn, ctx.glsl_target);
-
-  if ctx.language == {
-    case .GLSL;
-      return write_glsl_shader_pair(ctx.name, *vertex_ctx, *fragment_ctx, as_jai_string=as_jai_string);
-    case .METAL;
-      return write_metal_shader_pair(ctx.name, *vertex_ctx, *fragment_ctx, as_jai_string=as_jai_string);
-    case;
-      compiler_report("Jai Shader Transpiler: Pair shader emission currently supports GLSL and METAL only.", make_location(ctx.vertex_fn.header));
-  }
-
-  return "";
 }
 
 

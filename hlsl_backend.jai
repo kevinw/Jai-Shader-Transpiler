@@ -466,45 +466,6 @@ print_hlsl_type :: (sb: *String_Builder, type: *Type_Info) {
   }
 }
 
-member_get_semantic :: (member: *Type_Info_Struct_Member) -> string {
-  for member.notes if begins_with(it, "semantic_") {
-    ret: string;
-    ret.data = it.data + 9;
-    ret.count = it.count - 9;
-    return ret;
-  }
-  return to_upper_copy(member.name);
-}
-
-// This is some hardcoding, and is incomplete.
-// More types need to be added here
-jai_to_hlsl_type_map :: #run -> Table(string, string) {
-  ret: Table(string, string);
-  table_add(*ret, "s32", "int");
-  table_add(*ret, "u32", "uint");
-  table_add(*ret, "float32", "float");
-  table_add(*ret, "float64", "double");
-  table_add(*ret, "Vector2", "float2");
-  table_add(*ret, "Vector3", "float3");
-  table_add(*ret, "Vector4", "float4");
-  table_add(*ret, "IVector2", "int2");
-  table_add(*ret, "IVector3", "int3");
-  table_add(*ret, "IVector4", "int4");
-  table_add(*ret, "UVector2", "uint2");
-  table_add(*ret, "UVector3", "uint3");
-  table_add(*ret, "UVector4", "uint4");
-  table_add(*ret, "BVector2", "bool2");
-  table_add(*ret, "BVector3", "bool3");
-  table_add(*ret, "BVector4", "bool4");
-  table_add(*ret, "Matrix2", "float2x2");
-  table_add(*ret, "Matrix3", "float3x3");
-  table_add(*ret, "Matrix4", "float4x4");
-  return ret;
-}
-jai_to_hlsl_type_name :: (in: string) -> string {
-  success, val := table_find(*jai_to_hlsl_type_map, in);
-  return ifx success then val else in;
-}
 
 
 INBUILT_FUNCTIONS_INTERNAL_ARRAY :: string.[

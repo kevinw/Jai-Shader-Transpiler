@@ -21,3 +21,4 @@ ir_smoke_vk_bindless
 ir_smoke_vk_compute
 spirv_backend/spirv_compute_branch_runner
 spirv_backend/comp.spv
+.generated_shaders
