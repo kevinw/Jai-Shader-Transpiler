@@ -102,6 +102,7 @@ metal_example_with_window :: () -> (success: bool) {
     _ = get_transpiled(.METAL, tiles_vertex_shader, tiles_fragment_shader);
     vertex_metal_source := get_transpiled(.METAL, tiles_vertex_shader);
     fragment_metal_source := get_transpiled(.METAL, tiles_fragment_shader);
+    log("%\n\n%", vertex_metal_source, fragment_metal_source);
     _ = get_transpiled(.METAL, array_support_vertex_shader);
     _ = get_transpiled(.METAL, array_support_fragment_shader);
     _ = get_transpiled(.METAL, compute_write_indices);
@@ -168,7 +169,7 @@ metal_example_with_window :: () -> (success: bool) {
     _ = get_transpiled(.METAL, array_support_fragment_shader);
 
     if !run_compute_sanity_check(device, queue, compile_options) return false;
-
+    
     lib_vertex := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_metal_source), compile_options, *error);
     if log_nserror("Failed to compile vertex shader library", error) || !lib_vertex {
         if !lib_vertex && error == null log_error("Failed to compile vertex shader library");
@@ -220,8 +221,7 @@ metal_example_with_window :: () -> (success: bool) {
 
     error = null;
     pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
-    if !pipeline || log_nserror("Failed to create Metal render pipeline", error) {
-        if !pipeline && error == null log_error("Failed to create Metal render pipeline");
+    if log_nserror("Failed to create Metal render pipeline", error) || !pipeline {
         return false;
     }
     defer release(pipeline);
@@ -240,6 +240,7 @@ metal_example_with_window :: () -> (success: bool) {
         return false;
     }
     defer release(vertex_buffer);
+
 
     quit := false;
     clear_color := MTLClearColorMake(0.0, 0.0, 0.0, 1.0);
@@ -327,8 +328,6 @@ metal_example_with_window :: () -> (success: bool) {
 log_nserror :: (label: string, error: *NSError) -> bool {
     if error == null return false;
     
-    log("logging error %", error);
-
     ns_description := NSError.localizedDescription(error);
     if ns_description {
         log_error("%: %", label, to_string(NSString.UTF8String(ns_description)));
@@ -342,6 +341,7 @@ log_nserror :: (label: string, error: *NSError) -> bool {
 main :: () {
   Debug.init();
   if !metal_example_with_window() {
+    log_error("Metal example FAILED");
       exit(1);
   }
 }

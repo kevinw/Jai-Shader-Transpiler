@@ -34,7 +34,7 @@ Jai_To_Shader_Plugin :: struct {
     
     // options
     output_shaders: bool;
-    use_ir_pipeline: bool;
+    use_ir_pipeline: bool = true;
     use_spirv_backend: bool;
     use_direct_spirv_text: bool;
     slang_emit_line_directives: bool;
@@ -61,15 +61,11 @@ Transpiled_Lookup_Entry :: struct {
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
   p := New(Jai_To_Shader_Plugin);
-  p.use_ir_pipeline = true; // IR pipeline is the default path.
   p.use_spirv_backend = false; // Experimental: IR -> SPIR-V -> spirv-cross path.
   p.use_direct_spirv_text = false; // Experimental: direct IR -> SPIR-V text emission.
   p.slang_emit_line_directives = false; // Default: emit cleaner Slang outputs without #line noise.
   opts := get_build_options();
   for opts.compile_time_command_line {
-    if it == "-use_ir_pipeline" {
-      p.use_ir_pipeline = true;
-    }
     if it == "-slang_emit_line_directives" {
       p.slang_emit_line_directives = true;
     }

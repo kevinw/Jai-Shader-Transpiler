@@ -31,31 +31,25 @@
       log("All examples built in %s", elapsed_time);
     }
     
-    if !use_ir_pipeline {
-      build("example/cpu_example.jai", "cpu_example", verbose_build_progress);
-      build("example/vulkan_example.jai", "vulkan_example", verbose_build_progress);
-      build("example/glsl_example.jai", "glsl_example", verbose_build_progress);
-      build("example/hlsl_example.jai", "hlsl_example", verbose_build_progress);
-    } else {
-      if ir_case.count == 0 {
-        build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress);
-        build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress);
-        build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress);
-      } else if ir_case == "metal_pair" {
-        build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress);
-      } else if ir_case == "vk_compute" {
-        build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress);
-      } else if ir_case == "vk_bindless" {
-        build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress);
-      } else {
-        compiler_report(tprint("Unknown -ir_case value '%'. Expected one of: metal_pair, vk_compute, vk_bindless.", ir_case));
-      }
-      log("Skipping OpenGL/HLSL examples in IR mode (-use_ir_pipeline): only METAL and VULKAN_GLSL are currently targeted.");
-    }
+    build("example/cpu_example.jai", "cpu_example", verbose_build_progress);
+    build("example/vulkan_example.jai", "vulkan_example", verbose_build_progress);
+    //build("example/glsl_example.jai", "glsl_example", verbose_build_progress);
+    //build("example/hlsl_example.jai", "hlsl_example", verbose_build_progress);
     #if OS == .MACOS {
-      if !use_ir_pipeline {
-        build("example/metal_example.jai", "metal_example", verbose_build_progress);
-      }
+      build("example/metal_example.jai", "metal_example", verbose_build_progress);
+    }
+    if ir_case.count == 0 {
+      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress);
+      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress);
+      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress);
+    } else if ir_case == "metal_pair" {
+      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress);
+    } else if ir_case == "vk_compute" {
+      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress);
+    } else if ir_case == "vk_bindless" {
+      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress);
+    } else {
+      compiler_report(tprint("Unknown -ir_case value '%'. Expected one of: metal_pair, vk_compute, vk_bindless.", ir_case));
     }
   }
 
