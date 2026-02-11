@@ -139,6 +139,20 @@ ir_shared_struct_fields_match_names :: (type: *Type_Info, field_names: [] string
   return true;
 }
 
+ir_shared_find_struct_member_type_by_name :: (type: *Type_Info, member_name: string) -> *Type_Info {
+  if !type || type.type != .STRUCT return null;
+  st := cast(*Type_Info_Struct) type;
+  for *st.members if it.name == member_name return it.type;
+  return null;
+}
+
+ir_shared_find_struct_member_type_by_index :: (type: *Type_Info, member_index: s64) -> *Type_Info {
+  if !type || type.type != .STRUCT return null;
+  st := cast(*Type_Info_Struct) type;
+  if member_index < 0 || member_index >= st.members.count return null;
+  return st.members[member_index].type;
+}
+
 ir_shared_lower_stmt :: (stmt: *Code_Node,
                          out_block: *IR_Block,
                          input_fields: [] string,
@@ -167,7 +181,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt.decl_type_name = type_name;
       out_stmt.decl_name = decl.name;
       if decl.expression {
-        init_expr, init_ok := ir_lower_expr(decl.expression, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        init_expr, init_ok := ir_lower_expr(decl.expression, input_fields, output_fields, active_usings.*, active_aliases.*, state, decl_type);
         if !init_ok return false;
         out_stmt.decl_init = init_expr;
       }
@@ -183,7 +197,8 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       }
       left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings.*, active_aliases.*, state);
       if !left_ok return false;
-      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+      right_expected_type := ifx bn.left then bn.left.type else null;
+      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings.*, active_aliases.*, state, right_expected_type);
       if !right_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .BINARY;
@@ -328,6 +343,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           return false;
         }
         ret_node := op.arguments_sorted[0];
+        ret_type := ret_node.type;
 
         // For entry shader outputs, lower `return { ... }` as assignments to `o` and `return o;`.
         if output_fields.count != 0 && ret_node.kind == .LITERAL {
@@ -347,12 +363,22 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
               }
 
               if field_name.count == 0 {
-                if positional_index >= output_fields.count return false;
+                if positional_index >= output_fields.count {
+                  ir_set_diagnostic(state, "IR lowering: struct return literal has more positional fields than output struct", stmt);
+                  return false;
+                }
                 field_name = output_fields[positional_index];
                 positional_index += 1;
               }
 
-              rhs, rhs_ok := ir_lower_expr(value_node, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+              expected_rhs_type: *Type_Info = null;
+              if field_name.count != 0 {
+                expected_rhs_type = ir_shared_find_struct_member_type_by_name(ret_type, field_name);
+              } else if positional_index > 0 {
+                expected_rhs_type = ir_shared_find_struct_member_type_by_index(ret_type, positional_index - 1);
+              }
+
+              rhs, rhs_ok := ir_lower_expr(value_node, input_fields, output_fields, active_usings.*, active_aliases.*, state, expected_rhs_type);
               if !rhs_ok return false;
 
               lhs_base := ir_expr_new(.IDENT);
@@ -376,7 +402,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           }
         }
 
-        ret_expr, ret_ok := ir_lower_expr(ret_node, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        ret_expr, ret_ok := ir_lower_expr(ret_node, input_fields, output_fields, active_usings.*, active_aliases.*, state, ret_type);
         if !ret_ok return false;
         out_stmt.return_expr = ret_expr;
       } else if op.arguments_sorted.count > 1 {

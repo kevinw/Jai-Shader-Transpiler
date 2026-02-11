@@ -26,7 +26,7 @@ Vector2 :: struct { x, y: float; }
 Vector4 :: struct { x, y, z, w: float; }
 
 IR_Headless_Vertex_In :: struct {
-  a_pos: Vector2; @semantic_POSITION
+  a_pos: Vector2; @semantic_ATTRIBUTE0
   vertex_id: u32; @semantic_SV_VertexID
   instance_id: u32; @semantic_SV_InstanceID
 }

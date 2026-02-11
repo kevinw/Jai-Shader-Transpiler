@@ -478,7 +478,8 @@ ir_lower_expr :: (node: *Code_Node,
                   output_fields: [] string,
                   active_usings: [] IR_Using_Source = .[],
                   active_aliases: [] IR_Decl_Alias = .[],
-                  state: *IR_Lowering_State = null) -> (*IR_Expr, bool) {
+                  state: *IR_Lowering_State = null,
+                  expected_type: *Type_Info = null) -> (*IR_Expr, bool) {
   assert(node != null);
   assert(state != null);
 
@@ -518,7 +519,10 @@ ir_lower_expr :: (node: *Code_Node,
       }
 
       using_source_text, using_source_node, found_using, ambiguous := ir_lookup_using_field_source(active_usings, ident.name);
-      if ambiguous return null, false;
+      if ambiguous {
+        ir_set_diagnostic(state, tprint("IR lowering: identifier '%' is ambiguous due to multiple active using sources", ident.name), node);
+        return null, false;
+      }
       if found_using {
         base: *IR_Expr = null;
         if using_source_text.count != 0 {
@@ -548,11 +552,22 @@ ir_lower_expr :: (node: *Code_Node,
         if lit.struct_literal_info.type_expression && lit.struct_literal_info.type_expression.type_valued_expression && lit.struct_literal_info.type_expression.type_valued_expression.kind == .IDENT {
           type_ident := cast(*Code_Ident) lit.struct_literal_info.type_expression.type_valued_expression;
           constructor_name = jai_to_hlsl_type_name(type_ident.name);
-        } else if lit.type && lit.type.type == .STRUCT {
+        } else if lit.type {
+          lowered_type_name, lowered_type_ok := ir_type_to_slang_name(lit.type);
+          if lowered_type_ok constructor_name = lowered_type_name;
+        }
+        if constructor_name.count == 0 && expected_type {
+          expected_name, expected_ok := ir_type_to_slang_name(expected_type);
+          if expected_ok constructor_name = expected_name;
+        }
+        if constructor_name.count == 0 && lit.type && lit.type.type == .STRUCT {
           struct_type := cast(*Type_Info_Struct) lit.type;
           constructor_name = jai_to_hlsl_type_name(get_struct_type_name(struct_type));
         }
-        if constructor_name.count == 0 return null, false;
+        if constructor_name.count == 0 {
+          ir_set_diagnostic(state, "IR lowering: could not infer constructor type for struct/vector literal", node);
+          return null, false;
+        }
 
         out := ir_expr_new(.CONSTRUCTOR);
         out.text = constructor_name;
@@ -674,7 +689,10 @@ ir_lower_expr :: (node: *Code_Node,
       type_name := "";
       if target_type_info {
         t, ok := ir_type_to_slang_name(target_type_info);
-        if !ok return null, false;
+        if !ok {
+          ir_set_diagnostic(state, "IR lowering: unsupported cast target type", cast_node.target_type.type_valued_expression);
+          return null, false;
+        }
         type_name = t;
       } else if cast_node.target_type.type_valued_expression && cast_node.target_type.type_valued_expression.kind == .IDENT {
         type_ident := cast(*Code_Ident) cast_node.target_type.type_valued_expression;
@@ -1173,10 +1191,24 @@ ir_lower_compute_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Comp
 ir_emit_struct_slang :: (sb: *String_Builder, s: *IR_Struct) {
   append(sb, tprint("struct % {\n", s.name));
   for s.fields {
-    if it.semantic.count != 0 append(sb, tprint("    % % : %;\n", it.type_name, it.name, it.semantic));
+    semantic := ir_normalize_semantic_for_slang(it.semantic);
+    if semantic.count != 0 append(sb, tprint("    % % : %;\n", it.type_name, it.name, semantic));
     else append(sb, tprint("    % %;\n", it.type_name, it.name));
   }
   append(sb, "};\n\n");
+}
+
+ir_normalize_semantic_for_slang :: (semantic: string) -> string {
+  if semantic.count == 0 return "";
+  sem_upper := to_upper_copy(semantic);
+  if sem_upper == "SV_POSITION" return "SV_Position";
+  if sem_upper == "GL_POSITION" return "SV_Position";
+  if sem_upper == "POSITION" return "SV_Position";
+  if sem_upper == "VERTEX_ID" return "SV_VertexID";
+  if sem_upper == "INSTANCE_ID" return "SV_InstanceID";
+  if sem_upper == "PRIMITIVE_ID" return "SV_PrimitiveID";
+  if sem_upper == "FRONT_FACING" return "SV_IsFrontFace";
+  return semantic;
 }
 
 find_output_position_field :: (s: *IR_Struct) -> string {

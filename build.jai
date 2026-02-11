@@ -9,12 +9,13 @@
 #run,stallable {
   command_line_opts := get_build_options();
   run_tests := false;
-  use_ir_pipeline := false;
+  use_ir_pipeline := true; // IR pipeline is the default.
   verbose_build_progress := false;
   ir_case := "";
   for command_line_opts.compile_time_command_line {
     if it == "-run_tests" run_tests = true;
     if it == "-use_ir_pipeline" use_ir_pipeline = true;
+    if it == "-legacy_pipeline" use_ir_pipeline = false;
     if it == "-verbose_build_progress" verbose_build_progress = true;
     if begins_with(it, "-ir_case=") {
       ir_case = slice(it, 9, it.count);
@@ -59,10 +60,7 @@
   if run_tests {
     TEST_RUNNER :: "test_runner.jai";
     log("Running %...", TEST_RUNNER);
-    result, output, error, timeout_reached := run_command("jai", TEST_RUNNER, "+Autorun", capture_and_return_output=true);
-    if output.count != 0 log("%", output);
-    if error.count != 0 log_error("%", error);
-
+    result, output, error, timeout_reached := run_command("jai", TEST_RUNNER, "+Autorun");
     if timeout_reached {
       compiler_report(tprint("% timed out.", TEST_RUNNER));
     }

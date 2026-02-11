@@ -1,15 +1,31 @@
-#version 450 core
-layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+#version 450
+layout(row_major) uniform;
+layout(row_major) buffer;
 
-layout(std430, set = 0, binding = 0) buffer values_Buffer {
-    uint values[];
-};
+#line 9 0
+layout(std430, binding = 0) buffer StructuredBuffer_uint_t_0 {
+    uint _data[];
+} entryPointParams_values_0;
+
+#line 9
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+void main()
+{
+
+#line 10
+    uint _S1 = gl_GlobalInvocationID.x;
+
+#line 10
+    if(_S1 < 64U)
+    {
+
+#line 11
+        entryPointParams_values_0._data[uint(_S1)] = _S1;
+
+#line 10
+    }
 
 
-void main() {
-     uvec3 thread_id = gl_GlobalInvocationID;
-     if (thread_id.x < 64) {
-         values[thread_id.x] = thread_id.x;
-     }
+    return;
 }
 

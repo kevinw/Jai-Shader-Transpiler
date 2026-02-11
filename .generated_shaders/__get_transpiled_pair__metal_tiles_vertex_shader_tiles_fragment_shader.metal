@@ -1,70 +1,139 @@
 #include <metal_stdlib>
+#include <metal_math>
+#include <metal_texture>
 using namespace metal;
 
-inline float jai_radians(float v) { return v * 0.01745329251994329577f; }
-inline float2 jai_radians(float2 v) { return v * 0.01745329251994329577f; }
-inline float3 jai_radians(float3 v) { return v * 0.01745329251994329577f; }
-inline float4 jai_radians(float4 v) { return v * 0.01745329251994329577f; }
+#line 1204 "core.meta.slang"
+float float_getPi_0()
+{
 
-struct VertexShader_In {
-    float2 a_pos [[attribute(0)]];
-};
-
-struct VertexShader_Uniforms {
-};
-
-struct VertexShader_Out {
-    float4 gl_Position [[position]];
-    float4 gl_FragCoord [[user(gl_FragCoord)]];
-};
-
-struct FragmentShader_Uniforms {
-    float2 u_resolution;
-    float u_time;
-};
-
-struct FragmentShader_Out {
-    float4 out_color [[color(0)]];
-};
-
-
-vertex VertexShader_Out VertexMain(VertexShader_In in [[stage_in]], constant VertexShader_Uniforms& un [[buffer(0)]]) {
-     float2 a_pos = in.a_pos;
-     float4 gl_Position;
-
-     gl_Position = float4(a_pos.x, a_pos.y, 0.0, 1);
-          VertexShader_Out out;
-     out.gl_Position = gl_Position;
-     out.gl_FragCoord = gl_Position;
-     return out;
+#line 1204
+    return 3.14159274101257324;
 }
 
-fragment FragmentShader_Out FragmentMain(VertexShader_Out in [[stage_in]], constant FragmentShader_Uniforms& un [[buffer(0)]]) {
-     float4 gl_FragCoord = in.gl_FragCoord;
-     float2 u_resolution = un.u_resolution;
-     float u_time = un.u_time;
-     float4 out_color;
 
-     float aspect_ratio = u_resolution.y / u_resolution.x;
-     float2 uv = gl_FragCoord.xy / u_resolution.x;
-     uv -= float2(0.5, 0.5 * aspect_ratio);
-     float rot = jai_radians(-30 - u_time);
-     float2x2 rotation_matrix = float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)));
-     uv = rotation_matrix * uv;
-     float2 scaled_uv = 20 * uv;
-     float2 tile = fract(scaled_uv);
-     float tile_dist = min(min(tile.x, 1 - tile.x), min(tile.y, 1 - tile.y));
-     float square_dist = length(floor(scaled_uv));
-     float edge = sin(u_time - square_dist * 20);
-     edge = fmod(edge * edge, edge / edge);
-     float value = mix(tile_dist, 1 - tile_dist, step(1, edge));
-     edge = pow(abs(1 - edge), 2.2) * 0.5;
-     value = smoothstep(edge - 0.05, edge, 0.95 * value);
-     value += square_dist * 0.1;
-     value *= 0.8 - 0.2;
-     out_color = float4(pow(value, 2), pow(value, 1.5), pow(value, 1.2), 1);
-          FragmentShader_Out out;
-     out.out_color = out_color;
-     return out;
+#line 13319 "hlsl.meta.slang"
+float radians_0(float x_0)
+{
+
+#line 13330
+    return x_0 * (float_getPi_0() / 180.0);
+}
+
+
+#line 19 ".build/ir_slang/__get_transpiled_pair__metal_tiles_vertex_shader_tiles_fragment_shader_pair.slang"
+struct tiles_fragment_shader_Out_0
+{
+    float4 out_color_0 [[user(OUT_COLOR)]];
+};
+
+
+#line 19
+struct pixelInput_0
+{
+    float4 gl_Position_0 [[user(GL_POSITION)]];
+    float4 gl_FragCoord_0 [[user(GL_FRAGCOORD)]];
+    float2 u_resolution_0 [[user(U_RESOLUTION)]];
+    float u_time_0 [[user(U_TIME)]];
+};
+
+
+#line 39
+[[fragment]] tiles_fragment_shader_Out_0 FragmentMain(pixelInput_0 _S1 [[stage_in]])
+{
+
+#line 40
+    thread tiles_fragment_shader_Out_0 o_0;
+
+#line 40
+    (&o_0)->out_color_0 = float4(0.0) ;
+    float _S2 = _S1.u_resolution_0.x;
+
+
+    float rot_0 = radians_0(-30.0 - _S1.u_time_0);
+    float _S3 = cos(rot_0);
+
+#line 45
+    float _S4 = sin(rot_0);
+
+    float2 scaled_uv_0 = float2(20.0)  * (((matrix<float,int(2),int(2)> (float2(_S3, _S4), float2(- _S4, _S3))) * (_S1.gl_FragCoord_0.xy / float2(_S2)  - float2(0.5, 0.5 * (_S1.u_resolution_0.y / _S2)))));
+    float2 _S5 = fract(scaled_uv_0);
+    float _S6 = _S5.x;
+
+#line 49
+    float _S7 = _S5.y;
+
+#line 49
+    float tile_dist_0 = min(min(_S6, 1.0 - _S6), min(_S7, 1.0 - _S7));
+    float square_dist_0 = length(floor(scaled_uv_0));
+    float edge_0 = sin(_S1.u_time_0 - square_dist_0 * 20.0);
+    float _S8 = edge_0 * edge_0;
+
+#line 52
+    float _S9 = edge_0 / edge_0;
+
+#line 52
+    float edge_1 = ((((_S8) < 0.0) ? -fmod(-(_S8),abs((_S9))) : fmod((_S8),abs((_S9)))));
+
+    float edge_2 = pow(abs(1.0 - edge_1), 2.20000004768371582) * 0.5;
+
+
+    float value_0 = (smoothstep(edge_2 - 0.05000000074505806, edge_2, 0.94999998807907104 * mix(tile_dist_0, 1.0 - tile_dist_0, step(1.0, edge_1))) + square_dist_0 * 0.10000000149011612) * 0.60000002384185791;
+    (&o_0)->out_color_0 = float4(pow(value_0, 2.0), pow(value_0, 1.5), pow(value_0, 1.20000004768371582), 1.0);
+    return o_0;
+}
+
+
+#line 59
+struct VertexMain_Result_0
+{
+    float4 gl_Position_1 [[user(GL_POSITION)]];
+    float4 gl_FragCoord_1 [[user(GL_FRAGCOORD)]];
+};
+
+
+#line 59
+struct vertexInput_0
+{
+    float2 a_pos_0 [[attribute(0)]];
+};
+
+
+#line 9
+struct tiles_vertex_shader_Out_0
+{
+    float4 gl_Position_2;
+    float4 gl_FragCoord_2;
+};
+
+
+#line 9
+[[vertex]] VertexMain_Result_0 VertexMain(vertexInput_0 _S10 [[stage_in]])
+{
+
+#line 33
+    float4 _S11 = float4(0.0) ;
+
+#line 33
+    thread tiles_vertex_shader_Out_0 o_1;
+
+#line 33
+    (&o_1)->gl_Position_2 = _S11;
+
+#line 33
+    (&o_1)->gl_FragCoord_2 = _S11;
+    (&o_1)->gl_Position_2 = float4(_S10.a_pos_0.x, _S10.a_pos_0.y, 0.0, 1.0);
+
+#line 34
+    thread VertexMain_Result_0 _S12;
+
+#line 34
+    (&_S12)->gl_Position_1 = o_1.gl_Position_2;
+
+#line 34
+    (&_S12)->gl_FragCoord_1 = o_1.gl_FragCoord_2;
+
+#line 34
+    return _S12;
 }
 

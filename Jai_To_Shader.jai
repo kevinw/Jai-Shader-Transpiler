@@ -57,6 +57,7 @@ Transpiled_Lookup_Entry :: struct {
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
   p := New(Jai_To_Shader_Plugin);
+  p.use_ir_pipeline = true; // IR pipeline is the default path.
   opts := get_build_options();
   for opts.compile_time_command_line {
     if it == "-use_ir_pipeline" {
@@ -246,7 +247,6 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       phase := cast(*Message_Phase) message;
       if phase.phase == .TYPECHECKED_ALL_WE_CAN {
         if plugin.use_ir_pipeline && !plugin.did_log_ir_pipeline {
-          log("Jai Shader Transpiler: IR Slang pipeline flag is enabled (-use_ir_pipeline). IR-only mode is active: unsupported shaders fail fast (no legacy fallback).");
           plugin.did_log_ir_pipeline = true;
         }
 
@@ -274,13 +274,25 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
           else add_build_string(s, p.workspace);
 
-          if plugin.output_shaders {
+          if plugin.output_shaders && !(used_ir_pipeline && is_internal_transpiled_request_name(pair_ctx.name)) {
             ext := tprint("%", pair_ctx.language);
             to_lower_in_place(ext);
             make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
             filename := tprint("%/%.%", DEBUG_OUTDIR, pair_ctx.name, ext);
-            file_source := write_shader_pair_code(pair_ctx, as_jai_string=false);
-            ok := write_entire_file(filename, file_source);
+            file_source: string;
+            ok := false;
+            if used_ir_pipeline {
+              ir_source_path := ir_output_path_from_pair_context(pair_ctx);
+              file_source, read_ok := read_entire_file(ir_source_path);
+              if !read_ok {
+                log_error("Error reading IR output file '%'", ir_source_path);
+                file_source = write_shader_pair_code(pair_ctx, as_jai_string=false);
+              }
+              ok = write_entire_file(filename, file_source);
+            } else {
+              file_source = write_shader_pair_code(pair_ctx, as_jai_string=false);
+              ok = write_entire_file(filename, file_source);
+            }
             if !ok {
               log_error("Error writing file to '%'", filename);
             } else {
@@ -325,13 +337,25 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 
           if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
           else add_build_string(s, p.workspace);
-          if plugin.output_shaders {
+          if plugin.output_shaders && !(used_ir_pipeline && is_internal_transpiled_request_name(ctx.name)) {
             ext := tprint("%", ctx.language);
             to_lower_in_place(ext);
             make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
             filename := tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ext);
-            file_source := write_shader_code(ctx, ctx.main_fn, as_jai_string=false);
-            ok := write_entire_file(filename, file_source);
+            file_source: string;
+            ok := false;
+            if used_ir_pipeline {
+              ir_source_path := ir_output_path_from_context(ctx);
+              file_source, read_ok := read_entire_file(ir_source_path);
+              if !read_ok {
+                log_error("Error reading IR output file '%'", ir_source_path);
+                file_source = write_shader_code(ctx, ctx.main_fn, as_jai_string=false);
+              }
+              ok = write_entire_file(filename, file_source);
+            } else {
+              file_source = write_shader_code(ctx, ctx.main_fn, as_jai_string=false);
+              ok = write_entire_file(filename, file_source);
+            }
             if !ok {
               log_error("Error writing file to '%'", filename);
             } else {
@@ -392,6 +416,31 @@ ir_target_from_context :: (ctx: *Shader_Write_Context) -> (Slang_Target, bool) {
   if ctx.language == .METAL return .METAL, true;
   if ctx.language == .GLSL && ctx.glsl_target == .VULKAN return .VULKAN_GLSL, true;
   return .METAL, false;
+}
+
+ir_stage_short_from_context :: (ctx: *Shader_Write_Context) -> string {
+  if ctx.type == .Vertex return "vert";
+  if ctx.type == .Compute return "comp";
+  return "frag";
+}
+
+ir_output_ext_from_context :: (ctx: *Shader_Write_Context) -> string {
+  if ctx.language == .METAL return "metal";
+  return "glsl";
+}
+
+ir_output_path_from_context :: (ctx: *Shader_Write_Context) -> string {
+  build_dir := ".build/ir_slang";
+  return tprint("%/%_%.%", build_dir, ctx.name, ir_stage_short_from_context(ctx), ir_output_ext_from_context(ctx));
+}
+
+ir_output_path_from_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> string {
+  build_dir := ".build/ir_slang";
+  return tprint("%/%_pair.metal", build_dir, pair_ctx.name);
+}
+
+is_internal_transpiled_request_name :: (name: string) -> bool {
+  return begins_with(name, "__get_transpiled_");
 }
 
 write_shader_single_ir_slang :: (ctx: *Shader_Write_Context) -> (string, bool, IR_Diagnostic) {
@@ -501,7 +550,7 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context) -> (string, bool, I
   }
   if !emit_slang_target_source(source_path, entry_name, stage, target, output_path) {
     #if VERBOSE log("Slang target emission failed for %", ctx.name);
-    diag.message = tprint("IR pipeline: Slang target emission failed for shader '%'.", ctx.name);
+    diag.message = tprint("IR pipeline: Slang target emission failed for shader '%'. Source: %", ctx.name, source_path);
     if ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
       diag.has_location = true;
@@ -565,7 +614,7 @@ write_shader_pair_ir_slang :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     return "", false, diag;
   }
   if !emit_slang_module_target_source(source_path, .METAL, output_path) {
-    diag.message = tprint("IR pipeline: Slang module emission failed for pair '%'.", pair_ctx.name);
+    diag.message = tprint("IR pipeline: Slang module emission failed for pair '%'. Source: %", pair_ctx.name, source_path);
     diag.location = make_location(pair_ctx.vertex_fn.header);
     diag.has_location = true;
     return "", false, diag;

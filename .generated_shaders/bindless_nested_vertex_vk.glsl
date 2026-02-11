@@ -1,26 +1,47 @@
-#version 450 core
-#extension GL_EXT_buffer_reference : require
-#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#version 450
+layout(row_major) uniform;
+layout(row_major) buffer;
 
-layout(buffer_reference, std430) readonly buffer Ptr_BindlessNestedVk_VertexData {
-    vec2 offset;
+#line 12 0
+struct BindlessNestedVk_VertexData_0
+{
+    vec2 offset_0;
 };
 
-layout(buffer_reference, std430) readonly buffer BindlessNestedVk_Params {
-    Ptr_BindlessNestedVk_VertexData vertex_data;
+
+#line 16
+layout(std430, binding = 0) readonly buffer StructuredBuffer_BindlessNestedVk_VertexData_t_0 {
+    BindlessNestedVk_VertexData_0 _data[];
+} entryPointParams_params_vertex_data_0;
+
+#line 8
+layout(location = 0)
+in vec2 input_a_pos_0;
+
+
+#line 8
+struct bindless_nested_vertex_vk_Out_0
+{
+    vec4 Ugl_Position_0;
 };
 
-layout(push_constant) uniform PushConstants {
-    uint64_t params_addr;
-} push_constants;
 
-layout (location=0) in vec2 a_pos;
+#line 21
+void main()
+{
 
+#line 22
+    bindless_nested_vertex_vk_Out_0 o_0;
 
+#line 22
+    o_0.Ugl_Position_0 = vec4(0.0);
+    vec2 p_0 = entryPointParams_params_vertex_data_0._data[uint(0)].offset_0 + input_a_pos_0;
+    o_0.Ugl_Position_0 = vec4(p_0.x, p_0.y, 0.0, 1.0);
 
-void main() {
-     BindlessNestedVk_Params params = BindlessNestedVk_Params(push_constants.params_addr);
-     vec2 p = params.vertex_data.offset + a_pos;
-     gl_Position = vec4(p.x, p.y, 0.0, 1);
+#line 24
+    gl_Position = o_0.Ugl_Position_0;
+
+#line 24
+    return;
 }
 

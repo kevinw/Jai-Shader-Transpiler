@@ -8,6 +8,10 @@ DEBUG_OUTDIR :: ".generated_shaders";
 
 run_all_tests :: () {
   log("Running tests...");
+  run_command_checked("Clean IR Slang output dirs", .["rm", "-rf", ".build/ir_slang", "headless_ir/.build/ir_slang"]);
+  run_command_checked("Run headless IR smoke tests", .["bash", "headless_ir/test_ir_headless.sh"]);
+  run_command_checked("Run headless IR compute semantics tests", .["bash", "headless_ir/test_ir_compute_semantics.sh"]);
+  compile_slang_emitted_metal_shaders();
   run_command_checked("Build shaders", .["jai", "-quiet", "build.jai", "-", "-output_shaders"]);
   
   debug_path :: (name: string) -> string {
@@ -25,9 +29,9 @@ run_all_tests :: () {
   check_file_contains(debug_path("tiles_vertex_shader_vk.glsl"), "layout (location=0) in");
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout (location=0) out");
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout(set = 0, binding = 0) uniform");
-  check_file_contains(debug_path("compute_write_indices_vk.glsl"), "layout(std430, set = 0, binding = 0) buffer");
-  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "layout(buffer_reference, std430) readonly buffer Ptr_BindlessNestedVk_VertexData");
-  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "Ptr_BindlessNestedVk_VertexData vertex_data;");
+  check_file_contains(debug_path("compute_write_indices_vk.glsl"), "layout(std430, binding = 0) buffer");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "readonly buffer StructuredBuffer_BindlessNestedVk_VertexData");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "entryPointParams_params_vertex_data");
   check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
   check_file_contains(debug_path("tiles_pair_shader.metal"), "vertex VertexShader_Out VertexMain(");
   check_file_contains(debug_path("tiles_pair_shader.metal"), "fragment FragmentShader_Out FragmentMain(");
@@ -44,6 +48,7 @@ run_all_tests :: () {
 
   compile_generated_metal_shaders();
   compile_generated_glsl_shaders();
+  compile_slang_emitted_metal_shaders();
   
   // run example programs with the generated shaders to check they work at runtime (not just compile time).
   run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe", "-test_readback"]);
@@ -115,6 +120,8 @@ collect_generated_files :: (extension: string) -> [..] string {
 
     visitor :: (info: *File_Visit_Info, args: *Args) {
         if !ends_with(info.short_name, args.extension) return;
+        found_internal, _ := contains(info.short_name, "__get_transpiled_");
+        if found_internal return;
         array_add(args.files, copy_string(tprint("%/%", DEBUG_OUTDIR, info.short_name)));
     }
 
@@ -123,6 +130,31 @@ collect_generated_files :: (extension: string) -> [..] string {
         fail("Failed while listing generated shader files.");
     }
 
+    return files;
+}
+
+collect_files_with_extension_in_dir :: (directory: string, extension: string) -> [..] string {
+    Args :: struct {
+        directory: string;
+        extension: string;
+        files: *[..] string;
+    }
+
+    files: [..] string;
+    args: Args;
+    args.directory = directory;
+    args.extension = extension;
+    args.files = *files;
+
+    visitor :: (info: *File_Visit_Info, args: *Args) {
+        if !ends_with(info.short_name, args.extension) return;
+        array_add(args.files, copy_string(tprint("%/%", args.directory, info.short_name)));
+    }
+
+    ok := visit_files(directory, recursive=false, *args, visitor, visit_files=true, visit_directories=false);
+    if !ok {
+        fail("Failed while listing files in '%' with extension '%'.", directory, extension);
+    }
     return files;
 }
 
@@ -189,6 +221,30 @@ compile_generated_metal_shaders :: () {
               .["xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-c", it, "-o", air]);
           run_command_checked(tprint("Link Metal library %", it),
               .["xcrun", "-sdk", "macosx", "metallib", air, "-o", metallib]);
+      }
+    }
+}
+
+compile_slang_emitted_metal_shaders :: () {
+    #if OS != .MACOS {
+        log("Skipping Slang-emitted Metal syntax checks on %.", OS);
+        return;
+    }
+
+    #if OS == .MACOS {
+      roots: [2] string = .[".build/ir_slang", "headless_ir/.build/ir_slang"];
+      found_any := false;
+      for roots {
+          if !file_exists(it) continue;
+          metal_files := collect_files_with_extension_in_dir(it, ".metal");
+          for metal_files {
+              found_any = true;
+              run_command_checked(tprint("Syntax-check Slang Metal %", it),
+                  .["xcrun", "-sdk", "macosx", "metal", "-fsyntax-only", "-c", it]);
+          }
+      }
+      if !found_any {
+          fail("No Slang-emitted Metal files found in .build/ir_slang roots.");
       }
     }
 }
