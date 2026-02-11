@@ -14,7 +14,6 @@
   ir_case := "";
   for command_line_opts.compile_time_command_line {
     if it == "-run_tests" run_tests = true;
-    if it == "-use_spirv_backend" use_spirv_backend = true;
     if it == "-verbose_build_progress" verbose_build_progress = true;
     if begins_with(it, "-ir_case=") {
       ir_case = slice(it, 9, it.count);
@@ -55,7 +54,6 @@
     log("Running %...", TEST_RUNNER);
     targs: [..]string;
     array_add(*targs, "jai", TEST_RUNNER, "+Autorun");
-    if use_spirv_backend array_add(*targs, "-use_spirv_backend");
     result, output, error, timeout_reached := run_command(..targs);
     if timeout_reached {
       compiler_report(tprint("% timed out.", TEST_RUNNER));

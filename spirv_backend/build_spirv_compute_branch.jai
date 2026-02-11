@@ -31,9 +31,7 @@ Proc :: #import "Process";
     if it == "-slang_emit_line_directives" {
       plugin.slang_emit_line_directives = true;
     }
-    if it == "-use_spirv_backend" {
-      plugin.use_spirv_backend = true;
-    }
+
     if it == "-use_direct_spirv_text" {
       plugin.use_direct_spirv_text = true;
     }

@@ -20,4 +20,3 @@ This directory contains the initial SPIR-V backend prototype:
 
 - This is intentionally a small-surface bootstrap for compute.
 - First case mirrors `compute_semantics_shader` behavior.
-- `-use_spirv_backend` enables the SPIR-V backend step in the plugin for this test workspace.

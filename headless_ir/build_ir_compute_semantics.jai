@@ -27,9 +27,7 @@ Proc :: #import "Process";
     if it == "-output_shaders" {
       plugin.output_shaders = true;
     }
-    if it == "-use_spirv_backend" {
-      plugin.use_spirv_backend = true;
-    }
+
     if it == "-use_direct_spirv_text" {
       plugin.use_direct_spirv_text = true;
     }

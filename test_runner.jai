@@ -14,18 +14,12 @@ run_all_tests :: () {
   run_command_checked("Run headless IR compute semantics tests", .["bash", "headless_ir/test_ir_compute_semantics.sh"]);
   compile_slang_emitted_metal_shaders();
   
-  use_spirv_backend := false;
   for get_command_line_arguments() {
-    if it == "-use_spirv_backend" {
-      use_spirv_backend = true;
-    }
+
   }
   
   args: [..]string;
   array_add(*args, "jai", "-quiet", "build.jai", "-", "-output_shaders");
-  if use_spirv_backend {
-    array_add(*args, "-use_spirv_backend");
-  }
       
   run_command_checked("Build shaders", args);
   
