@@ -727,9 +727,23 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  if ctx.type != .Compute {
-    diag.message = tprint("SPIR-V text backend: single-stage % shader emission is not implemented yet for '%'.",
-                          ifx ctx.type == .Vertex then "vertex" else "fragment", ctx.name);
+  spvasm_source: string;
+  spvasm_ok := false;
+  spvasm_diag: IR_Diagnostic;
+  if ctx.type == .Compute {
+    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
+    if !lowered return "", "", false, lowered_diag;
+    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
+  } else if ctx.type == .Vertex {
+    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(ctx);
+    if !lowered return "", "", false, lowered_diag;
+    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
+  } else if ctx.type == .Fragment {
+    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(ctx);
+    if !lowered return "", "", false, lowered_diag;
+    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
+  } else {
+    diag.message = "SPIR-V backend: unsupported shader stage.";
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
       diag.has_location = true;
@@ -737,9 +751,6 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
-  if !lowered return "", "", false, lowered_diag;
-  spvasm_source, spvasm_ok, spvasm_diag := emit_ir_compute_to_spirv_text_branch(ir_compute);
   if !spvasm_ok {
     if spvasm_diag.message.count == 0 spvasm_diag.message = tprint("SPIR-V text backend: failed to emit SPIR-V assembly for '%'.", ctx.name);
     if !spvasm_diag.has_location && ctx.main_fn && ctx.main_fn.header {
@@ -840,8 +851,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   vertex_ctx := create_shader_write_context(.METAL, pair_ctx.vertex_fn, pair_ctx.glsl_target);
   fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
 
-  vertex_source, _, vertex_emitted, vertex_diag := ir_emit_single_spirv_target_source(*vertex_ctx, add_generated_comment=false);
-  if !vertex_emitted {
+  ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(*vertex_ctx);
+  if !vertex_ok {
     if !vertex_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
       vertex_diag.location = make_location(pair_ctx.vertex_fn.header);
       vertex_diag.has_location = true;
@@ -849,8 +860,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     return "", false, vertex_diag;
   }
 
-  fragment_source, _, fragment_emitted, fragment_diag := ir_emit_single_spirv_target_source(*fragment_ctx, add_generated_comment=false);
-  if !fragment_emitted {
+  ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(*fragment_ctx);
+  if !fragment_ok {
     if !fragment_diag.has_location && pair_ctx.fragment_fn && pair_ctx.fragment_fn.header {
       fragment_diag.location = make_location(pair_ctx.fragment_fn.header);
       fragment_diag.has_location = true;
@@ -858,11 +869,52 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     return "", false, fragment_diag;
   }
 
-  merged_source := tprint("%\n\n%", vertex_source, ir_strip_metal_preamble_for_pair_merge(fragment_source));
-  merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));
+  vertex_spvasm, fragment_spvasm, pair_spvasm_ok, pair_spvasm_diag := emit_ir_graphics_pair_to_spirv_text_branch(ir_vertex, ir_fragment);
+  if !pair_spvasm_ok {
+    if !pair_spvasm_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+      pair_spvasm_diag.location = make_location(pair_ctx.vertex_fn.header);
+      pair_spvasm_diag.has_location = true;
+    }
+    return "", false, pair_spvasm_diag;
+  }
 
   build_dir := ".build/ir_slang";
   make_directory_if_it_does_not_exist(build_dir, recursive=true);
+  vertex_spvasm_path := tprint("%/%_vert.spvasm", build_dir, pair_ctx.name);
+  fragment_spvasm_path := tprint("%/%_frag.spvasm", build_dir, pair_ctx.name);
+  vertex_spv_path := tprint("%/%_vert.spv", build_dir, pair_ctx.name);
+  fragment_spv_path := tprint("%/%_frag.spv", build_dir, pair_ctx.name);
+  vertex_output_path := tprint("%/%_vert.metal", build_dir, pair_ctx.name);
+  fragment_output_path := tprint("%/%_frag.metal", build_dir, pair_ctx.name);
+  if !write_entire_file(vertex_spvasm_path, vertex_spvasm) || !write_entire_file(fragment_spvasm_path, fragment_spvasm) {
+    diag.message = "SPIR-V backend: failed writing pair SPIR-V text files.";
+    return "", false, diag;
+  }
+  if !assemble_spirv_text(vertex_spvasm_path, vertex_spv_path) || !assemble_spirv_text(fragment_spvasm_path, fragment_spv_path) {
+    diag.message = "SPIR-V backend: failed assembling pair SPIR-V text.";
+    return "", false, diag;
+  }
+  if !validate_spirv_binary(vertex_spv_path) || !validate_spirv_binary(fragment_spv_path) {
+    diag.message = "SPIR-V backend: pair SPIR-V validation failed.";
+    return "", false, diag;
+  }
+  if !emit_spirv_cross_target_source(vertex_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path) {
+    diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
+    return "", false, diag;
+  }
+  if !emit_spirv_cross_target_source(fragment_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path) {
+    diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
+    return "", false, diag;
+  }
+  vertex_source, v_ok := read_entire_file(vertex_output_path);
+  fragment_source, f_ok := read_entire_file(fragment_output_path);
+  if !v_ok || !f_ok {
+    diag.message = "SPIR-V backend: failed reading pair spirv-cross outputs.";
+    return "", false, diag;
+  }
+
+  merged_source := tprint("%\n\n%", vertex_source, ir_strip_metal_preamble_for_pair_merge(fragment_source));
+  merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));
   output_path := ir_output_path_from_pair_context(pair_ctx);
   if !write_entire_file(output_path, merged_source) {
     diag.message = tprint("SPIR-V backend: failed writing merged pair source '%'.", output_path);
