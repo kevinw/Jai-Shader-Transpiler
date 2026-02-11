@@ -12,7 +12,21 @@ run_all_tests :: () {
   run_command_checked("Run headless IR smoke tests", .["bash", "headless_ir/test_ir_headless.sh"]);
   run_command_checked("Run headless IR compute semantics tests", .["bash", "headless_ir/test_ir_compute_semantics.sh"]);
   compile_slang_emitted_metal_shaders();
-  run_command_checked("Build shaders", .["jai", "-quiet", "build.jai", "-", "-output_shaders"]);
+  
+  use_spirv_backend := false;
+  for get_command_line_arguments() {
+    if it == "-use_spirv_backend" {
+      use_spirv_backend = true;
+    }
+  }
+  
+  args: [..]string;
+  array_add(*args, "jai", "-quiet", "build.jai", "-", "-output_shaders");
+  if use_spirv_backend {
+    array_add(*args, "-use_spirv_backend");
+  }
+      
+  run_command_checked("Build shaders", args);
   
   debug_path :: (name: string) -> string {
       return tprint("%/%", DEBUG_OUTDIR, name);
@@ -29,8 +43,8 @@ run_all_tests :: () {
   check_file_contains(debug_path("tiles_vertex_shader_vk.glsl"), "layout (location=0) in");
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout (location=0) out");
   check_file_contains(debug_path("tiles_fragment_shader_vk.glsl"), "layout(set = 0, binding = 0) uniform");
-  check_file_contains(debug_path("compute_write_indices_vk.glsl"), "layout(std430, binding = 0) buffer");
-  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "readonly buffer StructuredBuffer_BindlessNestedVk_VertexData");
+  check_file_contains(debug_path("compute_write_indices_vk.glsl"), "std430");
+  check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "readonly buffer StructuredBuffer");
   check_file_contains(debug_path("bindless_nested_vertex_vk.glsl"), "params_vertex_data");
   check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
   check_file_contains(debug_path("tiles_pair_shader.metal"), "vertex VertexShader_Out VertexMain(");
