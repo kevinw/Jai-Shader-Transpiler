@@ -269,11 +269,18 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           s: string;
           used_ir_pipeline := false;
           if plugin.use_spirv_backend {
-            report_message := tprint("Jai Shader Transpiler: SPIR-V backend mode currently supports compute shaders only; pair shader '%' is unsupported.",
-                                     pair_ctx.name);
-            compiler_report(report_message, make_location(pair_ctx.vertex_fn.header));
-            remove pair_ctx;
-            continue;
+            s2, ok2, diag := write_shader_pair_ir_spirv(pair_ctx, plugin.slang_emit_line_directives);
+            if ok2 {
+              s = s2;
+              used_ir_pipeline = true;
+            } else {
+              report_message := tprint("Jai Shader Transpiler: SPIR-V backend mode failed for shader pair '%'.", pair_ctx.name);
+              if diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, diag.message);
+              if diag.has_location compiler_report(report_message, diag.location);
+              else compiler_report(report_message, make_location(pair_ctx.vertex_fn.header));
+              remove pair_ctx;
+              continue;
+            }
           } else if plugin.use_ir_pipeline {
             s2, ok2, diag := write_shader_pair_ir_slang(pair_ctx, plugin.slang_emit_line_directives);
             if ok2 {
@@ -621,7 +628,7 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
 
 ir_spirv_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
   if !ctx return false;
-  if ctx.type != .Compute return false;
+  if ctx.type != .Vertex && ctx.type != .Fragment && ctx.type != .Compute return false;
   if ctx.language == .METAL return true;
   if ctx.language == .GLSL && ctx.glsl_target == .VULKAN return true;
   return false;
@@ -630,7 +637,7 @@ ir_spirv_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
 write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_text := false) -> (string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   if !ir_spirv_supports_single_context(ctx) {
-    diag.message = "SPIR-V backend currently supports compute shaders targeting Metal or Vulkan GLSL only.";
+    diag.message = "SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only.";
     if ctx && ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
       diag.has_location = true;
@@ -638,17 +645,60 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_te
     return "", false, diag;
   }
 
-  ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
-  if !lowered return "", false, lowered_diag;
-
-  slang_source, emitted := emit_ir_compute_to_slang(ir_compute);
-  if !emitted {
-    diag.message = tprint("IR->Slang emission failed for compute shader '%'.", ctx.name);
+  stage, stage_ok := ir_stage_from_context(ctx);
+  if !stage_ok {
+    diag.message = "SPIR-V backend: unsupported shader stage.";
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
       diag.has_location = true;
     }
     return "", false, diag;
+  }
+
+  slang_source: string;
+  entry_name: string;
+  if ctx.type == .Vertex {
+    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(ctx);
+    if !lowered return "", false, lowered_diag;
+    emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
+    if !emitted {
+      diag.message = tprint("IR->Slang emission failed for vertex shader '%'.", ctx.name);
+      if ctx.main_fn && ctx.main_fn.header {
+        diag.location = make_location(ctx.main_fn.header);
+        diag.has_location = true;
+      }
+      return "", false, diag;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_vertex.entry_name;
+  } else if ctx.type == .Fragment {
+    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(ctx);
+    if !lowered return "", false, lowered_diag;
+    emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
+    if !emitted {
+      diag.message = tprint("IR->Slang emission failed for fragment shader '%'.", ctx.name);
+      if ctx.main_fn && ctx.main_fn.header {
+        diag.location = make_location(ctx.main_fn.header);
+        diag.has_location = true;
+      }
+      return "", false, diag;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_fragment.entry_name;
+  } else {
+    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
+    if !lowered return "", false, lowered_diag;
+    emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
+    if !emitted {
+      diag.message = tprint("IR->Slang emission failed for compute shader '%'.", ctx.name);
+      if ctx.main_fn && ctx.main_fn.header {
+        diag.location = make_location(ctx.main_fn.header);
+        diag.has_location = true;
+      }
+      return "", false, diag;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_compute.entry_name;
   }
 
   target, target_ok := ir_target_from_context(ctx);
@@ -675,7 +725,18 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_te
     return "", false, diag;
   }
 
-  if use_direct_spirv_text {
+  if entry_name.count == 0 {
+    diag.message = "SPIR-V backend: empty entry name.";
+    if ctx.main_fn && ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
+
+  if use_direct_spirv_text && ctx.type == .Compute {
+    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
+    if !lowered return "", false, lowered_diag;
     spvasm_source, spvasm_ok, spvasm_diag := emit_ir_compute_to_spirv_text_branch(ir_compute);
     if !spvasm_ok {
       if spvasm_diag.message.count == 0 spvasm_diag.message = tprint("SPIR-V text backend: failed to emit SPIR-V assembly for '%'.", ctx.name);
@@ -699,7 +760,7 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_te
       return "", false, diag;
     }
   } else {
-    if !compile_slang_to_spirv(source_path, ir_compute.entry_name, .COMPUTE, spv_path) {
+    if !compile_slang_to_spirv(source_path, entry_name, stage, spv_path) {
       diag.message = tprint("SPIR-V backend: failed compiling SPIR-V for '%'. Source: %", ctx.name, source_path);
       if ctx.main_fn && ctx.main_fn.header {
         diag.location = make_location(ctx.main_fn.header);
@@ -718,7 +779,7 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_te
     return "", false, diag;
   }
 
-  if !emit_spirv_cross_target_source(spv_path, ir_compute.entry_name, .COMPUTE, target, output_path) {
+  if !emit_spirv_cross_target_source(spv_path, entry_name, stage, target, output_path) {
     diag.message = tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", ctx.name, spv_path);
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
@@ -732,10 +793,24 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, use_direct_spirv_te
     diag.message = tprint("SPIR-V backend: failed reading emitted target source '%'.", output_path);
     return "", false, diag;
   }
+  if ctx.language == .METAL && ctx.type != .Compute {
+    target_source = ir_mark_metal_device_pointers_const(target_source);
+    write_entire_file(output_path, target_source);
+  }
+  if ctx.type == .Compute && ctx.language == .METAL {
+    target_source = replace(target_source, "[[kernel]] void", "kernel void");
+  }
 
   symbol_name := ir_symbol_name_from_context(ctx);
   decl := tprint("% :: #string END\n%\nEND", symbol_name, target_source);
   return decl, true, diag;
+}
+
+write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false) -> (string, bool, IR_Diagnostic) {
+  // Graphics pairs remain module-emitted for now so callers can keep a single combined Metal string.
+  // Single-stage vertex/fragment requests do go through the SPIR-V toolchain.
+  s, ok, diag := write_shader_pair_ir_slang(pair_ctx, emit_line_directives);
+  return s, ok, diag;
 }
 
 ir_supports_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> bool {
