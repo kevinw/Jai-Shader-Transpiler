@@ -73,6 +73,7 @@ IR_Decl_Alias :: struct {
 IR_Expr_Kind :: enum {
   IDENT;
   LITERAL;
+  ARRAY_LITERAL;
   UNARY;
   BINARY;
   MEMBER;
@@ -186,6 +187,14 @@ ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
 
 ir_type_to_slang_name :: (type: *Type_Info) -> (string, bool) {
   if !type return "", false;
+
+  if type.type == .ARRAY {
+    base_type, suffix := split_array_type_and_suffix("IR lowering", type);
+    if !base_type return "", false;
+    base_name, base_ok := ir_type_to_slang_name(base_type);
+    if !base_ok return "", false;
+    return tprint("%%", base_name, suffix), true;
+  }
 
   if type.type == {
     case .INTEGER; {
@@ -399,6 +408,15 @@ ir_type_name_is_parameter_block :: (type_name: string) -> bool {
   return begins_with(type_name, "ParameterBlock<");
 }
 
+ir_type_name_is_global_resource :: (type_name: string) -> bool {
+  if ir_type_name_is_parameter_block(type_name) return true;
+  if begins_with(type_name, "StructuredBuffer<") return true;
+  if begins_with(type_name, "RWStructuredBuffer<") return true;
+  if begins_with(type_name, "ByteAddressBuffer") return true;
+  if begins_with(type_name, "RWByteAddressBuffer") return true;
+  return false;
+}
+
 ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> (string, bool) {
   if !type return "", false;
   if type.type == .POINTER {
@@ -427,10 +445,8 @@ ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Stru
       if !lowered_ok return "", false;
       ir_add_struct_unique_by_name(extra_structs, lowered_struct);
     }
-    if ir_struct_has_pointer_members(type) {
-      return tprint("ParameterBlock<%>", struct_name), true;
-    }
-    return struct_name, true;
+    // For graphics stages, extra struct args represent uniforms/resources, not stage input varyings.
+    return tprint("ParameterBlock<%>", struct_name), true;
   }
   type_name, type_ok := ir_type_to_slang_name(type);
   return type_name, type_ok;
@@ -573,6 +589,26 @@ ir_lower_expr :: (node: *Code_Node,
         out.text = constructor_name;
         for lit.struct_literal_info.arguments {
           arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings, active_aliases, state);
+          if !ok return null, false;
+          array_add(*out.args, arg);
+        }
+        return out, true;
+      }
+
+      if lit.value_type == .ARRAY {
+        out := ir_expr_new(.ARRAY_LITERAL);
+        info := lit.array_literal_info;
+        if !info {
+          ir_set_diagnostic(state, "IR lowering: array literal is missing literal info", node);
+          return null, false;
+        }
+        member_expected_type: *Type_Info = null;
+        if info.element_type {
+          if info.element_type.result member_expected_type = info.element_type.result;
+          else if info.element_type.type_valued_expression member_expected_type = info.element_type.type_valued_expression.type;
+        }
+        for info.array_members {
+          arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings, active_aliases, state, member_expected_type);
           if !ok return null, false;
           array_add(*out.args, arg);
         }
@@ -794,6 +830,18 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
   if expr.kind == {
     case .IDENT;   return expr.text, true;
     case .LITERAL; return expr.text, true;
+    case .ARRAY_LITERAL; {
+      b: String_Builder;
+      append(*b, "{");
+      for expr.args {
+        arg_text, ok := ir_expr_to_slang_from_ir(it);
+        if !ok return "", false;
+        if it_index != 0 append(*b, ", ");
+        append(*b, arg_text);
+      }
+      append(*b, "}");
+      return builder_to_string(*b), true;
+    }
 
     case .UNARY; {
       inner, ok := ir_expr_to_slang_from_ir(expr.left);
@@ -1039,6 +1087,13 @@ ir_lower_fragment_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Fra
     ir_set_diagnostic(*state, "IR lowering(fragment): could not lower input struct type", cast(*Code_Node) ctx.main_fn.header);
     return out, false, ir_get_diagnostic(*state);
   }
+  // Fragment-stage gl_FragCoord should map to rasterized screen position.
+  for *in_struct.fields {
+    sem_upper := to_upper_copy(it.semantic);
+    if sem_upper == "GL_FRAGCOORD" || sem_upper == "FRAG_COORD" {
+      it.semantic = "SV_Position";
+    }
+  }
 
   out_struct, out_ok := ir_lower_struct_from_type(tprint("%_Out", ctx.name), out_type);
   if !out_ok {
@@ -1234,7 +1289,7 @@ ir_emit_graphics_global_resource_args :: (sb: *String_Builder, args: [] IR_Funct
   assert(sb != null);
   emitted_any := false;
   for args {
-    if !ir_type_name_is_parameter_block(it.type_name) continue;
+    if !ir_type_name_is_global_resource(it.type_name) continue;
     append(sb, tprint("% %;\n", it.type_name, it.name));
     emitted_any = true;
   }
@@ -1245,10 +1300,10 @@ ir_emit_graphics_global_resource_args :: (sb: *String_Builder, args: [] IR_Funct
 ir_pair_global_resource_arg_conflicts :: (vertex_args: [] IR_Function_Arg, fragment_args: [] IR_Function_Arg) -> bool {
   for vertex_args {
     va := it;
-    if !ir_type_name_is_parameter_block(va.type_name) continue;
+    if !ir_type_name_is_global_resource(va.type_name) continue;
     for fragment_args {
       fa := it;
-      if !ir_type_name_is_parameter_block(fa.type_name) continue;
+      if !ir_type_name_is_global_resource(fa.type_name) continue;
       if va.name != fa.name continue;
       if va.type_name != fa.type_name return true;
     }
@@ -1266,7 +1321,7 @@ ir_emit_pair_global_resource_args :: (sb: *String_Builder, vertex_args: [] IR_Fu
   emit_from_args :: (sb: *String_Builder, args: [] IR_Function_Arg, seen_names: *[..] string, emitted_any: *bool) {
     for args {
       arg := it;
-      if !ir_type_name_is_parameter_block(arg.type_name) continue;
+      if !ir_type_name_is_global_resource(arg.type_name) continue;
       already_seen := false;
       for seen_names.* if it == arg.name { already_seen = true; break; }
       if already_seen continue;
@@ -1308,8 +1363,8 @@ emit_ir_vertex_to_slang :: (shader: IR_Vertex_Shader) -> (string, bool) {
   append(*sb, "[shader(\"vertex\")]\n");
   append(*sb, tprint("% %(% input", shader.output.name, shader.entry_name, shader.input.name));
   for shader.args {
-    if ir_type_name_is_parameter_block(it.type_name) continue;
-    if it.is_readonly && !ir_type_name_is_parameter_block(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
+    if ir_type_name_is_global_resource(it.type_name) continue;
+    if it.is_readonly && !ir_type_name_is_global_resource(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
     else append(*sb, tprint(", % %", it.type_name, it.name));
   }
   append(*sb, ") {\n");
@@ -1345,7 +1400,7 @@ emit_ir_fragment_to_slang :: (shader: IR_Fragment_Shader) -> (string, bool) {
   append(*sb, "[shader(\"fragment\")]\n");
   append(*sb, tprint("% %(% input", shader.output.name, shader.entry_name, shader.input.name));
   for shader.args {
-    if ir_type_name_is_parameter_block(it.type_name) continue;
+    if ir_type_name_is_global_resource(it.type_name) continue;
     if it.is_readonly append(*sb, tprint(", const % %", it.type_name, it.name));
     else append(*sb, tprint(", % %", it.type_name, it.name));
   }
@@ -1392,8 +1447,8 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   append(*sb, "[shader(\"vertex\")]\n");
   append(*sb, tprint("% %(% input", vertex.output.name, vertex.entry_name, vertex.input.name));
   for vertex.args {
-    if ir_type_name_is_parameter_block(it.type_name) continue;
-    if it.is_readonly && !ir_type_name_is_parameter_block(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
+    if ir_type_name_is_global_resource(it.type_name) continue;
+    if it.is_readonly && !ir_type_name_is_global_resource(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
     else append(*sb, tprint(", % %", it.type_name, it.name));
   }
   append(*sb, ") {\n");
@@ -1411,8 +1466,8 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   append(*sb, "[shader(\"fragment\")]\n");
   append(*sb, tprint("% %(% input", fragment.output.name, fragment.entry_name, fragment.input.name));
   for fragment.args {
-    if ir_type_name_is_parameter_block(it.type_name) continue;
-    if it.is_readonly && !ir_type_name_is_parameter_block(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
+    if ir_type_name_is_global_resource(it.type_name) continue;
+    if it.is_readonly && !ir_type_name_is_global_resource(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
     else append(*sb, tprint(", % %", it.type_name, it.name));
   }
   append(*sb, ") {\n");
