@@ -1,12 +1,31 @@
-#import "Basic";
-#import "File";
-#import "String";
-#import "Math";
-#import "Metal";
-#import "Objective_C";
-#import "Compiler";
+//
+// Tests basic Jai -> compute shader compilation across various test cases by
+// running them on the GPU and CPU and comparing results.
+// 
 
-#import,file "../module.jai";
+ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }; }).[
+  {"simple", .Bare},
+  {"loop", .Bare},
+  {"locals", .Bare},
+  {"return_value", .Bare},
+  {"with_function", .Bare},
+  {"with_using", .Bare},
+  {"while_break", .Bare},
+  {"with_continue", .Bare},
+  {"with_switch", .Bare},
+  {"compound_assign", .Bare},
+  {"matrix_math", .Bare},
+  {"intrinsics", .Bare},
+  
+  {"nested", .Table},
+  {"bitwise", .Table},
+  {"using_helper", .Table},
+  
+  {"vector_index", .Boids},
+  {"access_chain", .Boids},
+  {"helper_struct_chain", .Boids},
+  {"helper_struct_direct_assign", .Boids},
+];
 
 ELEMENT_COUNT :: 64;
 UVector3 :: struct { x, y, z: u32; }
@@ -21,15 +40,11 @@ Compute_Table_Kind :: enum {
   BOID_STATE;
 }
 
-g_device: *MTLDevice;
-g_queue: *MTLCommandQueue;
-g_compile_options: *MTLCompileOptions;
-
 Compute_Semantics_In :: struct {
   thread_id: UVector3; @thread_position_in_grid
 }
 
-compute_semantics_shader :: (using in: Compute_Semantics_In, values: *u32) {
+simple :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x < 64 {
     v := values[thread_id.x];
     if (thread_id.x % 2) == 0 {
@@ -41,18 +56,19 @@ compute_semantics_shader :: (using in: Compute_Semantics_In, values: *u32) {
   }
 } @compute_shader
 
-compute_semantics_loop_shader :: (using in: Compute_Semantics_In, values: *u32) {
+loop :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x < 64 {
     base := values[thread_id.x];
     acc: u32 = 0;
     for 0..4 {
       acc += thread_id.x + 1;
+      acc += 1;
     }
     values[thread_id.x] = base + acc;
   }
 } @compute_shader
 
-compute_semantics_nested_shader :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+nested :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     base := values[idx];
@@ -74,7 +90,7 @@ compute_semantics_nested_shader :: (using in: Compute_Semantics_In, values: *u32
   }
 } @compute_shader
 
-compute_semantics_locals_shader :: (using in: Compute_Semantics_In, values: *u32) {
+locals :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     base := values[idx];
@@ -85,7 +101,7 @@ compute_semantics_locals_shader :: (using in: Compute_Semantics_In, values: *u32
   }
 } @compute_shader
 
-compute_semantics_return_shader :: (using in: Compute_Semantics_In, values: *u32) {
+return_value :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
 
   idx := thread_id.x;
@@ -106,14 +122,14 @@ compute_semantics_helper_twist :: (x: u32, y: u32) -> u32 {
   return t + (y + 1) * 2;
 }
 
-compute_semantics_helper_shader :: (using in: Compute_Semantics_In, values: *u32) {
+with_function :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     values[idx] = compute_semantics_helper_twist(values[idx], idx);
   }
 } @compute_shader
 
-compute_semantics_bitwise_shader :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+bitwise :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     a := values[idx];
@@ -125,7 +141,7 @@ compute_semantics_bitwise_shader :: (using in: Compute_Semantics_In, values: *u3
   }
 } @compute_shader
 
-compute_semantics_using_shader :: (in: Compute_Semantics_In, values: *u32) {
+with_using :: (in: Compute_Semantics_In, values: *u32) {
   using in;
   if thread_id.x < 64 {
     idx := thread_id.x;
@@ -138,20 +154,20 @@ Using_Helper_Params :: struct {
   delta: u32;
 }
 
-compute_semantics_using_helper_step :: (input: Using_Helper_Params) -> u32 {
+using_helper_step :: (input: Using_Helper_Params) -> u32 {
   using input;
   return base + delta * 2;
 }
 
-compute_semantics_using_helper_shader :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+using_helper :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     p := Using_Helper_Params.{values[idx], table[idx % 8]};
-    values[idx] = compute_semantics_using_helper_step(p);
+    values[idx] = using_helper_step(p);
   }
 } @compute_shader
 
-compute_semantics_while_break_shader :: (using in: Compute_Semantics_In, values: *u32) {
+while_break :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   acc: u32 = 0;
@@ -164,7 +180,7 @@ compute_semantics_while_break_shader :: (using in: Compute_Semantics_In, values:
   values[idx] = values[idx] + acc;
 } @compute_shader
 
-compute_semantics_continue_shader :: (using in: Compute_Semantics_In, values: *u32) {
+with_continue :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   acc: u32 = 0;
@@ -180,7 +196,7 @@ compute_semantics_continue_shader :: (using in: Compute_Semantics_In, values: *u
   values[idx] = values[idx] + acc;
 } @compute_shader
 
-compute_semantics_switch_shader :: (using in: Compute_Semantics_In, values: *u32) {
+with_switch :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -198,7 +214,7 @@ compute_semantics_switch_shader :: (using in: Compute_Semantics_In, values: *u32
   values[idx] = v;
 } @compute_shader
 
-compute_semantics_compound_assign_shader :: (using in: Compute_Semantics_In, values: *u32) {
+compound_assign :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -210,7 +226,7 @@ compute_semantics_compound_assign_shader :: (using in: Compute_Semantics_In, val
   values[idx] = v;
 } @compute_shader
 
-compute_semantics_vector_index_shader :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+vector_index :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     b := boids[idx];
@@ -221,7 +237,7 @@ compute_semantics_vector_index_shader :: (using in: Compute_Semantics_In, values
   }
 } @compute_shader
 
-compute_semantics_access_chain_shader :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+access_chain :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     boids[idx].pos.x = boids[idx].pos.x + boids[idx].vel.x;
@@ -231,32 +247,32 @@ compute_semantics_access_chain_shader :: (using in: Compute_Semantics_In, values
   }
 } @compute_shader
 
-compute_semantics_boid_advance :: (state: Compute_Boid_State, scale: float) -> Compute_Boid_State {
+boid_advance :: (state: Compute_Boid_State, scale: float) -> Compute_Boid_State {
   out := state;
   out.pos.x = state.pos.x + state.vel.x * scale;
   out.pos.y = state.pos.y + state.vel.y * scale;
   return out;
 }
 
-compute_semantics_helper_struct_chain_shader :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+helper_struct_chain :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x < 64 {
     idx := thread_id.x;
-    next := compute_semantics_boid_advance(boids[idx], 2.0);
+    next := boid_advance(boids[idx], 2.0);
     boids[idx] = next;
-    values[idx] = cast(u32) (compute_semantics_boid_advance(boids[idx], 1.0).pos.x +
-                             compute_semantics_boid_advance(boids[idx], 1.0).pos.y);
+    values[idx] = cast(u32) (boid_advance(boids[idx], 1.0).pos.x +
+                             boid_advance(boids[idx], 1.0).pos.y);
   }
 } @compute_shader
 
-compute_semantics_helper_struct_direct_assign_shader :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+helper_struct_direct_assign :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x < 64 {
     idx := thread_id.x;
-    boids[idx] = compute_semantics_boid_advance(boids[idx], 2.0);
+    boids[idx] = boid_advance(boids[idx], 2.0);
     values[idx] = cast(u32) (boids[idx].pos.x + boids[idx].pos.y);
   }
 } @compute_shader
 
-compute_semantics_matrix_math_shader :: (using in: Compute_Semantics_In, values: *u32) {
+matrix_math :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     m := Matrix2.{2.0, 1.0, -1.0, 3.0};
@@ -266,7 +282,7 @@ compute_semantics_matrix_math_shader :: (using in: Compute_Semantics_In, values:
   }
 } @compute_shader
 
-compute_semantics_intrinsics_shader :: (using in: Compute_Semantics_In, values: *u32) {
+intrinsics :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x < 64 {
     idx := thread_id.x;
     x := cast(float) (idx % 16);
@@ -279,17 +295,6 @@ compute_semantics_intrinsics_shader :: (using in: Compute_Semantics_In, values: 
     values[idx] = cast(u32) floor(a + b + c + d + e + 0.5);
   }
 } @compute_shader
-
-log_nserror :: (label: string, error: *NSError) -> bool {
-  if !error return false;
-  desc := NSError.localizedDescription(error);
-  if desc {
-    log_error("%: %", label, to_string(NSString.UTF8String(desc)));
-  } else {
-    log_error("% (NSError without localizedDescription)", label);
-  }
-  return true;
-}
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {
   for 0..thread_count-1 {
@@ -321,33 +326,26 @@ check_contains_any :: (source: string, p0: string, p1: string, where: string) {
   if !ok0 && !ok1 fail("Expected either '%' or '%' in %", p0, p1, where);
 }
 
-check_spvasm_is_generic :: (shader_name: string) {
-  spvasm_path := tprint(".build/ir_slang/%_comp.spvasm", shader_name);
-  spvasm_source, spvasm_ok := read_entire_file(spvasm_path);
-  if !spvasm_ok fail("Could not read %", spvasm_path);
-  check_contains(spvasm_source, "Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1", spvasm_path);
-}
-
 run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F, proc_name: string, $WITH_TABLE := false, $TABLE_TYPE: Type = u32, $TABLE_KIND := Compute_Table_Kind.U32) {
   suffix := ifx WITH_TABLE then " (table)" else "";
-  log("[IR][compute] Running case '%' with %%", case_name, proc_name, suffix);
+  //log("[IR][compute] Running case '%'", case_name, proc_name, suffix);
   error: *NSError = null;
   lib_compute := MTLDevice.newLibraryWithSource_options_error(g_device, NSString.getTempString(source), g_compile_options, *error);
   if log_nserror("Failed to compile compute shader library", error) || !lib_compute {
-    if !lib_compute && error == null fail("Failed to compile compute shader library");
-    fail("Compute source compilation failed");
+    if !lib_compute && error == null fail("Failed to compile compute shader library: %", case_name);
+    fail("Compute source compilation failed: %", case_name);
   }
   defer release(lib_compute);
 
   fn_compute := cast(*MTLFunction) MTLLibrary.newFunctionWithName(lib_compute, NSString.getTempString("ComputeMain"));
-  if !fn_compute fail("Failed to find compute entry point 'ComputeMain'");
+  if !fn_compute fail("Failed to find compute entry point 'ComputeMain': %", case_name);
   defer release(fn_compute);
 
   error = null;
   pipeline_compute := MTLDevice.newComputePipelineStateWithFunction_error(g_device, xx fn_compute, *error);
   if log_nserror("Failed to create compute pipeline", error) || !pipeline_compute {
     if !pipeline_compute && error == null fail("Failed to create compute pipeline");
-    fail("Compute pipeline creation failed");
+    fail("Compute pipeline creation failed '%'", case_name);
   }
   defer release(pipeline_compute);
 
@@ -398,11 +396,6 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
       }
     }
   }
-  #if WITH_TABLE {
-    run_cpu_compute_dispatch(expected.count, cpu_shader_proc, expected.data, table_data.data);
-  } else {
-    run_cpu_compute_dispatch(expected.count, cpu_shader_proc, expected.data);
-  }
 
   command_buffer := MTLCommandQueue.commandBuffer(g_queue);
   if !command_buffer fail("Failed to create compute command buffer");
@@ -422,13 +415,26 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
 
   MTLCommandBuffer.commit(command_buffer);
   MTLCommandBuffer.waitUntilCompleted(command_buffer);
-
+  
+  // Run the CPU version.
+  #if WITH_TABLE run_cpu_compute_dispatch(expected.count, cpu_shader_proc, expected.data, table_data.data);
+  else           run_cpu_compute_dispatch(expected.count, cpu_shader_proc, expected.data);
+  
+  // Compare
+  saw_gpu_non_zero, saw_cpu_non_zero: bool;
   for 0..ELEMENT_COUNT-1 {
+    if gpu_values[it] != 0 saw_gpu_non_zero = true;
+    if expected[it] != 0   saw_cpu_non_zero = true;
     if gpu_values[it] != expected[it] {
-      fail("[%] compute semantics mismatch at %: GPU=% CPU=%", case_name, it, gpu_values[it], expected[it]);
+      fail("[FAIL] mismatch in '%' at index %: GPU=% CPU=%", case_name, it, gpu_values[it], expected[it]);
     }
   }
-  log("[IR][compute] Passed case '%' with %%", case_name, proc_name, suffix);
+  
+  // Sanity check
+  if !saw_gpu_non_zero fail("Expected at least one GPU compute to return non-zero");
+  if !saw_cpu_non_zero fail("Expected at least one CPU run to return non-zero");
+  
+  log("[OK] %", case_name);
 }
 
 proc_name_from_caller_arg_compile_time :: (call: Code, arg_index: s64) -> string {
@@ -459,236 +465,59 @@ run_compute_case_with_boid_table :: (source: string, case_name: string, $cpu_sha
   run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Compute_Boid_State, .BOID_STATE);
 }
 
+n :: ($proc: $F, call := #caller_code) #compile_time {
+ return #run proc_name_from_caller_arg_compile_time(call, 0);
+}
+
 main :: () {
-  _ = get_transpiled(.METAL, compute_semantics_shader);
-  _ = get_transpiled(.METAL, compute_semantics_loop_shader);
-  _ = get_transpiled(.METAL, compute_semantics_nested_shader);
-  _ = get_transpiled(.METAL, compute_semantics_locals_shader);
-  _ = get_transpiled(.METAL, compute_semantics_return_shader);
-  _ = get_transpiled(.METAL, compute_semantics_helper_shader);
-  _ = get_transpiled(.METAL, compute_semantics_bitwise_shader);
-  _ = get_transpiled(.METAL, compute_semantics_using_shader);
-  _ = get_transpiled(.METAL, compute_semantics_using_helper_shader);
-  _ = get_transpiled(.METAL, compute_semantics_while_break_shader);
-  _ = get_transpiled(.METAL, compute_semantics_continue_shader);
-  _ = get_transpiled(.METAL, compute_semantics_switch_shader);
-  _ = get_transpiled(.METAL, compute_semantics_compound_assign_shader);
-  _ = get_transpiled(.METAL, compute_semantics_vector_index_shader);
-  _ = get_transpiled(.METAL, compute_semantics_access_chain_shader);
-  _ = get_transpiled(.METAL, compute_semantics_helper_struct_chain_shader);
-  _ = get_transpiled(.METAL, compute_semantics_helper_struct_direct_assign_shader);
-  _ = get_transpiled(.METAL, compute_semantics_matrix_math_shader);
-  _ = get_transpiled(.METAL, compute_semantics_intrinsics_shader);
-
-  compute_source := get_transpiled(.METAL, compute_semantics_shader);
-  loop_source := get_transpiled(.METAL, compute_semantics_loop_shader);
-  nested_source := get_transpiled(.METAL, compute_semantics_nested_shader);
-  locals_source := get_transpiled(.METAL, compute_semantics_locals_shader);
-  ret_source := get_transpiled(.METAL, compute_semantics_return_shader);
-  helper_source := get_transpiled(.METAL, compute_semantics_helper_shader);
-  bitwise_source := get_transpiled(.METAL, compute_semantics_bitwise_shader);
-  using_source := get_transpiled(.METAL, compute_semantics_using_shader);
-  using_helper_source := get_transpiled(.METAL, compute_semantics_using_helper_shader);
-  while_break_source := get_transpiled(.METAL, compute_semantics_while_break_shader);
-  continue_source := get_transpiled(.METAL, compute_semantics_continue_shader);
-  switch_source := get_transpiled(.METAL, compute_semantics_switch_shader);
-  compound_assign_source := get_transpiled(.METAL, compute_semantics_compound_assign_shader);
-  vector_index_source := get_transpiled(.METAL, compute_semantics_vector_index_shader);
-  access_chain_source := get_transpiled(.METAL, compute_semantics_access_chain_shader);
-  helper_struct_chain_source := get_transpiled(.METAL, compute_semantics_helper_struct_chain_shader);
-  helper_struct_direct_assign_source := get_transpiled(.METAL, compute_semantics_helper_struct_direct_assign_shader);
-  matrix_math_source := get_transpiled(.METAL, compute_semantics_matrix_math_shader);
-  intrinsics_source := get_transpiled(.METAL, compute_semantics_intrinsics_shader);
-
-  // These cases currently run through the direct generic SPIR-V path (no template fixture fallback).
-  check_spvasm_is_generic("compute_semantics_shader");
-  check_spvasm_is_generic("compute_semantics_locals_shader");
-  check_spvasm_is_generic("compute_semantics_using_shader");
-  check_spvasm_is_generic("compute_semantics_compound_assign_shader");
-  check_spvasm_is_generic("compute_semantics_bitwise_shader");
-  check_spvasm_is_generic("compute_semantics_vector_index_shader");
-  check_spvasm_is_generic("compute_semantics_access_chain_shader");
-  check_spvasm_is_generic("compute_semantics_helper_struct_chain_shader");
-  check_spvasm_is_generic("compute_semantics_helper_struct_direct_assign_shader");
-  check_spvasm_is_generic("compute_semantics_matrix_math_shader");
-  check_spvasm_is_generic("compute_semantics_intrinsics_shader");
-
-  ir_slang_path := ".build/ir_slang/compute_semantics_shader_comp.slang";
-  ir_slang_source, ir_slang_ok := read_entire_file(ir_slang_path);
-  if !ir_slang_ok fail("Could not read %", ir_slang_path);
-  check_contains(ir_slang_source, "generated_by_ir_pipeline", "compute IR slang output");
-  check_contains_any(ir_slang_source, "[shader(\"compute\")]", "layout(local_size_x", "compute IR source output");
-
-  loop_ir_slang_path := ".build/ir_slang/compute_semantics_loop_shader_comp.slang";
-  loop_ir_slang_source, loop_ir_ok := read_entire_file(loop_ir_slang_path);
-  if !loop_ir_ok fail("Could not read %", loop_ir_slang_path);
-  check_contains(loop_ir_slang_source, "generated_by_ir_pipeline", "compute loop IR slang output");
-  check_contains(loop_ir_slang_source, "for (", "compute loop IR slang output");
-
-  nested_ir_slang_path := ".build/ir_slang/compute_semantics_nested_shader_comp.slang";
-  nested_ir_slang_source, nested_ir_ok := read_entire_file(nested_ir_slang_path);
-  if !nested_ir_ok fail("Could not read %", nested_ir_slang_path);
-  check_contains(nested_ir_slang_source, "generated_by_ir_pipeline", "compute nested IR slang output");
-  check_contains(nested_ir_slang_source, "table[", "compute nested IR slang output");
-  check_contains(nested_ir_slang_source, "if (", "compute nested IR slang output");
-
-  locals_ir_slang_path := ".build/ir_slang/compute_semantics_locals_shader_comp.slang";
-  locals_ir_slang_source, locals_ir_ok := read_entire_file(locals_ir_slang_path);
-  if !locals_ir_ok fail("Could not read %", locals_ir_slang_path);
-  check_contains(locals_ir_slang_source, "generated_by_ir_pipeline", "compute locals IR slang output");
-  check_contains(locals_ir_slang_source, "t0", "compute locals IR slang output");
-  check_contains(locals_ir_slang_source, "t1", "compute locals IR slang output");
-
-  ret_ir_slang_path := ".build/ir_slang/compute_semantics_return_shader_comp.slang";
-  ret_ir_slang_source, ret_ir_ok := read_entire_file(ret_ir_slang_path);
-  if !ret_ir_ok fail("Could not read %", ret_ir_slang_path);
-  check_contains(ret_ir_slang_source, "generated_by_ir_pipeline", "compute return IR slang output");
-  check_contains(ret_ir_slang_source, "return;", "compute return IR slang output");
-  check_contains(ret_ir_slang_source, "for (", "compute return IR slang output");
-
-  helper_ir_slang_path := ".build/ir_slang/compute_semantics_helper_shader_comp.slang";
-  helper_ir_slang_source, helper_ir_ok := read_entire_file(helper_ir_slang_path);
-  if !helper_ir_ok fail("Could not read %", helper_ir_slang_path);
-  check_contains(helper_ir_slang_source, "generated_by_ir_pipeline", "compute helper IR slang output");
-  check_contains(helper_ir_slang_source, "compute_semantics_helper_twist", "compute helper IR slang output");
-
-  bitwise_ir_slang_path := ".build/ir_slang/compute_semantics_bitwise_shader_comp.slang";
-  bitwise_ir_slang_source, bitwise_ir_ok := read_entire_file(bitwise_ir_slang_path);
-  if !bitwise_ir_ok fail("Could not read %", bitwise_ir_slang_path);
-  check_contains(bitwise_ir_slang_source, "generated_by_ir_pipeline", "compute bitwise IR slang output");
-  check_contains(bitwise_ir_slang_source, "^", "compute bitwise IR slang output");
-  check_contains(bitwise_ir_slang_source, "&", "compute bitwise IR slang output");
-  check_contains(bitwise_ir_slang_source, "|", "compute bitwise IR slang output");
-  check_contains(bitwise_ir_slang_source, "<<", "compute bitwise IR slang output");
-  check_contains(bitwise_ir_slang_source, ">>", "compute bitwise IR slang output");
-
-  using_ir_slang_path := ".build/ir_slang/compute_semantics_using_shader_comp.slang";
-  using_ir_slang_source, using_ir_ok := read_entire_file(using_ir_slang_path);
-  if !using_ir_ok fail("Could not read %", using_ir_slang_path);
-  check_contains(using_ir_slang_source, "generated_by_ir_pipeline", "compute using IR slang output");
-  check_contains(using_ir_slang_source, "input.thread_id", "compute using IR slang output");
-
-  using_helper_ir_slang_path := ".build/ir_slang/compute_semantics_using_helper_shader_comp.slang";
-  using_helper_ir_slang_source, using_helper_ir_ok := read_entire_file(using_helper_ir_slang_path);
-  if !using_helper_ir_ok fail("Could not read %", using_helper_ir_slang_path);
-  check_contains(using_helper_ir_slang_source, "generated_by_ir_pipeline", "compute helper using IR slang output");
-  check_contains(using_helper_ir_slang_source, "compute_semantics_using_helper_step", "compute helper using IR slang output");
-  check_contains(using_helper_ir_slang_source, "input.base", "compute helper using IR slang output");
-
-  while_break_ir_slang_path := ".build/ir_slang/compute_semantics_while_break_shader_comp.slang";
-  while_break_ir_slang_source, while_break_ir_ok := read_entire_file(while_break_ir_slang_path);
-  if !while_break_ir_ok fail("Could not read %", while_break_ir_slang_path);
-  check_contains(while_break_ir_slang_source, "generated_by_ir_pipeline", "compute while/break IR slang output");
-  check_contains(while_break_ir_slang_source, "while (", "compute while/break IR slang output");
-  check_contains(while_break_ir_slang_source, "break;", "compute while/break IR slang output");
-
-  continue_ir_slang_path := ".build/ir_slang/compute_semantics_continue_shader_comp.slang";
-  continue_ir_slang_source, continue_ir_ok := read_entire_file(continue_ir_slang_path);
-  if !continue_ir_ok fail("Could not read %", continue_ir_slang_path);
-  check_contains(continue_ir_slang_source, "generated_by_ir_pipeline", "compute continue IR slang output");
-  check_contains(continue_ir_slang_source, "while (", "compute continue IR slang output");
-  check_contains(continue_ir_slang_source, "continue;", "compute continue IR slang output");
-
-  switch_ir_slang_path := ".build/ir_slang/compute_semantics_switch_shader_comp.slang";
-  switch_ir_slang_source, switch_ir_ok := read_entire_file(switch_ir_slang_path);
-  if !switch_ir_ok fail("Could not read %", switch_ir_slang_path);
-  check_contains(switch_ir_slang_source, "generated_by_ir_pipeline", "compute switch IR slang output");
-  check_contains_any(switch_ir_slang_source, "switch (", "else if (", "compute switch IR slang output");
-
-  compound_assign_ir_slang_path := ".build/ir_slang/compute_semantics_compound_assign_shader_comp.slang";
-  compound_assign_ir_slang_source, compound_assign_ir_ok := read_entire_file(compound_assign_ir_slang_path);
-  if !compound_assign_ir_ok fail("Could not read %", compound_assign_ir_slang_path);
-  check_contains(compound_assign_ir_slang_source, "generated_by_ir_pipeline", "compute compound-assign IR slang output");
-  check_contains(compound_assign_ir_slang_source, "+=", "compute compound-assign IR slang output");
-  check_contains(compound_assign_ir_slang_source, "*=", "compute compound-assign IR slang output");
-  check_contains(compound_assign_ir_slang_source, "-=", "compute compound-assign IR slang output");
-  check_contains(compound_assign_ir_slang_source, "|=", "compute compound-assign IR slang output");
-  check_contains(compound_assign_ir_slang_source, "&=", "compute compound-assign IR slang output");
-
-  vector_index_ir_slang_path := ".build/ir_slang/compute_semantics_vector_index_shader_comp.slang";
-  vector_index_ir_slang_source, vector_index_ir_ok := read_entire_file(vector_index_ir_slang_path);
-  if !vector_index_ir_ok fail("Could not read %", vector_index_ir_slang_path);
-  check_contains(vector_index_ir_slang_source, "generated_by_ir_pipeline", "compute vector/index IR slang output");
-  check_contains(vector_index_ir_slang_source, "boids[idx]", "compute vector/index IR slang output");
-  check_contains(vector_index_ir_slang_source, ".pos.x", "compute vector/index IR slang output");
-  check_contains(vector_index_ir_slang_source, "struct Compute_Boid_State", "compute vector/index IR slang output");
-  check_contains(vector_index_ir_slang_source, "float2 pos", "compute vector/index IR slang output");
-
-  access_chain_ir_slang_path := ".build/ir_slang/compute_semantics_access_chain_shader_comp.slang";
-  access_chain_ir_slang_source, access_chain_ir_ok := read_entire_file(access_chain_ir_slang_path);
-  if !access_chain_ir_ok fail("Could not read %", access_chain_ir_slang_path);
-  check_contains(access_chain_ir_slang_source, "generated_by_ir_pipeline", "compute access-chain IR slang output");
-  check_contains(access_chain_ir_slang_source, "boids[idx].pos.x = ", "compute access-chain IR slang output");
-  check_contains(access_chain_ir_slang_source, "boids[idx].vel.x", "compute access-chain IR slang output");
-  check_contains(access_chain_ir_slang_source, "values[idx] = ", "compute access-chain IR slang output");
-
-  helper_struct_chain_ir_slang_path := ".build/ir_slang/compute_semantics_helper_struct_chain_shader_comp.slang";
-  helper_struct_chain_ir_slang_source, helper_struct_chain_ir_ok := read_entire_file(helper_struct_chain_ir_slang_path);
-  if !helper_struct_chain_ir_ok fail("Could not read %", helper_struct_chain_ir_slang_path);
-  check_contains(helper_struct_chain_ir_slang_source, "generated_by_ir_pipeline", "compute helper-struct-chain IR slang output");
-  check_contains(helper_struct_chain_ir_slang_source, "compute_semantics_boid_advance", "compute helper-struct-chain IR slang output");
-  check_contains(helper_struct_chain_ir_slang_source, ".pos.x", "compute helper-struct-chain IR slang output");
-  check_contains(helper_struct_chain_ir_slang_source, ".pos.y", "compute helper-struct-chain IR slang output");
-
-  helper_struct_direct_assign_ir_slang_path := ".build/ir_slang/compute_semantics_helper_struct_direct_assign_shader_comp.slang";
-  helper_struct_direct_assign_ir_slang_source, helper_struct_direct_assign_ir_ok := read_entire_file(helper_struct_direct_assign_ir_slang_path);
-  if !helper_struct_direct_assign_ir_ok fail("Could not read %", helper_struct_direct_assign_ir_slang_path);
-  check_contains(helper_struct_direct_assign_ir_slang_source, "generated_by_ir_pipeline", "compute helper-struct-direct-assign IR slang output");
-  check_contains(helper_struct_direct_assign_ir_slang_source, "compute_semantics_boid_advance", "compute helper-struct-direct-assign IR slang output");
-  check_contains(helper_struct_direct_assign_ir_slang_source, "boids[idx] = ", "compute helper-struct-direct-assign IR slang output");
-
-  matrix_math_ir_slang_path := ".build/ir_slang/compute_semantics_matrix_math_shader_comp.slang";
-  matrix_math_ir_slang_source, matrix_math_ir_ok := read_entire_file(matrix_math_ir_slang_path);
-  if !matrix_math_ir_ok fail("Could not read %", matrix_math_ir_slang_path);
-  check_contains(matrix_math_ir_slang_source, "generated_by_ir_pipeline", "compute matrix-math IR slang output");
-  check_contains(matrix_math_ir_slang_source, "float2x2", "compute matrix-math IR slang output");
-  check_contains(matrix_math_ir_slang_source, "mul(", "compute matrix-math IR slang output");
-
-  intrinsics_ir_slang_path := ".build/ir_slang/compute_semantics_intrinsics_shader_comp.slang";
-  intrinsics_ir_slang_source, intrinsics_ir_ok := read_entire_file(intrinsics_ir_slang_path);
-  if !intrinsics_ir_ok fail("Could not read %", intrinsics_ir_slang_path);
-  check_contains(intrinsics_ir_slang_source, "generated_by_ir_pipeline", "compute intrinsics IR slang output");
-  check_contains(intrinsics_ir_slang_source, "floor(", "compute intrinsics IR slang output");
-  check_contains(intrinsics_ir_slang_source, "min(", "compute intrinsics IR slang output");
-  check_contains(intrinsics_ir_slang_source, "max(", "compute intrinsics IR slang output");
-  check_contains(intrinsics_ir_slang_source, "abs(", "compute intrinsics IR slang output");
-  check_contains(intrinsics_ir_slang_source, "sqrt(", "compute intrinsics IR slang output");
-  check_contains(intrinsics_ir_slang_source, "sin(", "compute intrinsics IR slang output");
-  check_contains(intrinsics_ir_slang_source, "cos(", "compute intrinsics IR slang output");
-
   init_objective_c();
   init_metal();
 
   g_device = cast(*MTLDevice) MTLCreateSystemDefaultDevice();
-  if !g_device fail("Failed to get default Metal device");
-  defer release(g_device);
-
   g_queue = MTLDevice.newCommandQueue(g_device);
-  if !g_queue fail("Failed to create Metal command queue");
-  defer release(g_queue);
-
   g_compile_options = objc_init(objc_alloc(MTLCompileOptions));
-  if !g_compile_options fail("Failed to create MTLCompileOptions");
-  defer release(g_compile_options);
-
-  run_compute_case(compute_source, "branch", compute_semantics_shader);
-  run_compute_case(loop_source, "loop", compute_semantics_loop_shader);
-  run_compute_case_with_table(nested_source, "nested", compute_semantics_nested_shader);
-  run_compute_case(locals_source, "locals", compute_semantics_locals_shader);
-  run_compute_case(ret_source, "return", compute_semantics_return_shader);
-  run_compute_case(helper_source, "helper", compute_semantics_helper_shader);
-  run_compute_case_with_table(bitwise_source, "bitwise", compute_semantics_bitwise_shader);
-  run_compute_case(using_source, "using", compute_semantics_using_shader);
-  run_compute_case_with_table(using_helper_source, "using-helper", compute_semantics_using_helper_shader);
-  run_compute_case(while_break_source, "while-break", compute_semantics_while_break_shader);
-  run_compute_case(continue_source, "continue", compute_semantics_continue_shader);
-  run_compute_case(switch_source, "switch", compute_semantics_switch_shader);
-  run_compute_case(compound_assign_source, "compound-assign", compute_semantics_compound_assign_shader);
-  run_compute_case_with_boid_table(vector_index_source, "vector-index", compute_semantics_vector_index_shader);
-  run_compute_case_with_boid_table(access_chain_source, "access-chain", compute_semantics_access_chain_shader);
-  run_compute_case_with_boid_table(helper_struct_chain_source, "helper-struct-chain", compute_semantics_helper_struct_chain_shader);
-  run_compute_case_with_boid_table(helper_struct_direct_assign_source, "helper-struct-direct-assign", compute_semantics_helper_struct_direct_assign_shader);
-  run_compute_case(matrix_math_source, "matrix-math", compute_semantics_matrix_math_shader);
-  run_compute_case(intrinsics_source, "intrinsics", compute_semantics_intrinsics_shader);
-  log("IR compute semantics test passed (GPU output matches CPU reference for % elements).", ELEMENT_COUNT);
+  run_gpu_cpu_tests();
 }
+
+run_gpu_cpu_tests :: () {
+  log("Comparing CPU and GPU results for % functions...", ALL_TEST_FUNCTIONS.count);
+  #insert #run -> string {
+    sb: String_Builder;
+    for ALL_TEST_FUNCTIONS {
+      test_runner_func: string;
+      if #complete it.type == {
+      case .Bare;  test_runner_func = "run_compute_case";
+      case .Table; test_runner_func = "run_compute_case_with_table";
+      case .Boids; test_runner_func = "run_compute_case_with_boid_table";
+      }
+      append(*sb, tprint("%1(get_transpiled(.METAL, %2), \"%2\", %2);\n", test_runner_func, it.name));
+    }
+    return builder_to_string(*sb);
+  };
+  
+  log("Passed % functions: (GPU output matches CPU for % elements each).", ALL_TEST_FUNCTIONS.count, ELEMENT_COUNT);
+}
+
+g_device: *MTLDevice;
+g_queue: *MTLCommandQueue;
+g_compile_options: *MTLCompileOptions;
+
+log_nserror :: (label: string, error: *NSError) -> bool {
+  if !error return false;
+  desc := NSError.localizedDescription(error);
+  if desc {
+    log_error("%: %", label, to_string(NSString.UTF8String(desc)));
+  } else {
+    log_error("% (NSError without localizedDescription)", label);
+  }
+  return true;
+}
+
+#import "Basic";
+#import "String";
+#import "Math";
+#import "Metal";
+#import "Objective_C";
+#import "Compiler";
+
+#import,file "../module.jai";
