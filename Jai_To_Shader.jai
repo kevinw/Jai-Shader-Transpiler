@@ -19,12 +19,8 @@ Transpiled_Target :: enum {
   VULKAN_GLSL;
 }
 
-#load "backend_shared.jai";
-#load "ir_pipeline/external_toolchain.jai";
-#load "ir_pipeline/ir_shared.jai";
-#load "ir_pipeline/ir_lowering.jai";
-#load "ir_pipeline/spirv_text_backend.jai";
-#load "ir_pipeline/spv_types.jai";
+IR_Pipeline :: #import,dir "ir_pipeline";
+using IR_Pipeline;
 
 Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
@@ -510,7 +506,7 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
   slang_source: string;
   entry_name: string;
   if ctx.type == .Vertex {
-    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(ctx);
+    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered {
       #if VERBOSE log("IR lowering failed for %", ctx.name);
       return "", false, lowered_diag;
@@ -526,7 +522,7 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
     slang_source = emitted_source;
     entry_name = ir_vertex.entry_name;
   } else if ctx.type == .Fragment {
-    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(ctx);
+    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered {
       #if VERBOSE log("IR lowering failed for %", ctx.name);
       return "", false, lowered_diag;
@@ -542,7 +538,7 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
     slang_source = emitted_source;
     entry_name = ir_fragment.entry_name;
   } else if ctx.type == .Compute {
-    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
+    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered {
       #if VERBOSE log("IR lowering failed for %", ctx.name);
       return "", false, lowered_diag;
@@ -699,7 +695,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   slang_source: string;
   entry_name: string;
   if ctx.type == .Vertex {
-    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(ctx);
+    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
     emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
     if !emitted {
@@ -713,7 +709,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     slang_source = emitted_source;
     entry_name = ir_vertex.entry_name;
   } else if ctx.type == .Fragment {
-    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(ctx);
+    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
     emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
     if !emitted {
@@ -727,7 +723,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     slang_source = emitted_source;
     entry_name = ir_fragment.entry_name;
   } else {
-    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
+    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
     emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
     if !emitted {
@@ -781,15 +777,15 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   spvasm_diag: IR_Diagnostic;
   use_metal_argument_buffers := false;
   if ctx.type == .Compute {
-    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(ctx);
+    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
   } else if ctx.type == .Vertex {
-    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(ctx);
+    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
   } else if ctx.type == .Fragment {
-    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(ctx);
+    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
   } else {
@@ -922,7 +918,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   vertex_ctx := create_shader_write_context(.METAL, pair_ctx.vertex_fn, pair_ctx.glsl_target);
   fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
 
-  ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(*vertex_ctx);
+  ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(.{name=vertex_ctx.name, header=vertex_ctx.main_fn.header});
   if !vertex_ok {
     if !vertex_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
       vertex_diag.location = make_location(pair_ctx.vertex_fn.header);
@@ -931,7 +927,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     return "", false, vertex_diag;
   }
 
-  ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(*fragment_ctx);
+  ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(.{name=fragment_ctx.name, header=fragment_ctx.main_fn.header});
   if !fragment_ok {
     if !fragment_diag.has_location && pair_ctx.fragment_fn && pair_ctx.fragment_fn.header {
       fragment_diag.location = make_location(pair_ctx.fragment_fn.header);
@@ -1036,9 +1032,9 @@ write_shader_pair_ir_slang :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
 
   vertex_ctx := create_shader_write_context(.METAL, pair_ctx.vertex_fn, pair_ctx.glsl_target);
   fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
-  ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(*vertex_ctx);
+  ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(.{name=vertex_ctx.name, header=vertex_ctx.main_fn.header});
   if !vertex_ok return "", false, vertex_diag;
-  ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(*fragment_ctx);
+  ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(.{name=fragment_ctx.name, header=fragment_ctx.main_fn.header});
   if !fragment_ok return "", false, fragment_diag;
 
   slang_source, emitted := emit_ir_graphics_pair_to_slang(ir_vertex, ir_fragment);
@@ -1564,12 +1560,6 @@ PP :: #import "Program_Print";
 #import "String";
 #import "Math";
 #import "Hash_Table";
-
-append :: inline (builder: *String_Builder, strings: ..string) {
-  for strings {
-    append(builder, it.data, it.count);
-  }
-}
 
 #scope_file
 

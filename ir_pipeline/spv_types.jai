@@ -1,3 +1,5 @@
+#scope_module
+
 IR_SPV_Id_Slot :: enum {
   NONE;
   TYPE_INT;

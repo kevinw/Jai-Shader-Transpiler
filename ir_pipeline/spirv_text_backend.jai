@@ -1,6 +1,7 @@
 //
 // Jai IR -> SPIR-V text
 // 
+#scope_export
 
 emit_ir_compute_to_spirv_text_branch :: (shader: IR_Compute_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
@@ -34,7 +35,7 @@ emit_ir_fragment_to_spirv_text_branch :: (shader: IR_Fragment_Shader) -> (spvasm
   return spvasm, ok, diag;
 }
 
-#scope_export
+#scope_module
 // -----------------------------------------------------------------------------
 // Parsing / Text Helpers
 // -----------------------------------------------------------------------------
@@ -1364,6 +1365,25 @@ coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Typ
   return 0, false, diag;
 }
 
+coerce_to_exact_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, out_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if src_type == dst_type return value_id, src_type, true, diag;
+  if dst_type == .FLOAT2 {
+    coerced, coerced_ok, coerced_diag := coerce_to_float2(s, value_id, src_type);
+    if !coerced_ok return 0, .UNKNOWN, false, coerced_diag;
+    return coerced, .FLOAT2, true, diag;
+  }
+  if dst_type == .FLOAT4 {
+    coerced, coerced_ok, coerced_diag := coerce_to_float4(s, value_id, src_type);
+    if !coerced_ok return 0, .UNKNOWN, false, coerced_diag;
+    return coerced, .FLOAT4, true, diag;
+  }
+  coerced, coerced_ok, coerced_diag := coerce_to_kind(s, value_id, src_type, dst_type);
+  if !coerced_ok return 0, .UNKNOWN, false, coerced_diag;
+  return coerced, dst_type, true, diag;
+}
+
 emit_float_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
@@ -1489,6 +1509,89 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
   add_op(s, tprint("         % = OpExtInst % % % %",
                    id_text(result), id_text(s.id_float), id_text(s.id_extinst), op_name, id_text(vf)));
   return result, .FLOAT, true, diag;
+}
+
+eval_inline_helper_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, return_kind: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if !helper return 0, .UNKNOWN, false, false, diag;
+
+  eval_from_index :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, return_kind: IR_SPV_Gen_Type, stmt_index: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
+    diag: IR_Diagnostic;
+    if stmt_index >= helper.body.statements.count {
+      diag.message = tprint("SPIR-V backend: helper '%' has no return statement.", helper.name);
+      return 0, .UNKNOWN, false, true, diag;
+    }
+
+    stmt := *helper.body.statements[stmt_index];
+    if stmt.kind == .RETURN {
+      if !stmt.return_expr {
+        diag.message = tprint("SPIR-V backend: helper '%' must return a value.", helper.name);
+        return 0, .UNKNOWN, false, true, diag;
+      }
+      raw_id, raw_type, raw_ok, raw_diag := emit_expr(s, stmt.return_expr);
+      if !raw_ok return 0, .UNKNOWN, false, true, raw_diag;
+      coerced_id, coerced_type, coerced_ok, coerced_diag := coerce_to_exact_kind(s, raw_id, raw_type, return_kind);
+      if !coerced_ok {
+        if coerced_diag.message.count == 0 coerced_diag.message = tprint("SPIR-V backend: helper '%' return expression must lower to %.", helper.name, return_kind);
+        return 0, .UNKNOWN, false, true, coerced_diag;
+      }
+      return coerced_id, coerced_type, true, true, diag;
+    }
+
+    if stmt.kind == .IF && stmt.if_then && !stmt.if_else {
+      if stmt.if_then.statements.count == 1 && stmt.if_then.statements[0].kind == .RETURN && stmt.if_then.statements[0].return_expr {
+        cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.if_condition);
+        if !cond_ok return 0, .UNKNOWN, false, true, cond_diag;
+        if cond_type != .BOOL {
+          diag.message = tprint("SPIR-V backend: helper '%' if-condition must lower to bool.", helper.name);
+          return 0, .UNKNOWN, false, true, diag;
+        }
+
+        then_stmt := stmt.if_then.statements[0];
+        then_raw_id, then_raw_type, then_raw_ok, then_raw_diag := emit_expr(s, then_stmt.return_expr);
+        if !then_raw_ok return 0, .UNKNOWN, false, true, then_raw_diag;
+        then_id, then_type, then_ok, then_diag := coerce_to_exact_kind(s, then_raw_id, then_raw_type, return_kind);
+        if !then_ok {
+          if then_diag.message.count == 0 then_diag.message = tprint("SPIR-V backend: helper '%' return expression must lower to %.", helper.name, return_kind);
+          return 0, .UNKNOWN, false, true, then_diag;
+        }
+
+        else_id, else_type, else_ok, else_handled, else_diag := eval_from_index(s, helper, return_kind, stmt_index + 1);
+        if !else_handled return 0, .UNKNOWN, false, false, diag;
+        if !else_ok return 0, .UNKNOWN, false, true, else_diag;
+        if then_type != else_type {
+          diag.message = tprint("SPIR-V backend: helper '%' if-return branches must resolve to same type.", helper.name);
+          return 0, .UNKNOWN, false, true, diag;
+        }
+        result_type_id := type_id_from_kind(s, then_type);
+        if result_type_id == 0 {
+          diag.message = tprint("SPIR-V backend: helper '%' return type % is unsupported for OpSelect.", helper.name, then_type);
+          return 0, .UNKNOWN, false, true, diag;
+        }
+        selected := new_id(s);
+        add_op(s, tprint("         % = OpSelect % % % %",
+                         id_text(selected),
+                         id_text(result_type_id),
+                         id_text(cond_id),
+                         id_text(then_id),
+                         id_text(else_id)));
+        return selected, then_type, true, true, diag;
+      }
+    }
+
+    stmt_ok, stmt_terminated, stmt_diag := emit_stmt(s, stmt);
+    if !stmt_ok return 0, .UNKNOWN, false, true, stmt_diag;
+    if stmt_terminated {
+      diag.message = tprint("SPIR-V backend: helper '%' has unsupported early control-flow termination.", helper.name);
+      return 0, .UNKNOWN, false, true, diag;
+    }
+    value_id, value_type, ok, handled, next_diag := eval_from_index(s, helper, return_kind, stmt_index + 1);
+    return value_id, value_type, ok, handled, next_diag;
+  }
+
+  value_id, value_type, ok, handled, chain_diag := eval_from_index(s, helper, return_kind, 0);
+  return value_id, value_type, ok, handled, chain_diag;
 }
 
 eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
@@ -1650,53 +1753,14 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
     array_add(*s.local_structs, arg_local_struct);
   }
 
-  return_id: s64 = 0;
-  return_type := IR_SPV_Gen_Type.UNKNOWN;
-  got_return := false;
-  for *helper.body.statements {
-    stmt := it;
-    if stmt.kind == .RETURN {
-      if !stmt.return_expr {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' must return a value.", helper.name);
-        return 0, .UNKNOWN, false, diag;
-      }
-      value_id, value_type, value_ok, value_diag := emit_expr(s, stmt.return_expr);
-      if !value_ok {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        return 0, .UNKNOWN, false, value_diag;
-      }
-      return_id = value_id;
-      return_type = value_type;
-      got_return = true;
-      break;
-    }
-    stmt_ok, stmt_terminated, stmt_diag := emit_stmt(s, stmt);
-    if !stmt_ok {
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      return 0, .UNKNOWN, false, stmt_diag;
-    }
-    if stmt_terminated {
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      diag.message = tprint("SPIR-V backend: helper '%' has unsupported early control-flow termination.", helper.name);
-      return 0, .UNKNOWN, false, diag;
-    }
-  }
-
+  return_id, return_type, return_ok, return_handled, return_diag := eval_inline_helper_return_chain(s, helper, return_kind);
   s.locals.count = local_count_before;
   s.local_structs.count = local_struct_count_before;
-  if !got_return {
-    diag.message = tprint("SPIR-V backend: helper '%' has no return statement.", helper.name);
+  if !return_handled {
+    diag.message = tprint("SPIR-V backend: helper '%' body shape is unsupported for inline value return.", helper.name);
     return 0, .UNKNOWN, false, diag;
   }
-  if return_type != return_kind {
-    diag.message = tprint("SPIR-V backend: helper '%' return expression must lower to %.", helper.name, return_kind);
-    return 0, .UNKNOWN, false, diag;
-  }
+  if !return_ok return 0, .UNKNOWN, false, return_diag;
   return return_id, return_type, true, diag;
 }
 

@@ -1,3 +1,5 @@
+#scope_export
+
 IR_Field :: struct {
   name: string;
   type_name: string;
@@ -192,6 +194,8 @@ ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
   assert(state != null);
   return state.first_error;
 }
+
+#scope_module
 
 ir_type_to_slang_name :: (type: *Type_Info) -> (string, bool) {
   if !type return "", false;
@@ -532,6 +536,44 @@ ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Stru
   return type_name, type_ok;
 }
 
+op_to_text :: (op: Operator_Type) -> string {
+  if op == {
+    case cast(Operator_Type) #char "="; return "=";
+    case cast(Operator_Type) #char "<"; return "<";
+    case cast(Operator_Type) #char "?"; return "?";
+    case cast(Operator_Type) #char ">"; return ">";
+    case cast(Operator_Type) #char "!"; return "!";
+    case cast(Operator_Type) #char "+"; return "+";
+    case cast(Operator_Type) #char "-"; return "-";
+    case cast(Operator_Type) #char "*"; return "*";
+    case cast(Operator_Type) #char "/"; return "/";
+    case cast(Operator_Type) #char "%"; return "%";
+    case cast(Operator_Type) #char "&"; return "&";
+    case cast(Operator_Type) #char "|"; return "|";
+    case cast(Operator_Type) #char "^"; return "^";
+    case cast(Operator_Type) #char "~"; return "~";
+    case cast(Operator_Type) #char "."; return ".";
+  }
+
+  if op == {
+    case .PLUS_ASSIGN; return "+=";
+    case .MINUS_ASSIGN; return "-=";
+    case .TIMES_ASSIGN; return "*=";
+    case .DIV_ASSIGN; return "/=";
+    case .MOD_ASSIGN; return "%=";
+    case .IS_EQUAL; return "==";
+    case .IS_NOT_EQUAL; return "!=";
+    case .LOGICAL_AND; return "&&";
+    case .LOGICAL_OR; return "||";
+    case .LESS_OR_EQUAL; return "<=";
+    case .GREATER_OR_EQUAL; return ">=";
+    case .SHIFT_LEFT; return "<<";
+    case .SHIFT_RIGHT; return ">>";
+    case .ARRAY_SUBSCRIPT; return "[]";
+    case; return "<operator_not_supported>";
+  }
+}
+
 ir_binary_operator_to_slang :: (op: Operator_Type) -> string {
   if op == {
     case .PLUS_ASSIGN; return "+=";
@@ -547,7 +589,21 @@ ir_binary_operator_to_slang :: (op: Operator_Type) -> string {
     case .BITWISE_OR_ASSIGN; return "|=";
     case .BITWISE_XOR_ASSIGN; return "^=";
   }
-  return operator_string(op);
+  return op_to_text(op);
+}
+
+compute_builtin_note_for_member :: (member: *Type_Info_Struct_Member) -> (string, bool) {
+  for member.notes {
+    found, _ := contains(it, "thread_position_in_grid");
+    if found return "thread_position_in_grid", true;
+    found, _ = contains(it, "thread_position_in_threadgroup");
+    if found return "thread_position_in_threadgroup", true;
+    found, _ = contains(it, "threadgroup_position_in_grid");
+    if found return "threadgroup_position_in_grid", true;
+    found, _ = contains(it, "thread_index_in_threadgroup");
+    if found return "thread_index_in_threadgroup", true;
+  }
+  return "", false;
 }
 
 ir_expr_new :: (kind: IR_Expr_Kind) -> *IR_Expr {
@@ -712,7 +768,7 @@ ir_lower_expr :: (node: *Code_Node,
       inner, ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases, state);
       if !ok return null, false;
       out := ir_expr_new(.UNARY);
-      out.text = operator_string(un.operator_type);
+      out.text = op_to_text(un.operator_type);
       out.left = inner;
       return out, true;
     }
@@ -745,11 +801,9 @@ ir_lower_expr :: (node: *Code_Node,
           out.left.text = "mul";
           if left_is_matrix && !right_is_matrix {
             // Jai's matrix*vector convention matches Slang/HLSL mul(vector, matrix).
-            array_add(*out.args, right);
-            array_add(*out.args, left);
+            array_add(*out.args, right, left);
           } else {
-            array_add(*out.args, left);
-            array_add(*out.args, right);
+            array_add(*out.args, left, right);
           }
           return out, true;
         }
@@ -1041,7 +1095,7 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
 
   st := cast(*Type_Info_Struct) type;
   for *st.members {
-    builtin_name, found := member_get_compute_builtin_note(it);
+    builtin_name, found := compute_builtin_note_for_member(it);
     if !found return out, false;
     semantic, sem_ok := ir_compute_builtin_to_semantic(builtin_name);
     if !sem_ok return out, false;
@@ -1134,43 +1188,44 @@ ir_collect_compute_declared_structs_in_block :: (block: *Code_Block, out_extra_s
 
 // Shared lowering helpers moved to ir_pipeline/ir_shared.jai.
 
-ir_lower_vertex_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Vertex_Shader, bool, IR_Diagnostic) {
+IR_Shader_Header_Context :: struct {
+  name: string;
+  header: *Code_Procedure_Header;
+}
+
+#scope_export
+
+ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Vertex_Shader, bool, IR_Diagnostic) {
   out: IR_Vertex_Shader;
   state: IR_Lowering_State;
   ir_reset_diagnostic(*state);
-  assert(ctx != null);
-  if ctx.type != .Vertex {
-    ir_set_diagnostic(*state, "IR lowering: context is not a vertex shader");
+  assert(ctx.header != null);
+  assert(ctx.header.body_or_null != null);
+  assert(ctx.header.body_or_null.block != null);
+  if ctx.header.arguments.count < 1 {
+    ir_set_diagnostic(*state, "IR lowering(vertex): expected at least one input argument", cast(*Code_Node) ctx.header);
+    return out, false, ir_get_diagnostic(*state);
+  }
+  if ctx.header.returns.count != 1 {
+    ir_set_diagnostic(*state, "IR lowering(vertex): expected exactly one return value", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
 
-  assert(ctx.main_fn.header != null);
-  assert(ctx.main_fn.header.body_or_null != null);
-  assert(ctx.main_fn.header.body_or_null.block != null);
-  if ctx.main_fn.header.arguments.count < 1 {
-    ir_set_diagnostic(*state, "IR lowering(vertex): expected at least one input argument", cast(*Code_Node) ctx.main_fn.header);
-    return out, false, ir_get_diagnostic(*state);
-  }
-  if ctx.main_fn.header.returns.count != 1 {
-    ir_set_diagnostic(*state, "IR lowering(vertex): expected exactly one return value", cast(*Code_Node) ctx.main_fn.header);
-    return out, false, ir_get_diagnostic(*state);
-  }
-
-  arg0 := ctx.main_fn.header.arguments[0];
-  ret0 := ctx.main_fn.header.returns[0];
+  arg0 := ctx.header.arguments[0];
+  ret0 := ctx.header.returns[0];
 
   in_type := ifx arg0.type_inst then arg0.type_inst.result else ifx arg0.expression then arg0.expression.type else null;
   out_type := ifx ret0.type_inst then ret0.type_inst.result else ifx ret0.expression then ret0.expression.type else null;
 
   in_struct, in_ok := ir_lower_struct_from_type(tprint("%_In", ctx.name), in_type);
   if !in_ok {
-    ir_set_diagnostic(*state, "IR lowering(vertex): could not lower input struct type", cast(*Code_Node) ctx.main_fn.header);
+    ir_set_diagnostic(*state, "IR lowering(vertex): could not lower input struct type", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
 
   out_struct, out_ok := ir_lower_struct_from_type(tprint("%_Out", ctx.name), out_type);
   if !out_ok {
-    ir_set_diagnostic(*state, "IR lowering(vertex): could not lower output struct type", cast(*Code_Node) ctx.main_fn.header);
+    ir_set_diagnostic(*state, "IR lowering(vertex): could not lower output struct type", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
 
@@ -1178,17 +1233,17 @@ ir_lower_vertex_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Verte
   out.entry_name = "VertexMain";
   out.input = in_struct;
   out.output = out_struct;
-  for i: 1..ctx.main_fn.header.arguments.count-1 {
-    arg := ctx.main_fn.header.arguments[i];
+  for i: 1..ctx.header.arguments.count-1 {
+    arg := ctx.header.arguments[i];
     arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
     arg_type_name, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
     if !arg_ok {
-      ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported extra argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+      ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported extra argument '%'", arg.name), cast(*Code_Node) ctx.header);
       return out, false, ir_get_diagnostic(*state);
     }
     original_type_name, original_ok := ir_type_to_original_name(arg_type);
     if !original_ok {
-      ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported original type for argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+      ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported original type for argument '%'", arg.name), cast(*Code_Node) ctx.header);
       return out, false, ir_get_diagnostic(*state);
     }
     pointee_name := "";
@@ -1197,7 +1252,7 @@ ir_lower_vertex_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Verte
     if arg_type && arg_type.type == .POINTER {
       pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(arg_type);
       if !pointee_ok {
-        ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported pointer pointee type for argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+        ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported pointer pointee type for argument '%'", arg.name), cast(*Code_Node) ctx.header);
         return out, false, ir_get_diagnostic(*state);
       }
     }
@@ -1212,55 +1267,49 @@ ir_lower_vertex_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Verte
     });
   }
   seen_headers: [..] *Code_Procedure_Header;
-  if !ir_shared_collect_helper_functions_recursive(ctx.main_fn.header, *seen_headers, *out.helpers, ctx.main_fn.header, *state) {
-    ir_set_diagnostic(*state, "IR lowering(vertex): failed while collecting/lowering helper functions", cast(*Code_Node) ctx.main_fn.header);
+  if !ir_shared_collect_helper_functions_recursive(ctx.header, *seen_headers, *out.helpers, ctx.header, *state) {
+    ir_set_diagnostic(*state, "IR lowering(vertex): failed while collecting/lowering helper functions", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
   input_field_names: [..] string;
   output_field_names: [..] string;
   parameter_usings: [..] IR_Using_Source;
-  ir_collect_parameter_using_sources(ctx.main_fn.header, *parameter_usings);
+  ir_collect_parameter_using_sources(ctx.header, *parameter_usings);
   for out.input.fields array_add(*input_field_names, it.name);
   for out.output.fields array_add(*output_field_names, it.name);
-  if !ir_shared_lower_block(ctx.main_fn.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
-    ir_set_diagnostic(*state, "IR lowering(vertex): failed while lowering function body", cast(*Code_Node) ctx.main_fn.header.body_or_null.block);
+  if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
+    ir_set_diagnostic(*state, "IR lowering(vertex): failed while lowering function body", cast(*Code_Node) ctx.header.body_or_null.block);
     return out, false, ir_get_diagnostic(*state);
   }
 
   return out, true, ir_get_diagnostic(*state);
 }
 
-ir_lower_fragment_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Fragment_Shader, bool, IR_Diagnostic) {
+ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Fragment_Shader, bool, IR_Diagnostic) {
   out: IR_Fragment_Shader;
   state: IR_Lowering_State;
   ir_reset_diagnostic(*state);
-  assert(ctx != null);
-  if ctx.type != .Fragment {
-    ir_set_diagnostic(*state, "IR lowering: context is not a fragment shader");
+  assert(ctx.header != null);
+  assert(ctx.header.body_or_null != null);
+  assert(ctx.header.body_or_null.block != null);
+  if ctx.header.arguments.count < 1 {
+    ir_set_diagnostic(*state, "IR lowering(fragment): expected at least one input argument", cast(*Code_Node) ctx.header);
+    return out, false, ir_get_diagnostic(*state);
+  }
+  if ctx.header.returns.count != 1 {
+    ir_set_diagnostic(*state, "IR lowering(fragment): expected exactly one return value", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
 
-  assert(ctx.main_fn.header != null);
-  assert(ctx.main_fn.header.body_or_null != null);
-  assert(ctx.main_fn.header.body_or_null.block != null);
-  if ctx.main_fn.header.arguments.count < 1 {
-    ir_set_diagnostic(*state, "IR lowering(fragment): expected at least one input argument", cast(*Code_Node) ctx.main_fn.header);
-    return out, false, ir_get_diagnostic(*state);
-  }
-  if ctx.main_fn.header.returns.count != 1 {
-    ir_set_diagnostic(*state, "IR lowering(fragment): expected exactly one return value", cast(*Code_Node) ctx.main_fn.header);
-    return out, false, ir_get_diagnostic(*state);
-  }
-
-  arg0 := ctx.main_fn.header.arguments[0];
-  ret0 := ctx.main_fn.header.returns[0];
+  arg0 := ctx.header.arguments[0];
+  ret0 := ctx.header.returns[0];
 
   in_type := ifx arg0.type_inst then arg0.type_inst.result else ifx arg0.expression then arg0.expression.type else null;
   out_type := ifx ret0.type_inst then ret0.type_inst.result else ifx ret0.expression then ret0.expression.type else null;
 
   in_struct, in_ok := ir_lower_struct_from_type(tprint("%_In", ctx.name), in_type);
   if !in_ok {
-    ir_set_diagnostic(*state, "IR lowering(fragment): could not lower input struct type", cast(*Code_Node) ctx.main_fn.header);
+    ir_set_diagnostic(*state, "IR lowering(fragment): could not lower input struct type", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
   // Fragment-stage gl_FragCoord should map to rasterized screen position.
@@ -1273,7 +1322,7 @@ ir_lower_fragment_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Fra
 
   out_struct, out_ok := ir_lower_struct_from_type(tprint("%_Out", ctx.name), out_type);
   if !out_ok {
-    ir_set_diagnostic(*state, "IR lowering(fragment): could not lower output struct type", cast(*Code_Node) ctx.main_fn.header);
+    ir_set_diagnostic(*state, "IR lowering(fragment): could not lower output struct type", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
 
@@ -1281,17 +1330,17 @@ ir_lower_fragment_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Fra
   out.entry_name = "FragmentMain";
   out.input = in_struct;
   out.output = out_struct;
-  for i: 1..ctx.main_fn.header.arguments.count-1 {
-    arg := ctx.main_fn.header.arguments[i];
+  for i: 1..ctx.header.arguments.count-1 {
+    arg := ctx.header.arguments[i];
     arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
     arg_type_name, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
     if !arg_ok {
-      ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported extra argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+      ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported extra argument '%'", arg.name), cast(*Code_Node) ctx.header);
       return out, false, ir_get_diagnostic(*state);
     }
     original_type_name, original_ok := ir_type_to_original_name(arg_type);
     if !original_ok {
-      ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported original type for argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+      ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported original type for argument '%'", arg.name), cast(*Code_Node) ctx.header);
       return out, false, ir_get_diagnostic(*state);
     }
     pointee_name := "";
@@ -1300,7 +1349,7 @@ ir_lower_fragment_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Fra
     if arg_type && arg_type.type == .POINTER {
       pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(arg_type);
       if !pointee_ok {
-        ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported pointer pointee type for argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+        ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported pointer pointee type for argument '%'", arg.name), cast(*Code_Node) ctx.header);
         return out, false, ir_get_diagnostic(*state);
       }
     }
@@ -1315,35 +1364,29 @@ ir_lower_fragment_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Fra
     });
   }
   seen_headers: [..] *Code_Procedure_Header;
-  if !ir_shared_collect_helper_functions_recursive(ctx.main_fn.header, *seen_headers, *out.helpers, ctx.main_fn.header, *state) {
-    ir_set_diagnostic(*state, "IR lowering(fragment): failed while collecting/lowering helper functions", cast(*Code_Node) ctx.main_fn.header);
+  if !ir_shared_collect_helper_functions_recursive(ctx.header, *seen_headers, *out.helpers, ctx.header, *state) {
+    ir_set_diagnostic(*state, "IR lowering(fragment): failed while collecting/lowering helper functions", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
   input_field_names: [..] string;
   output_field_names: [..] string;
   parameter_usings: [..] IR_Using_Source;
-  ir_collect_parameter_using_sources(ctx.main_fn.header, *parameter_usings);
+  ir_collect_parameter_using_sources(ctx.header, *parameter_usings);
   for out.input.fields array_add(*input_field_names, it.name);
   for out.output.fields array_add(*output_field_names, it.name);
-  if !ir_shared_lower_block(ctx.main_fn.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
-    ir_set_diagnostic(*state, "IR lowering(fragment): failed while lowering function body", cast(*Code_Node) ctx.main_fn.header.body_or_null.block);
+  if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
+    ir_set_diagnostic(*state, "IR lowering(fragment): failed while lowering function body", cast(*Code_Node) ctx.header.body_or_null.block);
     return out, false, ir_get_diagnostic(*state);
   }
 
   return out, true, ir_get_diagnostic(*state);
 }
 
-ir_lower_compute_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Compute_Shader, bool, IR_Diagnostic) {
+ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Compute_Shader, bool, IR_Diagnostic) {
   out: IR_Compute_Shader;
   state: IR_Lowering_State;
   ir_reset_diagnostic(*state);
-  assert(ctx != null);
-  if ctx.type != .Compute {
-    ir_set_diagnostic(*state, "IR lowering: context is not a compute shader");
-    return out, false, ir_get_diagnostic(*state);
-  }
-
-  header := ctx.main_fn.header;
+  header := ctx.header;
   assert(header != null);
   assert(header.body_or_null != null);
   assert(header.body_or_null.block != null);
@@ -1454,6 +1497,8 @@ ir_lower_compute_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Comp
   return out, true, ir_get_diagnostic(*state);
 }
 
+#scope_module
+
 ir_emit_struct_slang :: (sb: *String_Builder, s: *IR_Struct) {
   append(sb, tprint("struct % {\n", s.name));
   for s.fields {
@@ -1561,6 +1606,8 @@ ir_emit_compute_global_buffers :: (sb: *String_Builder, buffers: [] IR_Compute_B
   }
   append(sb, "\n");
 }
+
+#scope_export
 
 emit_ir_vertex_to_slang :: (shader: IR_Vertex_Shader) -> (string, bool) {
   if shader.entry_name.count == 0 return "", false;
@@ -1710,8 +1757,7 @@ emit_ir_compute_to_slang :: (shader: IR_Compute_Shader) -> (string, bool) {
   ir_emit_compute_global_buffers(*sb, shader.buffers);
 
   append(*sb, "[shader(\"compute\")]\n");
-  append(*sb, "void ");
-  append(*sb, shader.entry_name);
+  append(*sb, "void ", shader.entry_name);
   append(*sb, tprint("(% input) {\n", shader.input.name));
   body_lines: [..] string;
   if !ir_emit_ir_block_lines(*body_lines, *shader.body, 1) return "", false;
@@ -1719,6 +1765,8 @@ emit_ir_compute_to_slang :: (shader: IR_Compute_Shader) -> (string, bool) {
   append(*sb, "}\n");
   return builder_to_string(*sb), true;
 }
+
+#scope_file
 
 member_get_semantic :: (member: *Type_Info_Struct_Member) -> string {
   for member.notes if begins_with(it, "semantic_") {

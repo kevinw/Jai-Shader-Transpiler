@@ -42,6 +42,16 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"edge_case_21_for_descending", .Bare},
   {"edge_case_24_cast_chain", .Bare},
   {"edge_case_31_int64_arithmetic", .Bare},
+  {"edge_case_32_subscript_compound_assign", .Bare},
+  {"edge_case_33_member_chain_compound_assign", .Boids},
+  {"edge_case_34_switch_default_only", .Bare},
+  {"edge_case_35_switch_without_default", .Bare},
+  {"edge_case_36_helper_multiple_returns", .Bare},
+  {"edge_case_37_early_return_in_nested_if", .Bare},
+  {"edge_case_38_int64_bitwise_mix", .Bare},
+  {"edge_case_39_local_struct_using_update", .Bare},
+  {"edge_case_40_vector_component_swap", .Boids},
+  {"edge_case_41_matrix_reassign_chain", .Bare},
   {"edge_case_26_vector_negate", .Bare},
   {"edge_case_27_helper_nested_call", .Bare},
   {"edge_case_28_struct_constructor_from_member_expr", .Boids},
@@ -620,6 +630,115 @@ edge_case_31_int64_arithmetic :: (using in: Compute_Semantics_In, values: *u32) 
   v: int = (idx * cast(int) 3) - cast(int) 91;
   if v < 0 v = -v;
   values[idx_u] = cast(u32) (v + cast(int) 17);
+} @compute_shader
+
+edge_case_32_subscript_compound_assign :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  values[idx] += idx;
+  values[idx] ^= (idx << 1);
+  values[idx] &= 1023;
+} @compute_shader
+
+edge_case_33_member_chain_compound_assign :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  boids[idx].vel.x += 0.5;
+  boids[idx].vel.y *= 1.25;
+  boids[idx].pos.x += boids[idx].vel.x;
+  boids[idx].pos.y += boids[idx].vel.y;
+  values[idx] = cast(u32) (boids[idx].pos.x * 8.0 + boids[idx].pos.y * 4.0);
+} @compute_shader
+
+edge_case_34_switch_default_only :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v := values[idx];
+  if idx % 5 == {
+    case;
+      v += 77;
+  }
+  values[idx] = v;
+} @compute_shader
+
+edge_case_35_switch_without_default :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v := values[idx];
+  if idx % 4 == {
+    case 1; v += 11;
+    case 3; v += 33;
+  }
+  values[idx] = v;
+} @compute_shader
+
+edge_case_36_helper_pick_value :: (x: u32) -> u32 {
+  if x < 10 return x + 100;
+  if x < 20 return x + 200;
+  return x + 300;
+}
+
+edge_case_36_helper_multiple_returns :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  values[idx] = edge_case_36_helper_pick_value(idx % 30);
+} @compute_shader
+
+edge_case_37_early_return_in_nested_if :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  if (idx % 3) == 0 {
+    if (idx % 2) == 0 return;
+    values[idx] += 9;
+    return;
+  }
+  values[idx] += 4;
+} @compute_shader
+
+edge_case_38_int64_bitwise_mix :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx_u := thread_id.x;
+  x := cast(int) idx_u;
+  v: int = (x << cast(int) 2) | cast(int) 7;
+  v = v ^ cast(int) 13;
+  if (v & cast(int) 1) != 0 v += cast(int) 5;
+  values[idx_u] = cast(u32) (v & cast(int) 1023);
+} @compute_shader
+
+Edge_Local_Params :: struct {
+  a: u32;
+  b: u32;
+}
+
+edge_case_39_local_struct_using_update :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  p := Edge_Local_Params.{a = values[idx], b = idx + 3};
+  using p;
+  a += b;
+  b += 2;
+  values[idx] = a + b;
+} @compute_shader
+
+edge_case_40_vector_component_swap :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  b := boids[idx];
+  tx := b.pos.x;
+  b.pos.x = b.pos.y;
+  b.pos.y = tx;
+  boids[idx] = b;
+  values[idx] = cast(u32) (b.pos.x * 10.0 + b.pos.y * 2.0);
+} @compute_shader
+
+edge_case_41_matrix_reassign_chain :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  m := Matrix2.{1.0, 0.0, 0.0, 1.0};
+  r0 := m * Vector2.{cast(float) idx, 1.0};
+  m = Matrix2.{2.0, 1.0, 0.0, 1.0};
+  r1 := m * r0;
+  values[idx] = cast(u32) (r1.x + r1.y);
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {

@@ -1,6 +1,8 @@
 #import "Basic";
 P :: #import "Process";
 
+#scope_export
+
 Slang_Target :: enum {
   METAL;
   VULKAN_GLSL;
@@ -14,11 +16,15 @@ Slang_Stage :: enum {
 
 SLANG_TIMEOUT_MS :: 15_000;
 
+#scope_file
+
 slang_stage_name :: (stage: Slang_Stage) -> string {
   if stage == .VERTEX return "vertex";
   if stage == .FRAGMENT return "fragment";
   return "compute";
 }
+
+#scope_export
 
 ir_run_command_checked :: (description: string, args: [] string) -> bool {
   result, output, error, timeout_reached := P.run_command(..args, timeout_ms=SLANG_TIMEOUT_MS);
@@ -42,6 +48,8 @@ ir_run_command_checked :: (description: string, args: [] string) -> bool {
 
   return true;
 }
+
+#scope_export
 
 compile_slang_to_spirv :: (source_path: string, entry_name: string, stage: Slang_Stage, output_spv: string) -> bool {
   return ir_run_command_checked(
@@ -67,11 +75,15 @@ optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool {
     .["spirv-opt", "-O", input_spv, "-o", output_spv]);
 }
 
+#scope_file
+
 spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
   if stage == .VERTEX return "vert";
   if stage == .FRAGMENT return "frag";
   return "comp";
 }
+
+#scope_export
 
 emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string, use_metal_argument_buffers := false) -> bool {
   if target == .METAL {

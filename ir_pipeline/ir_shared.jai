@@ -1,4 +1,5 @@
 // Shared IR lowering/emission helpers used across shader stages.
+#scope_file
 
 ir_shared_stmt_indent :: (indent: s64) -> string {
   s := "";
@@ -148,6 +149,8 @@ ir_emit_ir_stmt_lines :: (out_lines: *[..] string, stmt: *IR_Stmt, indent: s64) 
 
   return false;
 }
+
+#scope_module
 
 ir_emit_ir_block_lines :: (out_lines: *[..] string, block: *IR_Block, indent: s64) -> bool {
   assert(out_lines != null);
