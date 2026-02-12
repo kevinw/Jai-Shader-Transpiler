@@ -207,7 +207,15 @@ ir_type_to_slang_name :: (type: *Type_Info) -> (string, bool) {
   if type.type == {
     case .INTEGER; {
       inttype := cast(*Type_Info_Integer) type;
-      return ifx inttype.signed then "int" else "uint", true;
+      if inttype.signed {
+        if type.runtime_size == 8 return "int64_t", true;
+        if type.runtime_size == 4 return "int32_t", true;
+        return "", false;
+      } else {
+        if type.runtime_size == 8 return "uint64_t", true;
+        if type.runtime_size == 4 return "uint", true;
+        return "", false;
+      }
     }
     case .FLOAT; return ifx type.runtime_size == 64 then "double" else "float", true;
     case .BOOL; return "bool", true;
@@ -1052,6 +1060,78 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
   return out, true;
 }
 
+ir_collect_compute_declared_struct_type :: (ti: *Type_Info, state: *IR_Lowering_State, loc_node: *Code_Node, out_extra_structs: *[..] IR_Struct) -> bool {
+  if !ti return true;
+
+  if ti.type == .ARRAY {
+    base_type, _ := split_array_type_and_suffix("IR lowering(compute)", ti);
+    if !base_type return false;
+    return ir_collect_compute_declared_struct_type(base_type, state, loc_node, out_extra_structs);
+  }
+
+  if ti.type == .POINTER {
+    ptr := cast(*Type_Info_Pointer) ti;
+    if !ptr.pointer_to return true;
+    return ir_collect_compute_declared_struct_type(ptr.pointer_to, state, loc_node, out_extra_structs);
+  }
+
+  if ti.type != .STRUCT return true;
+  st := cast(*Type_Info_Struct) ti;
+  struct_name := jai_to_hlsl_type_name(get_struct_type_name(st));
+  if ir_is_builtin_slang_type_name(struct_name) return true;
+  lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, ti, out_extra_structs);
+  if !lowered_ok {
+    ir_set_diagnostic(state, tprint("IR lowering(compute): could not lower declared struct type '%'", struct_name), loc_node);
+    return false;
+  }
+  ir_add_struct_unique_by_name(out_extra_structs, lowered_struct);
+  return true;
+}
+
+ir_collect_compute_declared_structs_in_node :: (node: *Code_Node, out_extra_structs: *[..] IR_Struct, state: *IR_Lowering_State) -> bool {
+  if !node return true;
+
+  if node.kind == .DECLARATION {
+    decl := cast(*Code_Declaration) node;
+    decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
+    return ir_collect_compute_declared_struct_type(decl_type, state, node, out_extra_structs);
+  }
+
+  if node.kind == .IF {
+    n := cast(*Code_If) node;
+    if !ir_collect_compute_declared_structs_in_block(n.then_block, out_extra_structs, state) return false;
+    if !ir_collect_compute_declared_structs_in_block(n.else_block, out_extra_structs, state) return false;
+    return true;
+  }
+
+  if node.kind == .FOR {
+    n := cast(*Code_For) node;
+    return ir_collect_compute_declared_structs_in_block(n.block, out_extra_structs, state);
+  }
+
+  if node.kind == .WHILE {
+    n := cast(*Code_While) node;
+    return ir_collect_compute_declared_structs_in_block(n.block, out_extra_structs, state);
+  }
+
+  if node.kind == .CASE {
+    n := cast(*Code_Case) node;
+    return ir_collect_compute_declared_structs_in_block(n.then_block, out_extra_structs, state);
+  }
+
+  if node.kind == .BLOCK {
+    return ir_collect_compute_declared_structs_in_block(cast(*Code_Block) node, out_extra_structs, state);
+  }
+
+  return true;
+}
+
+ir_collect_compute_declared_structs_in_block :: (block: *Code_Block, out_extra_structs: *[..] IR_Struct, state: *IR_Lowering_State) -> bool {
+  if !block return true;
+  for block.statements if !ir_collect_compute_declared_structs_in_node(it, out_extra_structs, state) return false;
+  return true;
+}
+
 // Shared lowering helpers moved to ir_pipeline/ir_shared.jai.
 
 ir_lower_vertex_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Vertex_Shader, bool, IR_Diagnostic) {
@@ -1340,6 +1420,27 @@ ir_lower_compute_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Comp
       }
       ir_add_struct_unique_by_name(*out.extra_structs, lowered_struct);
     }
+    for it.returns {
+      ret_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
+      if !ret_type || ret_type.type != .STRUCT continue;
+      ret_struct_type := cast(*Type_Info_Struct) ret_type;
+      ret_struct_name := jai_to_hlsl_type_name(get_struct_type_name(ret_struct_type));
+      if ir_is_builtin_slang_type_name(ret_struct_name) continue;
+      lowered_struct, lowered_ok := ir_lower_struct_from_type(ret_struct_name, ret_type);
+      if !lowered_ok {
+        ir_set_diagnostic(*state, tprint("IR lowering(compute): could not lower helper struct return type '%'", ret_struct_name), cast(*Code_Node) it);
+        return out, false, ir_get_diagnostic(*state);
+      }
+      ir_add_struct_unique_by_name(*out.extra_structs, lowered_struct);
+    }
+    if it.body_or_null && it.body_or_null.block {
+      if !ir_collect_compute_declared_structs_in_block(it.body_or_null.block, *out.extra_structs, *state) {
+        return out, false, ir_get_diagnostic(*state);
+      }
+    }
+  }
+  if !ir_collect_compute_declared_structs_in_block(header.body_or_null.block, *out.extra_structs, *state) {
+    return out, false, ir_get_diagnostic(*state);
   }
 
   input_field_names: [..] string;

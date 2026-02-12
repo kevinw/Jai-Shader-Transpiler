@@ -363,6 +363,16 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       return true;
     }
 
+    case .BLOCK; {
+      nested_block := cast(*Code_Block) stmt;
+      scoped_usings: [..] IR_Using_Source;
+      scoped_aliases: [..] IR_Decl_Alias;
+      for active_usings.* array_add(*scoped_usings, it);
+      for active_aliases.* array_add(*scoped_aliases, it);
+      if !ir_shared_lower_block(nested_block, out_block, input_fields, output_fields, allow_return_value, state, scoped_usings, scoped_aliases) return false;
+      return true;
+    }
+
     case .RETURN; {
       op := cast(*Code_Return) stmt;
       out_stmt: IR_Stmt;
