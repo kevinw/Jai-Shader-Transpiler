@@ -18,8 +18,6 @@
   plugin := get_plugin();
   plugin.workspace = w;
 
-
-
   compiler_begin_intercept(w);
   defer compiler_end_intercept(w);
   add_build_file("ir_headless_runner.jai", w);

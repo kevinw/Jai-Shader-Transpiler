@@ -4,7 +4,6 @@
 // Add the differet types of Samplers
 // Add support for out parameters
 // Add support for structs and arrays
-// Add support for Geometry and Compute Shaders
 
 // Think about:
 // Changing GLSL version without changing module code.
