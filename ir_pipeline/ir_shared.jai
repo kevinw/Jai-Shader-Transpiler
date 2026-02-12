@@ -651,9 +651,22 @@ ir_shared_lower_helper_function :: (header: *Code_Procedure_Header, state: *IR_L
     arg_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
     arg_type_name, arg_ok := ir_type_to_slang_name(arg_type);
     if !arg_ok return out, false;
+    original_type_name, original_ok := ir_type_to_original_name(arg_type);
+    if !original_ok return out, false;
+    pointee_name := "";
+    pointee_ok := false;
+    pointee_is_struct := false;
+    if arg_type && arg_type.type == .POINTER {
+      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(arg_type);
+      if !pointee_ok return out, false;
+    }
     array_add(*out.args, .{
       name = it.name,
       type_name = arg_type_name,
+      original_type_name = original_type_name,
+      is_pointer = arg_type && arg_type.type == .POINTER,
+      pointer_pointee_type_name = pointee_name,
+      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
 

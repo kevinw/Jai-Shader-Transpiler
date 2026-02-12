@@ -786,12 +786,10 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   } else if ctx.type == .Vertex {
     ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(ctx);
     if !lowered return "", "", false, lowered_diag;
-    use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
   } else if ctx.type == .Fragment {
     ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(ctx);
     if !lowered return "", "", false, lowered_diag;
-    use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
   } else {
     diag.message = "SPIR-V backend: unsupported shader stage.";
@@ -980,8 +978,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     diag.message = "SPIR-V backend: pair optimized SPIR-V validation failed.";
     return "", false, diag;
   }
-  vertex_use_argument_buffer := ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
-  fragment_use_argument_buffer := ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
+  vertex_use_argument_buffer := false;
+  fragment_use_argument_buffer := false;
   if !emit_spirv_cross_target_source(vertex_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, vertex_use_argument_buffer) {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
@@ -999,6 +997,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
 
   vertex_source = ir_metal_suffix_descriptor_set_types(vertex_source, "vert");
   fragment_source = ir_metal_suffix_descriptor_set_types(fragment_source, "frag");
+  vertex_source = ir_mark_metal_device_pointers_const(vertex_source);
+  fragment_source = ir_mark_metal_device_pointers_const(fragment_source);
 
   merged_source := tprint("%\n\n%", vertex_source, ir_strip_metal_preamble_for_pair_merge(fragment_source));
   merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));

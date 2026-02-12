@@ -2,6 +2,10 @@ IR_Field :: struct {
   name: string;
   type_name: string;
   semantic: string;
+  original_type_name: string;
+  is_pointer: bool;
+  pointer_pointee_type_name: string;
+  pointer_pointee_is_struct: bool;
 }
 
 IR_Struct :: struct {
@@ -40,6 +44,10 @@ IR_Function_Arg :: struct {
   name: string;
   type_name: string;
   is_readonly: bool;
+  original_type_name: string;
+  is_pointer: bool;
+  pointer_pointee_type_name: string;
+  pointer_pointee_is_struct: bool;
 }
 
 IR_Helper_Function :: struct {
@@ -212,6 +220,44 @@ ir_type_to_slang_name :: (type: *Type_Info) -> (string, bool) {
   return "", false;
 }
 
+ir_type_to_original_name :: (type: *Type_Info) -> (string, bool) {
+  if !type return "", false;
+
+  if type.type == .POINTER {
+    ptr := cast(*Type_Info_Pointer) type;
+    if !ptr.pointer_to return "", false;
+    pointee_name, pointee_ok := ir_type_to_original_name(ptr.pointer_to);
+    if !pointee_ok return "", false;
+    return tprint("*%", pointee_name), true;
+  }
+
+  if type.type == .ARRAY {
+    base_type, suffix := split_array_type_and_suffix("IR lowering", type);
+    if !base_type return "", false;
+    base_name, base_ok := ir_type_to_original_name(base_type);
+    if !base_ok return "", false;
+    return tprint("%%", base_name, suffix), true;
+  }
+
+  type_name, type_ok := ir_type_to_slang_name(type);
+  return type_name, type_ok;
+}
+
+ir_pointer_pointee_lowered_name :: (pointer_type: *Type_Info) -> (string, bool, bool) {
+  if !pointer_type || pointer_type.type != .POINTER return "", false, false;
+  ptr := cast(*Type_Info_Pointer) pointer_type;
+  if !ptr.pointer_to return "", false, false;
+
+  if ptr.pointer_to.type == .STRUCT {
+    st := cast(*Type_Info_Struct) ptr.pointer_to;
+    return jai_to_hlsl_type_name(get_struct_type_name(st)), true, true;
+  }
+
+  pointee_name, pointee_ok := ir_type_to_slang_name(ptr.pointer_to);
+  if !pointee_ok return "", false, false;
+  return pointee_name, true, false;
+}
+
 ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, bool) {
   out: IR_Struct;
   out.name = name;
@@ -223,10 +269,23 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
     type_name, ok := ir_type_to_slang_name(it.type);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
+    original_type_name, original_ok := ir_type_to_original_name(it.type);
+    if !original_ok return out, false;
+    pointee_name := "";
+    pointee_ok := false;
+    pointee_is_struct := false;
+    if it.type && it.type.type == .POINTER {
+      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(it.type);
+      if !pointee_ok return out, false;
+    }
     array_add(*out.fields, .{
       name = it.name,
       type_name = type_name,
       semantic = field_semantic,
+      original_type_name = original_type_name,
+      is_pointer = it.type && it.type.type == .POINTER,
+      pointer_pointee_type_name = pointee_name,
+      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
 
@@ -285,10 +344,23 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
     type_name, ok := ir_lower_struct_member_type_name(it.type, extra_structs);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
+    original_type_name, original_ok := ir_type_to_original_name(it.type);
+    if !original_ok return out, false;
+    pointee_name := "";
+    pointee_ok := false;
+    pointee_is_struct := false;
+    if it.type && it.type.type == .POINTER {
+      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(it.type);
+      if !pointee_ok return out, false;
+    }
     array_add(*out.fields, .{
       name = it.name,
       type_name = type_name,
       semantic = field_semantic,
+      original_type_name = original_type_name,
+      is_pointer = it.type && it.type.type == .POINTER,
+      pointer_pointee_type_name = pointee_name,
+      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
 
@@ -967,10 +1039,13 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
     if !sem_ok return out, false;
     type_name, type_ok := ir_type_to_slang_name(it.type);
     if !type_ok return out, false;
+    original_type_name, original_ok := ir_type_to_original_name(it.type);
+    if !original_ok return out, false;
     array_add(*out.fields, .{
       name = it.name,
       type_name = type_name,
       semantic = semantic,
+      original_type_name = original_type_name,
     });
   }
 
@@ -1031,10 +1106,29 @@ ir_lower_vertex_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Verte
       ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported extra argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
       return out, false, ir_get_diagnostic(*state);
     }
+    original_type_name, original_ok := ir_type_to_original_name(arg_type);
+    if !original_ok {
+      ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported original type for argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+      return out, false, ir_get_diagnostic(*state);
+    }
+    pointee_name := "";
+    pointee_ok := false;
+    pointee_is_struct := false;
+    if arg_type && arg_type.type == .POINTER {
+      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(arg_type);
+      if !pointee_ok {
+        ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported pointer pointee type for argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+        return out, false, ir_get_diagnostic(*state);
+      }
+    }
     array_add(*out.args, .{
       name = arg.name,
       type_name = arg_type_name,
       is_readonly = true,
+      original_type_name = original_type_name,
+      is_pointer = arg_type && arg_type.type == .POINTER,
+      pointer_pointee_type_name = pointee_name,
+      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
   seen_headers: [..] *Code_Procedure_Header;
@@ -1115,10 +1209,29 @@ ir_lower_fragment_from_shader_context :: (ctx: *Shader_Write_Context) -> (IR_Fra
       ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported extra argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
       return out, false, ir_get_diagnostic(*state);
     }
+    original_type_name, original_ok := ir_type_to_original_name(arg_type);
+    if !original_ok {
+      ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported original type for argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+      return out, false, ir_get_diagnostic(*state);
+    }
+    pointee_name := "";
+    pointee_ok := false;
+    pointee_is_struct := false;
+    if arg_type && arg_type.type == .POINTER {
+      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(arg_type);
+      if !pointee_ok {
+        ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported pointer pointee type for argument '%'", arg.name), cast(*Code_Node) ctx.main_fn.header);
+        return out, false, ir_get_diagnostic(*state);
+      }
+    }
     array_add(*out.args, .{
       name = arg.name,
       type_name = arg_type_name,
       is_readonly = true,
+      original_type_name = original_type_name,
+      is_pointer = arg_type && arg_type.type == .POINTER,
+      pointer_pointee_type_name = pointee_name,
+      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
   seen_headers: [..] *Code_Procedure_Header;

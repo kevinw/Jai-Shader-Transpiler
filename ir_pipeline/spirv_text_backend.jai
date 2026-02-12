@@ -244,6 +244,18 @@ IR_SPV_Gen_Debug_Member_Name :: struct {
   name: string;
 }
 
+IR_SPV_PS_Struct_Info :: struct {
+  name: string;
+  prefix: string;
+  type_id: s64;
+  ptr_type_id: s64;
+}
+
+IR_SPV_PS_Ptr_To_Ptr :: struct {
+  ptr_type_id: s64;
+  ptr_to_ptr_type_id: s64;
+}
+
 IR_SPV_Gen_State :: struct {
   next_id: s64;
   locals: [..] IR_SPV_Gen_Local;
@@ -268,6 +280,7 @@ IR_SPV_Gen_State :: struct {
   output_struct_type_name: string;
   input_vars: [..] IR_SPV_Gen_Interface_Var;
   output_vars: [..] IR_SPV_Gen_Interface_Var;
+  use_physical_storage: bool;
 
   id_extinst: s64;
   id_void: s64;
@@ -421,6 +434,56 @@ find_local_struct_field :: (s: *IR_SPV_Gen_Local_Struct, name: string) -> *IR_SP
 find_interface_var :: (arr: *[]IR_SPV_Gen_Interface_Var, name: string) -> *IR_SPV_Gen_Interface_Var { return find_by_name(arr, name); }
 find_uniform_field :: (uniform: *IR_SPV_Gen_Uniform_Block, name: string) -> *IR_SPV_Gen_Uniform_Field { return find_by_name(*uniform.fields, name); }
 
+find_ps_struct_info :: (arr: *[]IR_SPV_PS_Struct_Info, name: string) -> *IR_SPV_PS_Struct_Info { return find_by_name(arr, name); }
+
+find_field_index_by_name :: (st: *IR_Struct, field_name: string) -> s64 {
+  assert(st != null);
+  for st.fields if it.name == field_name return it_index;
+  return -1;
+}
+
+split_dotted_path :: (path: string, out_segments: *[..] string) {
+  assert(out_segments != null);
+  start: s64 = 0;
+  i: s64 = 0;
+  while i <= path.count {
+    at_end := i == path.count;
+    if !at_end && path[i] != #char "." {
+      i += 1;
+      continue;
+    }
+    seg_count := i - start;
+    seg := slice(path, start, seg_count);
+    if seg.count > 0 array_add(out_segments, seg);
+    start = i + 1;
+    i += 1;
+  }
+}
+
+struct_has_pointer_fields_recursive :: (extra_structs: [] IR_Struct, struct_name: string, depth := 0) -> bool {
+  if depth > 24 return false;
+  st: *IR_Struct = null;
+  for *extra_structs {
+    candidate := it;
+    if candidate.name == struct_name {
+      st = candidate;
+      break;
+    }
+  }
+  if !st return false;
+  for st.fields {
+    field := it;
+    if field.is_pointer return true;
+    for *extra_structs {
+      nested := it;
+      if nested.name != field.type_name continue;
+      if struct_has_pointer_fields_recursive(extra_structs, field.type_name, depth + 1) return true;
+      break;
+    }
+  }
+  return false;
+}
+
 is_uint_type_name :: (name: string) -> bool {
   return name == "uint" || name == "u32";
 }
@@ -456,6 +519,41 @@ parse_fixed_array_type_name :: (type_name: string) -> (element_type_name: string
   return elem, count_val, true;
 }
 
+struct_has_pointer_fields :: (st: *IR_Struct) -> bool {
+  assert(st != null);
+  for st.fields if it.is_pointer return true;
+  return false;
+}
+
+resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> (string, bool) {
+  assert(s != null);
+  assert(field != null);
+
+  if field.is_pointer {
+    pointee_name := field.pointer_pointee_type_name;
+    if pointee_name.count == 0 return "", false;
+    if field.pointer_pointee_is_struct {
+      nested_struct := find_struct(s, pointee_name);
+      if nested_struct && struct_has_pointer_fields(nested_struct) return "", false;
+    }
+    return pointee_name, true;
+  }
+
+  elem_type_name, is_resource := parse_structured_buffer_element_type(field.type_name);
+  return elem_type_name, is_resource;
+}
+
+resource_walk_nested_struct :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> *IR_Struct {
+  assert(s != null);
+  assert(field != null);
+
+  if field.is_pointer && field.pointer_pointee_is_struct && field.pointer_pointee_type_name.count != 0 {
+    nested := find_struct(s, field.pointer_pointee_type_name);
+    if nested && struct_has_pointer_fields(nested) return nested;
+  }
+  return find_struct(s, field.type_name);
+}
+
 collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_prefix: string, out_buffers: *[..] IR_Compute_Buffer) -> (has_resource: bool, has_non_resource: bool) {
   assert(s != null);
   assert(st != null);
@@ -464,7 +562,7 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
   has_non_resource := false;
   for st.fields {
     field_path := ifx name_prefix.count == 0 then it.name else tprint("%.%", name_prefix, it.name);
-    elem_type_name, is_resource_field := parse_structured_buffer_element_type(it.type_name);
+    elem_type_name, is_resource_field := resource_element_type_from_field(s, *it);
     if is_resource_field {
       has_resource = true;
       if out_buffers {
@@ -476,7 +574,7 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
       continue;
     }
 
-    nested_struct := find_struct(s, it.type_name);
+    nested_struct := resource_walk_nested_struct(s, *it);
     if nested_struct {
       nested_has_resource, nested_has_non_resource := collect_struct_resource_fields(s, nested_struct, field_path, out_buffers);
       if nested_has_resource has_resource = true;
@@ -544,13 +642,14 @@ get_current_break_target :: (s: *IR_SPV_Gen_State) -> (s64, bool) {
 // Type Mapping / Layout
 // -----------------------------------------------------------------------------
 
-init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: u32) -> (ok: bool, diag: IR_Diagnostic) {
+init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: u32, use_physical_storage := false) -> (ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return false, { message = sprint(msg, ..args) }; }
 
   diag: IR_Diagnostic;
   assert(s != null);
   s.next_id = 1;
   s.bound_value = bound_value;
+  s.use_physical_storage = use_physical_storage;
 
   s.id_extinst = new_id(s);
   s.id_void = new_id(s);
@@ -768,6 +867,28 @@ byte_size_of_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
   if kind == .FLOAT2 return 8;
   if kind == .FLOAT4 return 16;
   return 0;
+}
+
+physical_aligned_suffix :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> string {
+  assert(s != null);
+  if !s.use_physical_storage return "";
+  align := byte_size_of_kind(kind);
+  if align <= 0 align = 4;
+  return tprint(" Aligned %", align);
+}
+
+emit_load :: (s: *IR_SPV_Gen_State, result_id: s64, type_id: s64, ptr_id: s64, kind: IR_SPV_Gen_Type, needs_physical_align := false) {
+  assert(s != null);
+  suffix := "";
+  if needs_physical_align suffix = physical_aligned_suffix(s, kind);
+  add_op(s, tprint("         % = OpLoad % %%", id_text(result_id), id_text(type_id), id_text(ptr_id), suffix));
+}
+
+emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, kind: IR_SPV_Gen_Type, needs_physical_align := false) {
+  assert(s != null);
+  suffix := "";
+  if needs_physical_align suffix = physical_aligned_suffix(s, kind);
+  add_op(s, tprint("               OpStore % %%", id_text(ptr_id), id_text(value_id), suffix));
 }
 
 align_up :: (value: s64, alignment: s64) -> s64 {
@@ -1451,10 +1572,7 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
           }
           value_id := new_id(s);
           type_id := type_id_from_kind(s, src_type);
-          add_op(s, tprint("         % = OpLoad % %",
-                           id_text(value_id),
-                           id_text(type_id),
-                           id_text(src_ptr)));
+          emit_load(s, value_id, type_id, src_ptr, src_type, needs_physical_align=true);
           add_op(s, tprint("               OpStore % %",
                            id_text(it.ptr_id),
                            id_text(value_id)));
@@ -1656,10 +1774,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           value_id := new_id(s);
           value_type_id := type_id_from_kind(s, field_type);
           if value_type_id == 0 return_err("SPIR-V backend: unsupported loaded field type for '%'.", path);
-          add_op(s, tprint("         % = OpLoad % %",
-                           id_text(value_id),
-                           id_text(value_type_id),
-                           id_text(field_ptr)));
+          emit_load(s, value_id, value_type_id, field_ptr, field_type, needs_physical_align=true);
           return value_id, field_type, true, diag;
         }
         // Non-buffer subscripts (for example uniform-array or local-array indexing) should
@@ -1827,10 +1942,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         value_id := new_id(s);
         value_type_id := type_id_from_kind(s, buffer.element_kind);
         assert(value_type_id != 0);
-        add_op(s, tprint("         % = OpLoad % %",
-                                    id_text(value_id),
-                                    id_text(value_type_id),
-                                    id_text(value_ptr_id)));
+        emit_load(s, value_id, value_type_id, value_ptr_id, buffer.element_kind, needs_physical_align=true);
         return value_id, buffer.element_kind, true, diag;
       }
       return_err("SPIR-V backend: subscript value access for struct buffer '%' is unsupported; access a field instead.", buffer.name);
@@ -2373,6 +2485,23 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
   return_err("SPIR-V backend: unsupported lvalue expression kind %.", expr.kind);
 }
 
+lvalue_hits_storage_buffer :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> bool {
+  assert(s != null);
+  if !expr return false;
+  if expr.kind == .SUBSCRIPT {
+    if expr.left && expr.left.kind == .IDENT {
+      if find_local_array(s, expr.left.text) return false;
+      return find_buffer(s, expr.left.text) != null;
+    }
+    if expr.left && expr.left.kind == .MEMBER {
+      return find_buffer(s, expr_text(expr.left)) != null;
+    }
+    return false;
+  }
+  if expr.kind == .MEMBER return lvalue_hits_storage_buffer(s, expr.left);
+  return false;
+}
+
 // -----------------------------------------------------------------------------
 // Statement Emission
 // -----------------------------------------------------------------------------
@@ -2552,10 +2681,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             }
             src_value := new_id(s);
             src_type_id := type_id_from_kind(s, src_type);
-            add_op(s, tprint("         % = OpLoad % %",
-                             id_text(src_value),
-                             id_text(src_type_id),
-                             id_text(src_ptr)));
+            emit_load(s, src_value, src_type_id, src_ptr, src_type, needs_physical_align=true);
             add_op(s, tprint("               OpStore % %",
                              id_text(dst_field.ptr_id),
                              id_text(src_value)));
@@ -2631,9 +2757,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
                              id_text(value_id),
                              id_text(value_type_id),
                              id_text(src_field.ptr_id)));
-            add_op(s, tprint("               OpStore % %",
-                             id_text(dst_ptr),
-                             id_text(value_id)));
+            emit_store(s, dst_ptr, value_id, it.type, needs_physical_align=true);
           }
           return true, false, diag;
         }
@@ -2641,6 +2765,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 
       ptr_id, lhs_type, lhs_ok, lhs_diag := emit_lvalue_ptr(s, stmt.binary_left);
       if !lhs_ok return false, false, lhs_diag;
+      lhs_is_storage_buffer := lvalue_hits_storage_buffer(s, stmt.binary_left);
 
       if op == "=" {
         rhs_id, rhs_type, rhs_ok, rhs_diag := emit_expr(s, stmt.binary_right);
@@ -2648,9 +2773,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if lhs_type != rhs_type {
           return_err("SPIR-V backend: assignment type mismatch.");
         }
-        add_op(s, tprint("               OpStore % %",
-                                    id_text(ptr_id),
-                                    id_text(rhs_id)));
+        emit_store(s, ptr_id, rhs_id, lhs_type, needs_physical_align=lhs_is_storage_buffer);
         return true, false, diag;
       }
 
@@ -2664,10 +2787,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 
         lhs_value := new_id(s);
         lhs_type_id := type_id_from_kind(s, lhs_type);
-        add_op(s, tprint("         % = OpLoad % %",
-                                    id_text(lhs_value),
-                                    id_text(lhs_type_id),
-                                    id_text(ptr_id)));
+        emit_load(s, lhs_value, lhs_type_id, ptr_id, lhs_type, needs_physical_align=lhs_is_storage_buffer);
         rhs_id, rhs_type, rhs_ok, rhs_diag := emit_expr(s, stmt.binary_right);
         if !rhs_ok return false, false, rhs_diag;
 
@@ -2703,9 +2823,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         }
         if !result_ok return false, false, result_diag;
         if result_type != lhs_type return_err("SPIR-V backend: float compound assignment produced wrong type.");
-        add_op(s, tprint("               OpStore % %",
-                                    id_text(ptr_id),
-                                    id_text(result_id)));
+        emit_store(s, ptr_id, result_id, lhs_type, needs_physical_align=lhs_is_storage_buffer);
         return true, false, diag;
       }
 
@@ -2726,10 +2844,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       }
 
       lhs_value := new_id(s);
-      add_op(s, tprint("         % = OpLoad % %",
-                                  id_text(lhs_value),
-                                  id_text(s.id_uint),
-                                  id_text(ptr_id)));
+      emit_load(s, lhs_value, s.id_uint, ptr_id, .UINT, needs_physical_align=lhs_is_storage_buffer);
       rhs_id, rhs_type, rhs_ok, rhs_diag := emit_expr(s, stmt.binary_right);
       if !rhs_ok return false, false, rhs_diag;
       if rhs_type != .UINT {
@@ -2741,9 +2856,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return_err("SPIR-V backend: compound assignment operator must produce uint.");
       }
 
-      add_op(s, tprint("               OpStore % %",
-                                  id_text(ptr_id),
-                                  id_text(result_id)));
+      emit_store(s, ptr_id, result_id, .UINT, needs_physical_align=lhs_is_storage_buffer);
       return true, false, diag;
     }
 
@@ -3103,10 +3216,435 @@ parse_parameter_block_struct_name :: (type_name: string) -> (string, bool) {
   return out, true;
 }
 
+find_pointer_root_arg :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct) -> (*IR_Function_Arg, bool) {
+  candidate: *IR_Function_Arg = null;
+  for *args {
+    if !it.is_pointer continue;
+    if !it.pointer_pointee_is_struct continue;
+    if it.pointer_pointee_type_name.count == 0 continue;
+    if !struct_has_pointer_fields_recursive(extra_structs, it.pointer_pointee_type_name) continue;
+    if candidate return null, false;
+    candidate = it;
+  }
+  if !candidate return null, false;
+  return candidate, true;
+}
+
+ps_assign_struct_info :: (s: *IR_SPV_Gen_State, infos: *[..] IR_SPV_PS_Struct_Info, struct_name: string, prefix: string, depth := 0) -> bool {
+  assert(s != null);
+  assert(infos != null);
+  if depth > 24 return false;
+  existing := find_ps_struct_info(infos, struct_name);
+  if existing {
+    return existing.prefix == prefix;
+  }
+  st := find_struct(s, struct_name);
+  if !st return false;
+  array_add(infos, .{
+    name = struct_name,
+    prefix = prefix,
+    type_id = new_id(s),
+    ptr_type_id = new_id(s),
+  });
+  for st.fields {
+    field := it;
+    if !field.is_pointer continue;
+    if !field.pointer_pointee_is_struct continue;
+    if field.pointer_pointee_type_name.count == 0 continue;
+    if !struct_has_pointer_fields_recursive(s.extra_structs, field.pointer_pointee_type_name, depth + 1) continue;
+    next_prefix := tprint("%.%", prefix, field.name);
+    if !ps_assign_struct_info(s, infos, field.pointer_pointee_type_name, next_prefix, depth + 1) return false;
+  }
+  return true;
+}
+
+ps_get_ptr_to_ptr_type :: (s: *IR_SPV_Gen_State, ptr_to_ptr_types: *[..] IR_SPV_PS_Ptr_To_Ptr, ptr_type_id: s64) -> s64 {
+  assert(s != null);
+  assert(ptr_to_ptr_types != null);
+  for ptr_to_ptr_types.* if it.ptr_type_id == ptr_type_id return it.ptr_to_ptr_type_id;
+  new_ptr := new_id(s);
+  array_add(ptr_to_ptr_types, .{
+    ptr_type_id = ptr_type_id,
+    ptr_to_ptr_type_id = new_ptr,
+  });
+  return new_ptr;
+}
+
+emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
+                                       source_name: string,
+                                       input: IR_Struct,
+                                       output: IR_Struct,
+                                       args: [] IR_Function_Arg,
+                                       body: *IR_Block,
+                                       helpers: [] IR_Helper_Function,
+                                       extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return "", false, { message = sprint(msg, ..args) }; }
+
+  diag: IR_Diagnostic;
+  if !body return_err("SPIR-V backend: graphics shader '%' has no body.", source_name);
+
+  root_arg, has_root := find_pointer_root_arg(args, extra_structs);
+  if !has_root || !root_arg return_err("SPIR-V backend: physical-pointer graphics path requires one pointer root argument.");
+  if args.count != 1 return_err("SPIR-V backend: physical-pointer graphics path currently supports exactly one shader argument.");
+
+  state: IR_SPV_Gen_State;
+  state.stage = stage;
+  stage_prefix := ifx stage == .VERTEX then "vert" else ifx stage == .FRAGMENT then "frag" else "compute";
+  state.debug_type_prefix = tprint("%_%", stage_prefix, source_name);
+  state.helpers = helpers;
+  for extra_structs array_add(*state.extra_structs, it);
+  array_add(*state.extra_structs, input);
+  array_add(*state.extra_structs, output);
+  state.output_struct_type_name = output.name;
+
+  root_struct := find_struct(*state, root_arg.pointer_pointee_type_name);
+  if !root_struct return_err("SPIR-V backend: missing root pointer struct '%'.", root_arg.pointer_pointee_type_name);
+
+  graphics_buffers: [..] IR_Compute_Buffer;
+  saw_resource, saw_non_resource := collect_struct_resource_fields(*state, root_struct, root_arg.name, *graphics_buffers);
+  if !saw_resource return_err("SPIR-V backend: pointer root '%' has no resource fields.", root_arg.name);
+  if saw_non_resource return_err("SPIR-V backend: pointer root '%' currently requires pointer-only members.", root_arg.name);
+
+  init_ok, init_diag := init_base(*state, graphics_buffers, 1, use_physical_storage=true);
+  if !init_ok return "", false, init_diag;
+
+  for input.fields {
+    field_type := expr_type_from_decl(it.type_name);
+    if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported input field type '%' on '%'.", it.type_name, it.name);
+    ptr_type_id := input_ptr_type_id_from_kind(*state, field_type);
+    if ptr_type_id == 0 return_err("SPIR-V backend: missing input pointer type for field '%'.", it.name);
+    var_id := new_id(*state);
+    builtin := interface_builtin_from_semantic(stage, it.name, it.semantic);
+    array_add(*state.input_vars, .{
+      name = it.name,
+      type = field_type,
+      ptr_id = ptr_type_id,
+      var_id = var_id,
+      location = -1,
+      builtin = builtin,
+    });
+  }
+
+  for output.fields {
+    field_type := expr_type_from_decl(it.type_name);
+    if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported output field type '%' on '%'.", it.type_name, it.name);
+    ptr_type_id := output_ptr_type_id_from_kind(*state, field_type);
+    if ptr_type_id == 0 return_err("SPIR-V backend: missing output pointer type for field '%'.", it.name);
+    var_id := new_id(*state);
+    builtin := interface_builtin_from_semantic(stage, it.name, it.semantic);
+    if stage == .FRAGMENT && (it.name == "out_color" || it.name == "color") builtin = .NONE;
+    array_add(*state.output_vars, .{
+      name = it.name,
+      type = field_type,
+      ptr_id = ptr_type_id,
+      var_id = var_id,
+      location = -1,
+      builtin = builtin,
+    });
+  }
+
+  ps_infos: [..] IR_SPV_PS_Struct_Info;
+  if !ps_assign_struct_info(*state, *ps_infos, root_arg.pointer_pointee_type_name, root_arg.name) {
+    return_err("SPIR-V backend: failed building pointer-struct type graph for '%'.", root_arg.pointer_pointee_type_name);
+  }
+
+  ptr_to_ptr_types: [..] IR_SPV_PS_Ptr_To_Ptr;
+  ptr_to_ptr_storage_types: [..] IR_SPV_PS_Ptr_To_Ptr;
+  root_var_ptr_type_id := new_id(*state);
+  root_var_id := new_id(*state);
+  root_info := find_ps_struct_info(*ps_infos, root_arg.pointer_pointee_type_name);
+  if !root_info return_err("SPIR-V backend: missing pointer root type info for '%'.", root_arg.pointer_pointee_type_name);
+
+  for *state.buffers {
+    segments: [..] string;
+    split_dotted_path(it.name, *segments);
+    if segments.count < 2 return_err("SPIR-V backend: invalid resource path '%'.", it.name);
+    if segments[0] != root_arg.name return_err("SPIR-V backend: resource path '%' does not match root arg '%'.", it.name, root_arg.name);
+    current_ptr := root_var_id;
+    current_ptr_from_storage := true;
+
+    current_struct_name := root_arg.pointer_pointee_type_name;
+    consumed_path := root_arg.name;
+    for i: 1..segments.count-1 {
+      current_struct := find_struct(*state, current_struct_name);
+      if !current_struct return_err("SPIR-V backend: missing struct '%' while resolving '%'.", current_struct_name, it.name);
+      field_index := find_field_index_by_name(current_struct, segments[i]);
+      if field_index < 0 return_err("SPIR-V backend: field '%' not found in '%' while resolving '%' (segment %).", segments[i], current_struct_name, it.name, i);
+      field := current_struct.fields[field_index];
+      if !field.is_pointer return_err("SPIR-V backend: physical-pointer path expects pointer field at '%.%'.", current_struct_name, segments[i]);
+
+      next_ptr_type_id: s64 = 0;
+      next_struct_name := "";
+      consumed_path = tprint("%.%", consumed_path, segments[i]);
+      if field.pointer_pointee_is_struct && field.pointer_pointee_type_name.count != 0 &&
+         struct_has_pointer_fields_recursive(state.extra_structs, field.pointer_pointee_type_name) {
+        nested_info := find_ps_struct_info(*ps_infos, field.pointer_pointee_type_name);
+        if !nested_info return_err("SPIR-V backend: missing pointer type info for nested struct '%'.", field.pointer_pointee_type_name);
+        next_ptr_type_id = nested_info.ptr_type_id;
+        next_struct_name = field.pointer_pointee_type_name;
+      } else {
+        if i != segments.count-1 return_err("SPIR-V backend: non-struct pointer field reached before leaf at '%'.", consumed_path);
+        if consumed_path != it.name return_err("SPIR-V backend: pointer path mismatch '%' vs '%'.", consumed_path, it.name);
+        next_ptr_type_id = it.ptr_wrapper_type_id;
+      }
+
+      ptr_to_next_ptr: s64;
+      if current_ptr_from_storage {
+        ptr_to_next_ptr = ps_get_ptr_to_ptr_type(*state, *ptr_to_ptr_storage_types, next_ptr_type_id);
+      } else {
+        ptr_to_next_ptr = ps_get_ptr_to_ptr_type(*state, *ptr_to_ptr_types, next_ptr_type_id);
+      }
+      field_index_id := get_i32_const(*state, cast(s32) field_index);
+      next_ptr_access := new_id(*state);
+      add_op(*state, tprint("         % = OpAccessChain % % %",
+                            id_text(next_ptr_access),
+                            id_text(ptr_to_next_ptr),
+                            id_text(current_ptr),
+                            id_text(field_index_id)));
+      next_ptr_loaded := new_id(*state);
+      if current_ptr_from_storage {
+        add_op(*state, tprint("         % = OpLoad % %",
+                              id_text(next_ptr_loaded),
+                              id_text(next_ptr_type_id),
+                              id_text(next_ptr_access)));
+      } else {
+        add_op(*state, tprint("         % = OpLoad % % Aligned 8",
+                              id_text(next_ptr_loaded),
+                              id_text(next_ptr_type_id),
+                              id_text(next_ptr_access)));
+      }
+      current_ptr = next_ptr_loaded;
+      current_ptr_from_storage = false;
+      if next_struct_name.count != 0 current_struct_name = next_struct_name;
+    }
+
+    it.var_id = current_ptr;
+  }
+
+  entry_label := new_id(*state);
+  input_local, input_ok, input_diag := alloc_local_struct(*state, "input", input.name);
+  if !input_ok return "", false, input_diag;
+  output_local, output_ok, output_diag := alloc_local_struct(*state, "o", output.name);
+  if !output_ok return "", false, output_diag;
+
+  for state.input_vars {
+    dst := find_local_struct_field(input_local, it.name);
+    if !dst return_err("SPIR-V backend: input local struct missing field '%'.", it.name);
+    value_id := new_id(*state);
+    type_id := type_id_from_kind(*state, it.type);
+    add_op(*state, tprint("         % = OpLoad % %", id_text(value_id), id_text(type_id), id_text(it.var_id)));
+    add_op(*state, tprint("               OpStore % %", id_text(dst.ptr_id), id_text(value_id)));
+  }
+
+  block_ok, block_terminated, block_diag := emit_stmt_block(*state, body);
+  if !block_ok return "", false, block_diag;
+  if !block_terminated {
+    ret_ok, ret_diag := emit_output_return_from_struct(*state, output_local);
+    if !ret_ok return "", false, ret_diag;
+  }
+
+  entry_model := ifx stage == .VERTEX then "Vertex" else "Fragment";
+  entry_name := ifx stage == .VERTEX then "VertexMain" else "FragmentMain";
+  storage_class := "PhysicalStorageBuffer";
+
+  sb: String_Builder;
+  append(*sb, "; SPIR-V\n");
+  append(*sb, "; Version: 1.5\n");
+  append(*sb, "; Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1\n");
+  append(*sb, tprint("; Bound: %\n", state.next_id));
+  append(*sb, "; Schema: 0\n");
+  append(*sb, "               OpCapability Shader\n");
+  append(*sb, "               OpCapability PhysicalStorageBufferAddresses\n");
+  append(*sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", id_text(state.id_extinst)));
+  append(*sb, "               OpMemoryModel PhysicalStorageBuffer64 GLSL450\n");
+  entry_point_sb: String_Builder;
+  append(*entry_point_sb, tprint("               OpEntryPoint % % \"main\"", entry_model, id_text(state.id_main)));
+  for state.input_vars append(*entry_point_sb, " ", id_text(it.var_id));
+  for state.output_vars append(*entry_point_sb, " ", id_text(it.var_id));
+  append(*entry_point_sb, " ", id_text(root_var_id));
+  append(*entry_point_sb, "\n");
+  append(*sb, builder_to_string(*entry_point_sb));
+  if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
+  append(*sb, "               OpSource Unknown 100000\n");
+  append(*sb, tprint("               OpName % \"%\"\n", id_text(state.id_main), entry_name));
+  append(*sb, tprint("               OpName % \"%\"\n", id_text(root_var_id), root_arg.name));
+  for state.input_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
+  for state.output_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
+  for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
+  for ps_infos {
+    ps_info := it;
+    append(*sb, tprint("               OpName % \"%\"\n", id_text(ps_info.type_id), debug_type_name(*state, ps_info.name)));
+    st := find_struct(*state, ps_info.name);
+    if st {
+      for st.fields {
+        field := it;
+        append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(ps_info.type_id), it_index, field.name));
+      }
+    }
+  }
+  for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
+  for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
+  append_interface_var_decorations(*sb, state.input_vars);
+  append_interface_var_decorations(*sb, state.output_vars);
+  append(*sb, tprint("               OpDecorate % Binding 0\n", id_text(root_var_id)));
+  append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(root_var_id)));
+  append(*sb, tprint("               OpDecorate % ArrayStride 4\n", id_text(state.id_runtimearr_uint)));
+  append(*sb, tprint("               OpDecorate % Block\n", id_text(state.id_buffer_struct)));
+  append(*sb, tprint("               OpMemberDecorate % 0 Offset 0\n", id_text(state.id_buffer_struct)));
+  for state.buffers {
+    buffer := it;
+    if buffer.element_kind == .UINT continue;
+    append(*sb, tprint("               OpDecorate % ArrayStride %\n", id_text(buffer.runtimearr_type_id), buffer.array_stride));
+    if buffer.element_kind == .STRUCT {
+      for buffer.fields append(*sb, tprint("               OpMemberDecorate % % Offset %\n", id_text(buffer.element_type_id), it.index, it.offset));
+    }
+    append(*sb, tprint("               OpDecorate % Block\n", id_text(buffer.wrapper_struct_type_id)));
+    append(*sb, tprint("               OpMemberDecorate % 0 Offset 0\n", id_text(buffer.wrapper_struct_type_id)));
+  }
+  for ps_infos {
+    ps_info := it;
+    append(*sb, tprint("               OpDecorate % Block\n", id_text(ps_info.type_id)));
+    st := find_struct(*state, ps_info.name);
+    if !st continue;
+    offset: s64 = 0;
+    for st.fields {
+      field := it;
+      append(*sb, tprint("               OpMemberDecorate % % NonWritable\n", id_text(ps_info.type_id), it_index));
+      append(*sb, tprint("               OpMemberDecorate % % Offset %\n", id_text(ps_info.type_id), it_index, offset));
+      if field.is_pointer offset += 8;
+      else {
+        kind := expr_type_from_decl(field.type_name);
+        size := byte_size_of_kind(kind);
+        if size <= 0 size = 4;
+        offset += size;
+      }
+    }
+  }
+
+  append(*sb, tprint("       % = OpTypeVoid\n", id_text(state.id_void)));
+  append(*sb, tprint("          % = OpTypeFunction %\n", id_text(state.id_fn_void), id_text(state.id_void)));
+  append(*sb, tprint("       % = OpTypeInt 32 0\n", id_text(state.id_uint)));
+  append(*sb, tprint("      % = OpTypeFloat 32\n", id_text(state.id_float)));
+  append(*sb, tprint("     % = OpTypeVector % 2\n", id_text(state.id_float2), id_text(state.id_float)));
+  append(*sb, tprint("     % = OpTypeVector % 4\n", id_text(state.id_float4), id_text(state.id_float)));
+  append(*sb, tprint("   % = OpTypeMatrix % 2\n", id_text(state.id_float2x2), id_text(state.id_float2)));
+  append(*sb, tprint("       % = OpTypeBool\n", id_text(state.id_bool)));
+  append(*sb, tprint("       % = OpConstantTrue %\n", id_text(state.id_bool_true), id_text(state.id_bool)));
+  append(*sb, tprint("       % = OpConstantFalse %\n", id_text(state.id_bool_false), id_text(state.id_bool)));
+  append(*sb, tprint("     % = OpTypeVector % 3\n", id_text(state.id_v3uint), id_text(state.id_uint)));
+  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_v3uint), id_text(state.id_v3uint)));
+  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_uint), id_text(state.id_uint)));
+  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float), id_text(state.id_float)));
+  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float2), id_text(state.id_float2)));
+  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float4), id_text(state.id_float4)));
+  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float), id_text(state.id_float)));
+  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float2), id_text(state.id_float2)));
+  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float4), id_text(state.id_float4)));
+  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float), id_text(state.id_float)));
+  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float2), id_text(state.id_float2)));
+  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float4), id_text(state.id_float4)));
+  append(*sb, tprint("        % = OpTypeInt 32 1\n", id_text(state.id_int)));
+  append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(state.id_runtimearr_uint), id_text(state.id_uint)));
+  append(*sb, tprint("% = OpTypeStruct %\n", id_text(state.id_buffer_struct), id_text(state.id_runtimearr_uint)));
+  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_buffer_struct), storage_class, id_text(state.id_buffer_struct)));
+  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_uint), storage_class, id_text(state.id_uint)));
+  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float), storage_class, id_text(state.id_float)));
+  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float2), storage_class, id_text(state.id_float2)));
+  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint), id_text(state.id_uint)));
+  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float), id_text(state.id_float)));
+  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2), id_text(state.id_float2)));
+  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float4), id_text(state.id_float4)));
+  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2x2), id_text(state.id_float2x2)));
+  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_bool), id_text(state.id_bool)));
+  for state.const_u32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint), it.value));
+  for state.const_i32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_int), it.value));
+  for state.const_f32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_float), it.text));
+  for ps_infos append(*sb, tprint("               OpTypeForwardPointer % %\n", id_text(it.ptr_type_id), storage_class));
+  for state.buffers append(*sb, tprint("               OpTypeForwardPointer % %\n", id_text(it.ptr_wrapper_type_id), storage_class));
+  for ps_infos {
+    ps_info := it;
+    st := find_struct(*state, ps_info.name);
+    if !st continue;
+    type_line: String_Builder;
+    append(*type_line, tprint("% = OpTypeStruct", id_text(ps_info.type_id)));
+    for st.fields {
+      field := it;
+      member_type_id: s64 = 0;
+      if field.is_pointer {
+        if field.pointer_pointee_is_struct && field.pointer_pointee_type_name.count != 0 &&
+           struct_has_pointer_fields_recursive(state.extra_structs, field.pointer_pointee_type_name) {
+          nested_info := find_ps_struct_info(*ps_infos, field.pointer_pointee_type_name);
+          if !nested_info return_err("SPIR-V backend: missing nested pointer type info for '%'.", field.pointer_pointee_type_name);
+          member_type_id = nested_info.ptr_type_id;
+        } else {
+          leaf_path := tprint("%.%", ps_info.prefix, field.name);
+          leaf_buffer := find_buffer(*state, leaf_path);
+          if !leaf_buffer return_err("SPIR-V backend: missing leaf buffer for path '%'.", leaf_path);
+          member_type_id = leaf_buffer.ptr_wrapper_type_id;
+        }
+      } else {
+        kind := expr_type_from_decl(field.type_name);
+        member_type_id = type_id_from_kind(*state, kind);
+      }
+      if member_type_id == 0 return_err("SPIR-V backend: unsupported field type for pointer struct '%.%'.", ps_info.name, field.name);
+      append(*type_line, " ", id_text(member_type_id));
+    }
+    append(*type_line, "\n");
+    append(*sb, builder_to_string(*type_line));
+  }
+
+  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(root_var_ptr_type_id), id_text(root_info.type_id)));
+  for ps_infos append(*sb, tprint("% = OpTypePointer % %\n", id_text(it.ptr_type_id), storage_class, id_text(it.type_id)));
+  for ptr_to_ptr_types append(*sb, tprint("% = OpTypePointer % %\n", id_text(it.ptr_to_ptr_type_id), storage_class, id_text(it.ptr_type_id)));
+  for ptr_to_ptr_storage_types append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(it.ptr_to_ptr_type_id), id_text(it.ptr_type_id)));
+
+  for state.buffers {
+    buffer := it;
+    if buffer.element_kind == .UINT continue;
+    if buffer.element_kind == .STRUCT {
+      struct_type_line_sb: String_Builder;
+      append(*struct_type_line_sb, tprint("% = OpTypeStruct", id_text(buffer.element_type_id)));
+      for buffer.fields append(*struct_type_line_sb, " ", id_text(type_id_from_kind(*state, it.type)));
+      append(*struct_type_line_sb, "\n");
+      append(*sb, builder_to_string(*struct_type_line_sb));
+    }
+    append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(buffer.runtimearr_type_id), id_text(buffer.element_type_id)));
+    append(*sb, tprint("% = OpTypeStruct %\n", id_text(buffer.wrapper_struct_type_id), id_text(buffer.runtimearr_type_id)));
+    append(*sb, tprint("% = OpTypePointer % %\n", id_text(buffer.ptr_wrapper_type_id), storage_class, id_text(buffer.wrapper_struct_type_id)));
+    append(*sb, tprint("% = OpTypePointer % %\n", id_text(buffer.ptr_storage_element_type_id), storage_class, id_text(buffer.element_type_id)));
+  }
+
+  for state.input_vars append(*sb, tprint("% = OpVariable % Input\n", id_text(it.var_id), id_text(it.ptr_id)));
+  for state.output_vars append(*sb, tprint("% = OpVariable % Output\n", id_text(it.var_id), id_text(it.ptr_id)));
+  append(*sb, tprint("% = OpVariable % StorageBuffer\n", id_text(root_var_id), id_text(root_var_ptr_type_id)));
+  for state.local_array_types {
+    append(*sb, tprint("% = OpTypeArray % %\n",
+                       id_text(it.array_type_id),
+                       id_text(type_id_from_kind(*state, it.element_type)),
+                       id_text(it.count_const_id)));
+    append(*sb, tprint("% = OpTypePointer Function %\n",
+                       id_text(it.ptr_func_array_type_id),
+                       id_text(it.array_type_id)));
+  }
+
+  append(*sb, tprint("     % = OpFunction % None %\n", id_text(state.id_main), id_text(state.id_void), id_text(state.id_fn_void)));
+  append(*sb, tprint("      % = OpLabel\n", id_text(entry_label)));
+  for state.local_var_lines append(*sb, it, "\n");
+  for state.op_lines append(*sb, it, "\n");
+  append(*sb, "               OpFunctionEnd\n");
+  return builder_to_string(*sb), true, diag;
+}
+
 emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: IR_Struct, output: IR_Struct, args: [] IR_Function_Arg, body: *IR_Block, helpers: [] IR_Helper_Function, extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return "", false, { message = sprint(msg, ..args) }; }
   diag: IR_Diagnostic;
   if !body return_err("SPIR-V backend: graphics shader '%' has no body.", source_name);
+
+  root_arg, use_pointer_abi := find_pointer_root_arg(args, extra_structs);
+  if use_pointer_abi && root_arg {
+    spvasm, ok, pointer_diag := emit_graphics_physical_pointer_abi(stage, source_name, input, output, args, body, helpers, extra_structs);
+    return spvasm, ok, pointer_diag;
+  }
 
   state: IR_SPV_Gen_State;
   state.stage = stage;
@@ -3121,8 +3659,17 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   graphics_buffers: [..] IR_Compute_Buffer;
   for args {
     arg := it;
-    struct_name, is_param_block := parse_parameter_block_struct_name(arg.type_name);
-    container_type_name := ifx is_param_block then struct_name else arg.type_name;
+    is_param_block := false;
+    container_type_name := arg.type_name;
+    if arg.is_pointer && arg.pointer_pointee_is_struct && arg.pointer_pointee_type_name.count != 0 {
+      container_type_name = arg.pointer_pointee_type_name;
+    } else {
+      struct_name, parsed_param_block := parse_parameter_block_struct_name(arg.type_name);
+      if parsed_param_block {
+        container_type_name = struct_name;
+        is_param_block = true;
+      }
+    }
     struct_def := find_struct(*state, container_type_name);
     if !struct_def continue;
     saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, struct_def, arg.name, *graphics_buffers);

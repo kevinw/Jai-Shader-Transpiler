@@ -138,12 +138,29 @@ find_implicit_bindless_param :: (header: *Code_Procedure_Header) -> (*Code_Decla
   for header.arguments {
     if declaration_is_parameter_using(header, it) continue;
     arg_type := ifx it.type_inst then it.type_inst.result else it.expression.type;
-    if arg_type.type != .STRUCT continue;
+    if arg_type.type == .POINTER {
+      pointer := cast(*Type_Info_Pointer) arg_type;
+      if !pointer.pointer_to || pointer.pointer_to.type != .STRUCT continue;
+    } else if arg_type.type != .STRUCT {
+      continue;
+    }
     if candidate return null, 0, false;
     candidate = it;
   }
   if candidate return candidate, 0, true;
   return null, 0, false;
+}
+
+bindless_struct_type_from_decl :: (decl: *Code_Declaration) -> (*Type_Info_Struct, bool) {
+  if !decl return null, false;
+  type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
+  if !type return null, false;
+  if type.type == .STRUCT return cast(*Type_Info_Struct) type, true;
+  if type.type == .POINTER {
+    pointer := cast(*Type_Info_Pointer) type;
+    if pointer.pointer_to && pointer.pointer_to.type == .STRUCT return cast(*Type_Info_Struct) pointer.pointer_to, true;
+  }
+  return null, false;
 }
 
 find_bindless_param :: (header: *Code_Procedure_Header) -> (*Code_Declaration, s64, bool) {
