@@ -21,7 +21,7 @@ Transpiled_Target :: enum {
 }
 
 #load "backend_shared.jai";
-#load "ir_pipeline/slang_toolchain.jai";
+#load "ir_pipeline/external_toolchain.jai";
 #load "ir_pipeline/ir_shared.jai";
 #load "ir_pipeline/ir_lowering.jai";
 #load "ir_pipeline/spirv_text_backend.jai";
@@ -366,14 +366,17 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     
     case .COMPLETE; {
       if plugin.currently_waiting_contexts.count != 0 || plugin.currently_waiting_pair_contexts.count != 0 {
-        compiler_report("Jai Shader Transpiler: Something went wrong while converting Jai Shaders to shader code.\nThere's some functions that have not yet been transpiled, that a shader is waiting on. This is not good.");
+        complete_message := cast(*Message_Complete)message;
+        if complete_message.error_code == 0 {
+          compiler_report("Jai Shader Transpiler: Compiler is finished, but some functions have not yet been transpiled.");
+        }
       }
       array_reset(*plugin.currently_waiting_contexts);
       array_reset(*plugin.currently_waiting_pair_contexts);
       array_reset(*plugin.pending_request_declarations);
       array_reset(*plugin.known_procedure_bodies);
-      plugin.generated_module_import = null;
       array_reset(*plugin.lookup_entries);
+      plugin.generated_module_import = null;
       plugin.did_emit_lookup_overloads = false;
       plugin.did_log_ir_pipeline = false;
       plugin.did_log_ir_limitations = false;

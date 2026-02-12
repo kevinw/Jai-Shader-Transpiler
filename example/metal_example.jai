@@ -1,3 +1,6 @@
+//
+// Shows a shadertoy written as a Jai shader
+//
 #import "Basic";
 #import "Math";
 #import "Metal";
@@ -99,10 +102,8 @@ run_compute_sanity_check :: (device: *MTLDevice, queue: *MTLCommandQueue, compil
 }
 
 metal_example_with_window :: () -> (success: bool) {
-    _ = get_transpiled(.METAL, tiles_vertex_shader, tiles_fragment_shader);
     vertex_metal_source := get_transpiled(.METAL, tiles_vertex_shader);
     fragment_metal_source := get_transpiled(.METAL, tiles_fragment_shader);
-    log("%\n\n%", vertex_metal_source, fragment_metal_source);
     _ = get_transpiled(.METAL, array_support_vertex_shader);
     _ = get_transpiled(.METAL, array_support_fragment_shader);
     _ = get_transpiled(.METAL, compute_write_indices);

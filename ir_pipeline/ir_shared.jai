@@ -199,6 +199,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
   if stmt.kind == {
     case .DECLARATION; {
       decl := cast(*Code_Declaration) stmt;
+      for decl.notes if it.text == "jai_only" return true;
       decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
       type_name, type_ok := ir_type_to_slang_name(decl_type);
       if !type_ok {

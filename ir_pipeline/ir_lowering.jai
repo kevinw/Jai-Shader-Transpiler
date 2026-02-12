@@ -453,18 +453,20 @@ ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Stru
 }
 
 ir_binary_operator_to_slang :: (op: Operator_Type) -> string {
-  if op == .PLUS_ASSIGN return "+=";
-  if op == .MINUS_ASSIGN return "-=";
-  if op == .TIMES_ASSIGN return "*=";
-  if op == .DIV_ASSIGN return "/=";
-  if op == .MOD_ASSIGN return "%=";
-  if op == .SHIFT_LEFT return "<<";
-  if op == .SHIFT_RIGHT return ">>";
-  if op == .SHIFT_LEFT_ASSIGN return "<<=";
-  if op == .SHIFT_RIGHT_ASSIGN return ">>=";
-  if op == .BITWISE_AND_ASSIGN return "&=";
-  if op == .BITWISE_OR_ASSIGN return "|=";
-  if op == .BITWISE_XOR_ASSIGN return "^=";
+  if op == {
+    case .PLUS_ASSIGN; return "+=";
+    case .MINUS_ASSIGN; return "-=";
+    case .TIMES_ASSIGN; return "*=";
+    case .DIV_ASSIGN; return "/=";
+    case .MOD_ASSIGN; return "%=";
+    case .SHIFT_LEFT; return "<<";
+    case .SHIFT_RIGHT; return ">>";
+    case .SHIFT_LEFT_ASSIGN; return "<<=";
+    case .SHIFT_RIGHT_ASSIGN; return ">>=";
+    case .BITWISE_AND_ASSIGN; return "&=";
+    case .BITWISE_OR_ASSIGN; return "|=";
+    case .BITWISE_XOR_ASSIGN; return "^=";
+  }
   return operator_string(op);
 }
 
@@ -474,18 +476,18 @@ ir_expr_new :: (kind: IR_Expr_Kind) -> *IR_Expr {
   return e;
 }
 
-ir_literal_to_text :: (lit: *Code_Literal) -> (string, bool) {
+ir_literal_to_text :: (using lit: *Code_Literal) -> (string, bool) {
   assert(lit != null);
-  if lit.value_type == .BOOLEAN return ifx lit._s64 != 0 then "true" else "false", true;
-  if lit.value_type == .NUMBER {
-    if lit.value_flags & .FLOAT return tprint("%", lit._float64), true;
-    if lit.type && lit.type.type == .INTEGER {
-      inttype := cast(*Type_Info_Integer) lit.type;
-      if inttype.signed return tprint("%", lit._s64), true;
+  if value_type == .BOOLEAN return ifx _s64 != 0 then "true" else "false", true;
+  if value_type == .NUMBER {
+    if value_flags & .FLOAT return tprint("%", _float64), true;
+    if type && type.type == .INTEGER {
+      inttype := cast(*Type_Info_Integer) type;
+      if inttype.signed return tprint("%", _s64), true;
     }
-    return tprint("%", lit._u64), true;
+    return tprint("%", _u64), true;
   }
-  if lit.value_type == .STRING return tprint("\"%\"", lit._string), true;
+  if value_type == .STRING return tprint("\"%\"", _string), true;
   return "", false;
 }
 

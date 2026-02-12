@@ -2,7 +2,7 @@
 #import "File";
 #import "File_Utilities";
 #import "String";
-#import,file "../ir_pipeline/slang_toolchain.jai";
+#import,file "../ir_pipeline/external_toolchain.jai";
 
 HEADLESS_DIR :: ".build/headless_ir_toolchain";
 

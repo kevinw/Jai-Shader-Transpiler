@@ -25,9 +25,6 @@ Proc :: #import "Process";
   plugin.use_direct_spirv_text = true;
 
   for command_line_opts.compile_time_command_line {
-    if it == "-output_shaders" {
-      plugin.output_shaders = true;
-    }
     if it == "-slang_emit_line_directives" {
       plugin.slang_emit_line_directives = true;
     }

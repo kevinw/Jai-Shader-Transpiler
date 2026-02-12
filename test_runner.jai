@@ -18,18 +18,7 @@ run_all_tests :: () {
   run_command_checked("Run headless IR compute semantics tests", .["bash", "headless_ir/test_ir_compute_semantics.sh"]);
   compile_slang_emitted_metal_shaders();
   
-  for get_command_line_arguments() {
-
-  }
-  
-  args: [..]string;
-  array_add(*args, "jai", "-quiet", "build.jai", "-", "-output_shaders");
-      
-  run_command_checked("Build shaders", args);
-  
-  debug_path :: (name: string) -> string {
-      return tprint("%/%", DEBUG_OUTDIR, name);
-  }
+  debug_path :: (name: string) -> string { return tprint("%/%", DEBUG_OUTDIR, name); }
   
   if use_slang_backend {
     check_file_contains(debug_path("array_support_vertex_shader.glsl"), "vec2 positions[3] = vec2[](");
@@ -80,7 +69,7 @@ run_all_tests :: () {
   #if OS == .MACOS 
     run_command_checked("Run Metal example", .["./metal_example", "-singleframe", "-test_readback"]);
 
-  log("Array shader checks passed. CPU, Metal, GLSL, and Vulkan transpile checks succeeded.");
+  log("All Jai-Shader-Transpiler tests passed.");
 }
 
 fail :: (message: string, args: .. Any) {
@@ -92,49 +81,31 @@ run_command_checked :: (description: string, args: [] string, timeout_ms := -1) 
     command := Process.get_quoted_command_string(args);
     result, output, error, timeout_reached := Process.run_command(..args, timeout_ms=timeout_ms);
 
-    if timeout_reached {
-        fail("% timed out. Command: %", description, command);
-    }
-
-    if result.type == .FAILED_TO_LAUNCH {
-        fail("% failed to launch. Command: %", description, command);
-    }
-
-    if result.type != .EXITED || result.exit_code != 0 {
-        fail("% failed with exit code %. Command: %", description, result.exit_code, command);
-    }
+    if timeout_reached  fail("% timed out. Command: %", description, command);
+    if result.type == .FAILED_TO_LAUNCH  fail("% failed to launch. Command: %", description, command);
+    if result.type != .EXITED || result.exit_code != 0  fail("% failed with exit code %. Command: %", description, result.exit_code, command);
 }
 
 check_file_contains :: (name: string, pattern: string) {
     data, ok := read_entire_file(name);
-    if !ok {
-        fail("Could not read '%'.", name);
-    }
+    if !ok  fail("Could not read '%'.", name);
 
     found, _ := contains(data, pattern);
-    if !found {
-        fail("Expected pattern not found in %: %", name, pattern);
-    }
+    if !found  fail("Expected pattern not found in %: %", name, pattern);
 }
 
 check_file_not_contains :: (name: string, pattern: string) {
     data, ok := read_entire_file(name);
-    if !ok {
-        fail("Could not read '%'.", name);
-    }
+    if !ok  fail("Could not read '%'.", name);
 
     found, _ := contains(data, pattern);
-    if found {
-        fail("Unexpected pattern found in %: %", name, pattern);
-    }
+    if found  fail("Unexpected pattern found in %: %", name, pattern);
 }
 
 check_file_contains_any :: (name: string, patterns: [] string) {
     assert(patterns.count > 0);
     data, ok := read_entire_file(name);
-    if !ok {
-        fail("Could not read '%'.", name);
-    }
+    if !ok  fail("Could not read '%'.", name);
 
     for patterns {
         found, _ := contains(data, it);
@@ -244,9 +215,7 @@ compile_generated_metal_shaders :: () {
 
     #if OS == .MACOS {
       metal_files := collect_generated_files(".metal");
-      if metal_files.count == 0 {
-          fail("No generated Metal shader files found (expected output_*.metal).");
-      }
+      if metal_files.count == 0 fail("No generated Metal shader files found (expected output_*.metal).");
     }
 
     if !make_directory_if_it_does_not_exist(".build/tests", recursive=true) {

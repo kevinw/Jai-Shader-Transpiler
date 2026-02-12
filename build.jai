@@ -14,10 +14,12 @@
   ir_case := "";
   for command_line_opts.compile_time_command_line {
     if it == "-run_tests" run_tests = true;
-    if it == "-slang_backend" use_slang_backend = true;
-    if it == "-verbose_build_progress" verbose_build_progress = true;
-    if begins_with(it, "-ir_case=") {
+    else if it == "-slang_backend" use_slang_backend = true;
+    else if it == "-verbose_build_progress" verbose_build_progress = true;
+    else if begins_with(it, "-ir_case=") {
       ir_case = slice(it, 9, it.count);
+    } else {
+      compiler_report(tprint("Unrecognized argument '%'", it));
     }
   }
 
@@ -97,7 +99,6 @@ build :: (build_file: string, output_exe_name: string, verbose_build_progress: b
   for command_line_opts.compile_time_command_line {
       if it == {
         case "-run"; autorun = true;
-        case "-output_shaders"; jai_to_shader_plugin.output_shaders = true;
       }
   }
 

@@ -18,11 +18,7 @@
   plugin := get_plugin();
   plugin.workspace = w;
 
-  for command_line_opts.compile_time_command_line {
-    if it == "-output_shaders" {
-      plugin.output_shaders = true;
-    }
-  }
+
 
   compiler_begin_intercept(w);
   defer compiler_end_intercept(w);
