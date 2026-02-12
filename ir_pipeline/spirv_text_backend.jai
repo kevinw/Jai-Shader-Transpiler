@@ -34,7 +34,7 @@ emit_ir_fragment_to_spirv_text_branch :: (shader: IR_Fragment_Shader) -> (spvasm
   return spvasm, ok, diag;
 }
 
-#scope_file
+#scope_export
 // -----------------------------------------------------------------------------
 // Parsing / Text Helpers
 // -----------------------------------------------------------------------------
@@ -884,150 +884,6 @@ load_thread_x :: (s: *IR_SPV_Gen_State) -> s64 {
                               id_text(s.id_uint),
                               id_text(thread_id_ptr)));
   return thread_id;
-}
-
-expr_type_from_decl :: (name: string) -> IR_SPV_Gen_Type {
-  if name == "int" return .INT64;
-  if name == "s64" return .INT64;
-  if name == "int64_t" return .INT64;
-  if name == "u64" return .UINT64;
-  if name == "uint64_t" return .UINT64;
-  if name == "s32" return .INT;
-  if name == "int32_t" return .INT;
-  if name == "uint" return .UINT;
-  if name == "u32" return .UINT;
-  if name == "uint32_t" return .UINT;
-  if name == "float" return .FLOAT;
-  if name == "float2" return .FLOAT2;
-  if name == "float4" return .FLOAT4;
-  if name == "float2x2" return .FLOAT2X2;
-  if name == "Vector2" return .FLOAT2;
-  if name == "Vector4" return .FLOAT4;
-  if name == "Matrix2" return .FLOAT2X2;
-  if name == "bool" return .BOOL;
-  return .UNKNOWN;
-}
-
-type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
-  assert(s != null);
-  if kind == .INT return s.id_int;
-  if kind == .UINT return s.id_uint;
-  if kind == .INT64 return s.id_int64;
-  if kind == .UINT64 return s.id_uint64;
-  if kind == .FLOAT return s.id_float;
-  if kind == .FLOAT2 return s.id_float2;
-  if kind == .FLOAT4 return s.id_float4;
-  if kind == .FLOAT2X2 return s.id_float2x2;
-  if kind == .BOOL return s.id_bool;
-  return 0;
-}
-
-storage_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
-  assert(s != null);
-  if kind == .INT return s.id_ptr_storage_int;
-  if kind == .UINT return s.id_ptr_storage_uint;
-  if kind == .INT64 return s.id_ptr_storage_int64;
-  if kind == .UINT64 return s.id_ptr_storage_uint64;
-  if kind == .FLOAT return s.id_ptr_storage_float;
-  if kind == .FLOAT2 return s.id_ptr_storage_float2;
-  return 0;
-}
-
-input_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
-  assert(s != null);
-  if kind == .INT return s.id_ptr_input_uint;
-  if kind == .FLOAT return s.id_ptr_input_float;
-  if kind == .FLOAT2 return s.id_ptr_input_float2;
-  if kind == .FLOAT4 return s.id_ptr_input_float4;
-  if kind == .UINT return s.id_ptr_input_uint;
-  if kind == .INT64 return s.id_ptr_input_uint;
-  if kind == .UINT64 return s.id_ptr_input_uint;
-  return 0;
-}
-
-output_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
-  assert(s != null);
-  if kind == .FLOAT return s.id_ptr_output_float;
-  if kind == .FLOAT2 return s.id_ptr_output_float2;
-  if kind == .FLOAT4 return s.id_ptr_output_float4;
-  return 0;
-}
-
-uniform_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
-  assert(s != null);
-  if kind == .INT return s.id_ptr_uniform_int;
-  if kind == .UINT return s.id_ptr_uniform_uint;
-  if kind == .INT64 return s.id_ptr_uniform_int64;
-  if kind == .UINT64 return s.id_ptr_uniform_uint64;
-  if kind == .FLOAT return s.id_ptr_uniform_float;
-  if kind == .FLOAT2 return s.id_ptr_uniform_float2;
-  if kind == .FLOAT4 return s.id_ptr_uniform_float4;
-  return 0;
-}
-
-func_ptr_type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
-  assert(s != null);
-  if kind == .INT return s.id_ptr_func_int;
-  if kind == .UINT return s.id_ptr_func_uint;
-  if kind == .INT64 return s.id_ptr_func_int64;
-  if kind == .UINT64 return s.id_ptr_func_uint64;
-  if kind == .FLOAT return s.id_ptr_func_float;
-  if kind == .FLOAT2 return s.id_ptr_func_float2;
-  if kind == .FLOAT4 return s.id_ptr_func_float4;
-  if kind == .FLOAT2X2 return s.id_ptr_func_float2x2;
-  if kind == .BOOL return s.id_ptr_func_bool;
-  return 0;
-}
-
-byte_size_of_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
-  if kind == .INT return 4;
-  if kind == .UINT return 4;
-  if kind == .INT64 return 8;
-  if kind == .UINT64 return 8;
-  if kind == .FLOAT return 4;
-  if kind == .FLOAT2 return 8;
-  if kind == .FLOAT4 return 16;
-  return 0;
-}
-
-is_integral_kind :: (kind: IR_SPV_Gen_Type) -> bool {
-  return kind == .INT || kind == .UINT || kind == .INT64 || kind == .UINT64;
-}
-
-is_signed_integral_kind :: (kind: IR_SPV_Gen_Type) -> bool {
-  return kind == .INT || kind == .INT64;
-}
-
-kind_uses_int64 :: (kind: IR_SPV_Gen_Type) -> bool {
-  return kind == .INT64 || kind == .UINT64;
-}
-
-state_uses_int64 :: (s: *IR_SPV_Gen_State) -> bool {
-  assert(s != null);
-  if s.const_i64.count > 0 || s.const_u64.count > 0 return true;
-  for s.locals if kind_uses_int64(it.type) return true;
-  for s.local_arrays if kind_uses_int64(it.element_type) return true;
-  for s.buffers {
-    if kind_uses_int64(it.element_kind) return true;
-    for it.fields if kind_uses_int64(it.type) return true;
-  }
-  for s.uniform_blocks for it.fields if kind_uses_int64(it.type) return true;
-  for s.input_vars if kind_uses_int64(it.type) return true;
-  for s.output_vars if kind_uses_int64(it.type) return true;
-  return false;
-}
-
-promote_integral_kind :: (a: IR_SPV_Gen_Type, b: IR_SPV_Gen_Type) -> IR_SPV_Gen_Type {
-  assert(is_integral_kind(a));
-  assert(is_integral_kind(b));
-  if a == b return a;
-  if a == .INT64 || b == .INT64 return .INT64;
-  if a == .UINT64 || b == .UINT64 {
-    if a == .INT || b == .INT return .INT64;
-    return .UINT64;
-  }
-  if a == .INT || b == .INT return .INT;
-  return .UINT;
 }
 
 physical_aligned_suffix :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> string {
@@ -3966,15 +3822,12 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   storage_class := "PhysicalStorageBuffer";
 
   sb: String_Builder;
-  has_int64 := state_uses_int64(*state);
   append(*sb, "; SPIR-V\n");
   append(*sb, "; Version: 1.5\n");
   append(*sb, "; Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1\n");
   append(*sb, tprint("; Bound: %\n", state.next_id));
   append(*sb, "; Schema: 0\n");
-  append(*sb, "               OpCapability Shader\n");
-  if has_int64 append(*sb, "               OpCapability Int64\n");
-  append(*sb, "               OpCapability PhysicalStorageBufferAddresses\n");
+  spv_append_capabilities(*sb, *state, use_physical_storage=true);
   append(*sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", id_text(state.id_extinst)));
   append(*sb, "               OpMemoryModel PhysicalStorageBuffer64 GLSL450\n");
   entry_point_sb: String_Builder;
@@ -4041,58 +3894,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     }
   }
 
-  append(*sb, tprint("       % = OpTypeVoid\n", id_text(state.id_void)));
-  append(*sb, tprint("          % = OpTypeFunction %\n", id_text(state.id_fn_void), id_text(state.id_void)));
-  append(*sb, tprint("       % = OpTypeInt 32 0\n", id_text(state.id_uint)));
-  append(*sb, tprint("        % = OpTypeInt 32 1\n", id_text(state.id_int)));
-  append(*sb, tprint("      % = OpTypeInt 64 1\n", id_text(state.id_int64)));
-  append(*sb, tprint("      % = OpTypeInt 64 0\n", id_text(state.id_uint64)));
-  append(*sb, tprint("      % = OpTypeFloat 32\n", id_text(state.id_float)));
-  append(*sb, tprint("     % = OpTypeVector % 2\n", id_text(state.id_float2), id_text(state.id_float)));
-  append(*sb, tprint("     % = OpTypeVector % 4\n", id_text(state.id_float4), id_text(state.id_float)));
-  append(*sb, tprint("   % = OpTypeMatrix % 2\n", id_text(state.id_float2x2), id_text(state.id_float2)));
-  append(*sb, tprint("       % = OpTypeBool\n", id_text(state.id_bool)));
-  append(*sb, tprint("       % = OpConstantTrue %\n", id_text(state.id_bool_true), id_text(state.id_bool)));
-  append(*sb, tprint("       % = OpConstantFalse %\n", id_text(state.id_bool_false), id_text(state.id_bool)));
-  append(*sb, tprint("     % = OpTypeVector % 3\n", id_text(state.id_v3uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_v3uint), id_text(state.id_v3uint)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_int), id_text(state.id_int)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_int64), id_text(state.id_int64)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_uint64), id_text(state.id_uint64)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(state.id_runtimearr_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypeStruct %\n", id_text(state.id_buffer_struct), id_text(state.id_runtimearr_uint)));
-  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_buffer_struct), storage_class, id_text(state.id_buffer_struct)));
-  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_int), storage_class, id_text(state.id_int)));
-  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_uint), storage_class, id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_int64), storage_class, id_text(state.id_int64)));
-  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_uint64), storage_class, id_text(state.id_uint64)));
-  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float), storage_class, id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float2), storage_class, id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int), id_text(state.id_int)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int64), id_text(state.id_int64)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint64), id_text(state.id_uint64)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2x2), id_text(state.id_float2x2)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_bool), id_text(state.id_bool)));
-  for state.const_u32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint), it.value));
-  for state.const_i32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_int), it.value));
-  for state.const_i64 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_int64), it.value));
-  for state.const_u64 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint64), it.value));
-  for state.const_f32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_float), it.text));
+  spv_append_common_type_decls(*sb, *state, storage_class);
+  spv_append_numeric_constants(*sb, *state);
   for ps_infos append(*sb, tprint("               OpTypeForwardPointer % %\n", id_text(it.ptr_type_id), storage_class));
   for state.buffers append(*sb, tprint("               OpTypeForwardPointer % %\n", id_text(it.ptr_wrapper_type_id), storage_class));
   for ps_infos {
@@ -4369,14 +4172,12 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   entry_name := ifx stage == .VERTEX then "VertexMain" else "FragmentMain";
 
   sb: String_Builder;
-  has_int64 := state_uses_int64(*state);
   append(*sb, "; SPIR-V\n");
   append(*sb, "; Version: 1.5\n");
   append(*sb, "; Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1\n");
   append(*sb, tprint("; Bound: %\n", state.next_id));
   append(*sb, "; Schema: 0\n");
-  append(*sb, "               OpCapability Shader\n");
-  if has_int64 append(*sb, "               OpCapability Int64\n");
+  spv_append_capabilities(*sb, *state);
   append(*sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", id_text(state.id_extinst)));
   append(*sb, "               OpMemoryModel Logical GLSL450\n");
   entry_point_sb: String_Builder;
@@ -4429,58 +4230,8 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     }
   }
 
-  append(*sb, tprint("       % = OpTypeVoid\n", id_text(state.id_void)));
-  append(*sb, tprint("          % = OpTypeFunction %\n", id_text(state.id_fn_void), id_text(state.id_void)));
-  append(*sb, tprint("       % = OpTypeInt 32 0\n", id_text(state.id_uint)));
-  append(*sb, tprint("        % = OpTypeInt 32 1\n", id_text(state.id_int)));
-  append(*sb, tprint("      % = OpTypeInt 64 1\n", id_text(state.id_int64)));
-  append(*sb, tprint("      % = OpTypeInt 64 0\n", id_text(state.id_uint64)));
-  append(*sb, tprint("      % = OpTypeFloat 32\n", id_text(state.id_float)));
-  append(*sb, tprint("     % = OpTypeVector % 2\n", id_text(state.id_float2), id_text(state.id_float)));
-  append(*sb, tprint("     % = OpTypeVector % 4\n", id_text(state.id_float4), id_text(state.id_float)));
-  append(*sb, tprint("   % = OpTypeMatrix % 2\n", id_text(state.id_float2x2), id_text(state.id_float2)));
-  append(*sb, tprint("       % = OpTypeBool\n", id_text(state.id_bool)));
-  append(*sb, tprint("       % = OpConstantTrue %\n", id_text(state.id_bool_true), id_text(state.id_bool)));
-  append(*sb, tprint("       % = OpConstantFalse %\n", id_text(state.id_bool_false), id_text(state.id_bool)));
-  append(*sb, tprint("     % = OpTypeVector % 3\n", id_text(state.id_v3uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_v3uint), id_text(state.id_v3uint)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_int), id_text(state.id_int)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_int64), id_text(state.id_int64)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_uint64), id_text(state.id_uint64)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(state.id_runtimearr_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypeStruct %\n", id_text(state.id_buffer_struct), id_text(state.id_runtimearr_uint)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_buffer_struct), id_text(state.id_buffer_struct)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_int), id_text(state.id_int)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_int64), id_text(state.id_int64)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_uint64), id_text(state.id_uint64)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int), id_text(state.id_int)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int64), id_text(state.id_int64)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint64), id_text(state.id_uint64)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2x2), id_text(state.id_float2x2)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_bool), id_text(state.id_bool)));
-  for state.const_u32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint), it.value));
-  for state.const_i32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_int), it.value));
-  for state.const_i64 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_int64), it.value));
-  for state.const_u64 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint64), it.value));
-  for state.const_f32 append(*sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_float), it.text));
+  spv_append_common_type_decls(*sb, *state, "StorageBuffer");
+  spv_append_numeric_constants(*sb, *state);
   for state.uniform_blocks {
     type_line: String_Builder;
     for it.fields {
@@ -4563,14 +4314,12 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
 
   // Build module text sections after IDs are finalized.
   sb: String_Builder;
-  has_int64 := state_uses_int64(*state);
   append(*sb, "; SPIR-V\n");
   append(*sb, "; Version: 1.5\n");
   append(*sb, "; Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1\n");
   append(*sb, tprint("; Bound: %\n", state.next_id));
   append(*sb, "; Schema: 0\n");
-  append(*sb, "               OpCapability Shader\n");
-  if has_int64 append(*sb, "               OpCapability Int64\n");
+  spv_append_capabilities(*sb, *state);
   append(*sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", id_text(state.id_extinst)));
   append(*sb, "               OpMemoryModel Logical GLSL450\n");
   entry_point_sb: String_Builder;
@@ -4609,32 +4358,8 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(it.var_id)));
   }
 
-  append(*sb, tprint("       % = OpTypeVoid\n", id_text(state.id_void)));
-  append(*sb, tprint("          % = OpTypeFunction %\n", id_text(state.id_fn_void), id_text(state.id_void)));
-  append(*sb, tprint("       % = OpTypeInt 32 0\n", id_text(state.id_uint)));
-  append(*sb, tprint("        % = OpTypeInt 32 1\n", id_text(state.id_int)));
-  append(*sb, tprint("      % = OpTypeInt 64 1\n", id_text(state.id_int64)));
-  append(*sb, tprint("      % = OpTypeInt 64 0\n", id_text(state.id_uint64)));
-  append(*sb, tprint("      % = OpTypeFloat 32\n", id_text(state.id_float)));
-  append(*sb, tprint("     % = OpTypeVector % 2\n", id_text(state.id_float2), id_text(state.id_float)));
-  append(*sb, tprint("     % = OpTypeVector % 4\n", id_text(state.id_float4), id_text(state.id_float)));
-  append(*sb, tprint("   % = OpTypeMatrix % 2\n", id_text(state.id_float2x2), id_text(state.id_float2)));
-  append(*sb, tprint("       % = OpTypeBool\n", id_text(state.id_bool)));
-  append(*sb, tprint("       % = OpConstantTrue %\n", id_text(state.id_bool_true), id_text(state.id_bool)));
-  append(*sb, tprint("       % = OpConstantFalse %\n", id_text(state.id_bool_false), id_text(state.id_bool)));
-  append(*sb, tprint("     % = OpTypeVector % 3\n", id_text(state.id_v3uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_v3uint), id_text(state.id_v3uint)));
+  spv_append_common_type_decls(*sb, *state, "StorageBuffer");
   append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_global_invocation_id), id_text(state.id_ptr_input_v3uint)));
-  append(*sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(state.id_runtimearr_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypeStruct %\n", id_text(state.id_buffer_struct), id_text(state.id_runtimearr_uint)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_buffer_struct), id_text(state.id_buffer_struct)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_int), id_text(state.id_int)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_int64), id_text(state.id_int64)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_uint64), id_text(state.id_uint64)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(state.id_ptr_storage_float2), id_text(state.id_float2)));
   for state.buffers {
     buffer := it;
     if buffer.element_kind == .UINT continue;
@@ -4654,47 +4379,8 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
     append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(buffer.ptr_storage_element_type_id), id_text(buffer.element_type_id)));
   }
   for state.buffers append(*sb, tprint("% = OpVariable % StorageBuffer\n", id_text(it.var_id), id_text(it.ptr_wrapper_type_id)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float), id_text(state.id_float)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2), id_text(state.id_float2)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float4), id_text(state.id_float4)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2x2), id_text(state.id_float2x2)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_bool), id_text(state.id_bool)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int), id_text(state.id_int)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint), id_text(state.id_uint)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int64), id_text(state.id_int64)));
-  append(*sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint64), id_text(state.id_uint64)));
-
   // Constants are emitted after types and before function body.
-  for state.const_u32 {
-    append(*sb, tprint("      % = OpConstant % %\n",
-                       id_text(it.id),
-                       id_text(state.id_uint),
-                       it.value));
-  }
-  for state.const_i32 {
-    append(*sb, tprint("      % = OpConstant % %\n",
-                       id_text(it.id),
-                       id_text(state.id_int),
-                       it.value));
-  }
-  for state.const_i64 {
-    append(*sb, tprint("      % = OpConstant % %\n",
-                       id_text(it.id),
-                       id_text(state.id_int64),
-                       it.value));
-  }
-  for state.const_u64 {
-    append(*sb, tprint("      % = OpConstant % %\n",
-                       id_text(it.id),
-                       id_text(state.id_uint64),
-                       it.value));
-  }
-  for state.const_f32 {
-    append(*sb, tprint("      % = OpConstant % %\n",
-                       id_text(it.id),
-                       id_text(state.id_float),
-                       it.text));
-  }
+  spv_append_numeric_constants(*sb, *state);
   for state.local_array_types {
     append(*sb, tprint("% = OpTypeArray % %\n",
                        id_text(it.array_type_id),

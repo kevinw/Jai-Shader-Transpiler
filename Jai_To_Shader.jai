@@ -24,6 +24,7 @@ Transpiled_Target :: enum {
 #load "ir_pipeline/ir_shared.jai";
 #load "ir_pipeline/ir_lowering.jai";
 #load "ir_pipeline/spirv_text_backend.jai";
+#load "ir_pipeline/spv_types.jai";
 
 Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
