@@ -75,6 +75,20 @@ optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool {
     .["spirv-opt", "-O", input_spv, "-o", output_spv]);
 }
 
+link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool {
+  if inputs.count == 0 {
+    log_error("SPIR-V link requires at least one input.");
+    return false;
+  }
+  args: [..] string;
+  array_add(*args, "spirv-link");
+  for inputs array_add(*args, it);
+  array_add(*args, "-o", output_spv);
+  return ir_run_command_checked(
+    tprint("spirv-link % inputs", inputs.count),
+    args);
+}
+
 #scope_file
 
 spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
@@ -85,26 +99,26 @@ spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
 
 #scope_export
 
-emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string, use_metal_argument_buffers := false) -> bool {
+emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool {
   if target == .METAL {
     if use_metal_argument_buffers && (stage == .VERTEX || stage == .FRAGMENT) {
       return ir_run_command_checked(
         tprint("spirv-cross metal %", entry_name),
-        .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--msl-argument-buffers", "--msl-decoration-binding",
-          "--rename-entry-point", "main", entry_name, spirv_cross_stage_name(stage),
+        .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--entry", source_entry_name, "--stage", spirv_cross_stage_name(stage), "--msl-argument-buffers", "--msl-decoration-binding",
+          "--rename-entry-point", source_entry_name, entry_name, spirv_cross_stage_name(stage),
           "--output", output_path]);
     }
     return ir_run_command_checked(
       tprint("spirv-cross metal %", entry_name),
-      .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--msl-decoration-binding",
-        "--rename-entry-point", "main", entry_name, spirv_cross_stage_name(stage),
+      .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--entry", source_entry_name, "--stage", spirv_cross_stage_name(stage), "--msl-decoration-binding",
+        "--rename-entry-point", source_entry_name, entry_name, spirv_cross_stage_name(stage),
         "--output", output_path]);
   }
 
   if target == .VULKAN_GLSL {
     return ir_run_command_checked(
       tprint("spirv-cross glsl %", entry_name),
-      .["spirv-cross", spv_path, "--vulkan-semantics", "--version", "450", "--output", output_path]);
+      .["spirv-cross", spv_path, "--entry", source_entry_name, "--stage", spirv_cross_stage_name(stage), "--vulkan-semantics", "--version", "450", "--output", output_path]);
   }
 
   log_error("Unsupported SPIR-V target requested in IR pipeline: %", target);

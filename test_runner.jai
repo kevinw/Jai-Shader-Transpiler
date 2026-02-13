@@ -48,8 +48,8 @@ run_all_tests :: () {
     }
 
     {
-      time_scope(TIMINGS_ENABLED, "Compile Slang-emitted Metal");
-      compile_slang_emitted_metal_shaders();
+      time_scope(TIMINGS_ENABLED, "Syntax-check generated Metal");
+      syntax_check_generated_metal_shaders();
     }
   
   debug_path :: (name: string) -> string { return tprint("%/%", DEBUG_OUTDIR, name); }
@@ -100,8 +100,8 @@ run_all_tests :: () {
       compile_generated_glsl_shaders();
     }
     {
-      time_scope(TIMINGS_ENABLED, "Compile Slang-emitted Metal (post-check)");
-      compile_slang_emitted_metal_shaders();
+      time_scope(TIMINGS_ENABLED, "Syntax-check generated Metal (post-check)");
+      syntax_check_generated_metal_shaders();
     }
   
     // run example programs with the generated shaders to check they work at runtime (not just compile time).
@@ -294,9 +294,9 @@ compile_generated_metal_shaders :: () {
     }
 }
 
-compile_slang_emitted_metal_shaders :: () {
+syntax_check_generated_metal_shaders :: () {
     #if OS != .MACOS {
-        log("Skipping Slang-emitted Metal syntax checks on %.", OS);
+        log("Skipping generated Metal syntax checks on %.", OS);
         return;
     }
 
@@ -308,12 +308,12 @@ compile_slang_emitted_metal_shaders :: () {
           metal_files := collect_files_with_extension_in_dir(it, ".metal");
           for metal_files {
               found_any = true;
-              run_command_checked(tprint("Syntax-check Slang Metal %", it),
+              run_command_checked(tprint("Syntax-check generated Metal %", it),
                   .["xcrun", "-sdk", "macosx", "metal", "-fsyntax-only", "-c", it]);
           }
       }
       if !found_any {
-          fail("No Slang-emitted Metal files found in .build/ir_slang roots.");
+          fail("No generated Metal files found in .build/ir_slang roots.");
       }
     }
 }

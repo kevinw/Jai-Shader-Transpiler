@@ -353,23 +353,68 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
         plugin.timings.pair_emit_s += to_float64_seconds(current_time_monotonic() - t_pairs);
 
         t_single := current_time_monotonic();
-        for * ctx: plugin.currently_waiting_contexts {
-          
-          s: string;
-          if !plugin.use_slang_backend {
-            s2, ok2, diag := write_shader_single_ir_spirv(ctx, *plugin.timings);
-            if ok2 {
-              s = s2;
-            } else {
+        if !plugin.use_slang_backend {
+          t_single_spv := current_time_monotonic();
+          jobs: [..] SPV_External_Single_Job;
+          for *ctx: plugin.currently_waiting_contexts {
+            job: SPV_External_Single_Job;
+            prep_ok, prep_diag := prepare_single_spirv_external_job(ctx, *job, *plugin.timings);
+            if !prep_ok {
               report_message := tprint("Jai Shader Transpiler: SPIR-V backend mode failed for shader '%' (%).",
                                        ctx.name, ctx.type);
-              if diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, diag.message);
-              if diag.has_location compiler_report(report_message, diag.location);
+              if prep_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, prep_diag.message);
+              if prep_diag.has_location compiler_report(report_message, prep_diag.location);
               else compiler_report(report_message, make_location(ctx.main_fn.header));
-              remove ctx;
               continue;
             }
-          } else {
+            array_add(*jobs, job);
+          }
+
+          run_spirv_external_jobs_parallel(jobs);
+
+          for *jobs {
+            ctx := it.ctx;
+            source, finalize_ok, finalize_diag := finalize_single_spirv_external_job(it, add_generated_comment=true, timings_totals=*plugin.timings);
+            if !finalize_ok {
+              report_message := tprint("Jai Shader Transpiler: SPIR-V backend mode failed for shader '%' (%).",
+                                       ctx.name, ctx.type);
+              if finalize_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, finalize_diag.message);
+              if finalize_diag.has_location compiler_report(report_message, finalize_diag.location);
+              else compiler_report(report_message, make_location(ctx.main_fn.header));
+              continue;
+            }
+
+            s := tprint("% :: #string END\n%\nEND", ir_symbol_name_from_context(ctx), source);
+            t_add := current_time_monotonic();
+            if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
+            else add_build_string(s, p.workspace);
+            plugin.timings.add_build_string_s += to_float64_seconds(current_time_monotonic() - t_add);
+            if plugin.output_shaders && !is_internal_transpiled_request_name(ctx.name) {
+              ext := tprint("%", ctx.language);
+              to_lower_in_place(ext);
+              make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
+              filename := tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ext);
+              ok := false;
+              ir_source_path := ir_output_path_from_context(ctx);
+              file_source, read_ok := read_entire_file(ir_source_path);
+              if !read_ok {
+                log_error("Error reading IR output file '%'", ir_source_path);
+                assert(false);
+              }
+              ok = write_entire_file(filename, file_source);
+              if !ok {
+                log_error("Error writing file to '%'", filename);
+              } else {
+                #if VERBOSE log("Transpiled Jai to %", filename);
+              }
+            }
+            plugin.timings.emitted_single_count += 1;
+          }
+          plugin.timings.spv_single_total_s += to_float64_seconds(current_time_monotonic() - t_single_spv);
+          array_reset(*plugin.currently_waiting_contexts);
+        } else {
+          for * ctx: plugin.currently_waiting_contexts {
+            s: string;
             s2, ok2, diag := write_shader_single_ir_slang(ctx, plugin.slang_emit_line_directives);
             if ok2 {
               s = s2;
@@ -382,33 +427,33 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
               remove ctx;
               continue;
             }
-          }
 
-          t_add := current_time_monotonic();
-          if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
-          else add_build_string(s, p.workspace);
-          plugin.timings.add_build_string_s += to_float64_seconds(current_time_monotonic() - t_add);
-          if plugin.output_shaders && !is_internal_transpiled_request_name(ctx.name) {
-            ext := tprint("%", ctx.language);
-            to_lower_in_place(ext);
-            make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
-            filename := tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ext);
-            ok := false;
-            ir_source_path := ir_output_path_from_context(ctx);
-            file_source, read_ok := read_entire_file(ir_source_path);
-            if !read_ok {
-              log_error("Error reading IR output file '%'", ir_source_path);
-              assert(false);
+            t_add := current_time_monotonic();
+            if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
+            else add_build_string(s, p.workspace);
+            plugin.timings.add_build_string_s += to_float64_seconds(current_time_monotonic() - t_add);
+            if plugin.output_shaders && !is_internal_transpiled_request_name(ctx.name) {
+              ext := tprint("%", ctx.language);
+              to_lower_in_place(ext);
+              make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
+              filename := tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ext);
+              ok := false;
+              ir_source_path := ir_output_path_from_context(ctx);
+              file_source, read_ok := read_entire_file(ir_source_path);
+              if !read_ok {
+                log_error("Error reading IR output file '%'", ir_source_path);
+                assert(false);
+              }
+              ok = write_entire_file(filename, file_source);
+              if !ok {
+                log_error("Error writing file to '%'", filename);
+              } else {
+                #if VERBOSE log("Transpiled Jai to %", filename);
+              }
             }
-            ok = write_entire_file(filename, file_source);
-            if !ok {
-              log_error("Error writing file to '%'", filename);
-            } else {
-              #if VERBOSE log("Transpiled Jai to %", filename);
-            }
+            remove ctx;
+            plugin.timings.emitted_single_count += 1;
           }
-          remove ctx;
-          plugin.timings.emitted_single_count += 1;
         }
         plugin.timings.single_emit_s += to_float64_seconds(current_time_monotonic() - t_single);
 
@@ -443,7 +488,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           plugin.timings.lookup_emit_s,
           plugin.timings.emitted_pair_count,
           plugin.timings.emitted_single_count);
-        log("[timing][build][plugin][spv] single_total=%s pair_total=%s lower=%s normalize=%s emit_slang=%s emit_spvasm=%s write_files=%s read_files=%s assemble=%s optimize=%s validate=%s cross=%s",
+        log("[timing][build][plugin][spv] wall_single=%s wall_pair=%s worker_sum_lower=%s worker_sum_normalize=%s worker_sum_emit_slang=%s worker_sum_emit_spvasm=%s worker_sum_write_files=%s worker_sum_read_files=%s worker_sum_assemble=%s worker_sum_optimize=%s worker_sum_validate=%s worker_sum_cross=%s",
           plugin.timings.spv_single_total_s,
           plugin.timings.spv_pair_total_s,
           plugin.timings.spv_lower_s,
@@ -789,6 +834,329 @@ ir_graphics_requires_metal_argument_buffer :: (args: [] IR_Function_Arg, extra_s
   return false;
 }
 
+SPV_External_Single_Job :: struct {
+  ctx: *Shader_Write_Context;
+  started: Apollo_Time;
+  validate_before_opt: bool;
+  stage: Slang_Stage;
+  target: Slang_Target;
+  entry_name: string;
+  use_metal_argument_buffers: bool;
+
+  source_path: string;
+  spvasm_path: string;
+  spv_path: string;
+  spv_opt_path: string;
+  output_path: string;
+
+  ok: bool;
+  error_message: string;
+
+  assemble_s: float64;
+  optimize_s: float64;
+  validate_s: float64;
+  cross_s: float64;
+}
+
+prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
+                                      job: *SPV_External_Single_Job,
+                                      timings_totals: *Build_Timing_Totals = null) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(ctx != null);
+  assert(job != null);
+
+  diag: IR_Diagnostic;
+  if !ir_spirv_supports_single_context(ctx) {
+    diag.message = "SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only.";
+    if ctx.main_fn && ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return false, diag;
+  }
+
+  stage, stage_ok := ir_stage_from_context(ctx);
+  if !stage_ok {
+    diag.message = "SPIR-V backend: unsupported shader stage.";
+    if ctx.main_fn && ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return false, diag;
+  }
+
+  target, target_ok := ir_target_from_context(ctx);
+  if !target_ok {
+    diag.message = "SPIR-V backend: unsupported target for context.";
+    if ctx.main_fn && ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return false, diag;
+  }
+
+  slang_source: string;
+  spvasm_source: string;
+  spvasm_ok := false;
+  spvasm_diag: IR_Diagnostic;
+  entry_name: string;
+  use_metal_argument_buffers := false;
+
+  if ctx.type == .Vertex {
+    t0 := current_time_monotonic();
+    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !lowered return false, lowered_diag;
+    t0 = current_time_monotonic();
+    normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
+    if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !normalized return false, normalize_diag;
+    t0 = current_time_monotonic();
+    emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
+    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !emitted {
+      diag.message = tprint("IR->Slang emission failed for vertex shader '%'.", ctx.name);
+      if ctx.main_fn && ctx.main_fn.header {
+        diag.location = make_location(ctx.main_fn.header);
+        diag.has_location = true;
+      }
+      return false, diag;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_vertex.entry_name;
+    t0 = current_time_monotonic();
+    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
+    if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
+    use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
+  } else if ctx.type == .Fragment {
+    t0 := current_time_monotonic();
+    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !lowered return false, lowered_diag;
+    t0 = current_time_monotonic();
+    normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
+    if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !normalized return false, normalize_diag;
+    t0 = current_time_monotonic();
+    emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
+    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !emitted {
+      diag.message = tprint("IR->Slang emission failed for fragment shader '%'.", ctx.name);
+      if ctx.main_fn && ctx.main_fn.header {
+        diag.location = make_location(ctx.main_fn.header);
+        diag.has_location = true;
+      }
+      return false, diag;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_fragment.entry_name;
+    t0 = current_time_monotonic();
+    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
+    if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
+    use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
+  } else {
+    t0 := current_time_monotonic();
+    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !lowered return false, lowered_diag;
+    t0 = current_time_monotonic();
+    normalized, normalize_diag := normalize_compute_ir(*ir_compute);
+    if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !normalized return false, normalize_diag;
+    t0 = current_time_monotonic();
+    emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
+    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
+    if !emitted {
+      diag.message = tprint("IR->Slang emission failed for compute shader '%'.", ctx.name);
+      if ctx.main_fn && ctx.main_fn.header {
+        diag.location = make_location(ctx.main_fn.header);
+        diag.has_location = true;
+      }
+      return false, diag;
+    }
+    slang_source = emitted_source;
+    entry_name = ir_compute.entry_name;
+    t0 = current_time_monotonic();
+    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
+    if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
+  }
+
+  if entry_name.count == 0 {
+    diag.message = "SPIR-V backend: empty entry name.";
+    if ctx.main_fn && ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return false, diag;
+  }
+
+  if !spvasm_ok {
+    if spvasm_diag.message.count == 0 spvasm_diag.message = tprint("SPIR-V text backend: failed to emit SPIR-V assembly for '%'.", ctx.name);
+    if !spvasm_diag.has_location && ctx.main_fn && ctx.main_fn.header {
+      spvasm_diag.location = make_location(ctx.main_fn.header);
+      spvasm_diag.has_location = true;
+    }
+    return false, spvasm_diag;
+  }
+
+  build_dir := ".build/ir_slang";
+  make_directory_if_it_does_not_exist(build_dir, recursive=true);
+  stage_short := ir_stage_short_from_context(ctx);
+  output_ext := ifx ctx.language == .METAL then "metal" else "glsl";
+
+  job.ctx = ctx;
+  job.started = current_time_monotonic();
+  job.validate_before_opt = false;
+  job.stage = stage;
+  job.target = target;
+  job.entry_name = copy_string(entry_name);
+  job.use_metal_argument_buffers = use_metal_argument_buffers;
+  job.source_path = copy_string(tprint("%/%_%.slang", build_dir, ctx.name, stage_short));
+  job.spvasm_path = copy_string(tprint("%/%_%.spvasm", build_dir, ctx.name, stage_short));
+  job.spv_path = copy_string(tprint("%/%_%.spv", build_dir, ctx.name, stage_short));
+  job.spv_opt_path = copy_string(tprint("%/%_%.opt.spv", build_dir, ctx.name, stage_short));
+  job.output_path = copy_string(tprint("%/%_%.%", build_dir, ctx.name, stage_short, output_ext));
+  job.ok = false;
+  job.error_message = "";
+
+  t0 := current_time_monotonic();
+  if !write_entire_file(job.source_path, slang_source) {
+    diag.message = tprint("SPIR-V backend: failed writing Slang source file '%'.", job.source_path);
+    return false, diag;
+  }
+  if timings_totals timings_totals.spv_write_files_s += to_float64_seconds(current_time_monotonic() - t0);
+  t0 = current_time_monotonic();
+  if !write_entire_file(job.spvasm_path, spvasm_source) {
+    diag.message = tprint("SPIR-V backend: failed writing SPIR-V text file '%'.", job.spvasm_path);
+    return false, diag;
+  }
+  if timings_totals timings_totals.spv_write_files_s += to_float64_seconds(current_time_monotonic() - t0);
+
+  return true, diag;
+}
+
+run_spirv_external_single_job :: (job: *SPV_External_Single_Job) -> bool {
+  assert(job != null);
+  t0 := current_time_monotonic();
+  if !assemble_spirv_text(job.spvasm_path, job.spv_path) {
+    job.error_message = copy_string(tprint("SPIR-V backend: failed assembling SPIR-V text for '%'. Source: %", job.ctx.name, job.spvasm_path));
+    return false;
+  }
+  job.assemble_s = to_float64_seconds(current_time_monotonic() - t0);
+
+  if job.validate_before_opt {
+    t0 = current_time_monotonic();
+    if !validate_spirv_binary(job.spv_path) {
+      job.error_message = copy_string(tprint("SPIR-V backend: spirv-val failed for '%'. SPIR-V: %", job.ctx.name, job.spv_path));
+      return false;
+    }
+    job.validate_s += to_float64_seconds(current_time_monotonic() - t0);
+  }
+
+  t0 = current_time_monotonic();
+  if !optimize_spirv_binary(job.spv_path, job.spv_opt_path) {
+    job.error_message = copy_string(tprint("SPIR-V backend: spirv-opt failed for '%'. SPIR-V: %", job.ctx.name, job.spv_path));
+    return false;
+  }
+  job.optimize_s = to_float64_seconds(current_time_monotonic() - t0);
+
+  t0 = current_time_monotonic();
+  if !validate_spirv_binary(job.spv_opt_path) {
+    job.error_message = copy_string(tprint("SPIR-V backend: spirv-val failed for '%'. SPIR-V: %", job.ctx.name, job.spv_opt_path));
+    return false;
+  }
+  job.validate_s = to_float64_seconds(current_time_monotonic() - t0);
+
+  t0 = current_time_monotonic();
+  if !emit_spirv_cross_target_source(job.spv_opt_path, job.entry_name, job.stage, job.target, job.output_path, job.use_metal_argument_buffers, source_entry_name=job.entry_name) {
+    job.error_message = copy_string(tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", job.ctx.name, job.spv_opt_path));
+    return false;
+  }
+  job.cross_s = to_float64_seconds(current_time_monotonic() - t0);
+
+  return true;
+}
+
+spv_external_single_worker_proc :: (group: *Thread_Group, thread: *Thread, work: *void) -> Thread_Continue_Status {
+  _ = group;
+  _ = thread;
+  job := cast(*SPV_External_Single_Job) work;
+  job.ok = run_spirv_external_single_job(job);
+  return .CONTINUE;
+}
+
+run_spirv_external_jobs_parallel :: (jobs: [] SPV_External_Single_Job) {
+  if jobs.count == 0 return;
+  cpus := get_number_of_processors();
+  if cpus < 1 cpus = 1;
+  job_count := cast(s32) jobs.count;
+  worker_count := min(max(cpus - 1, 1), job_count);
+  tg: Thread_Group;
+  init(*tg, worker_count, spv_external_single_worker_proc);
+  tg.logging = false;
+  tg.name = "JTS-SPV-External";
+  start(*tg);
+  defer {
+    shutdown(*tg);
+  }
+
+  for *jobs add_work(*tg, it);
+
+  completed := 0;
+  while completed < jobs.count {
+    done := get_completed_work(*tg);
+    completed += done.count;
+    if completed < jobs.count sleep_milliseconds(1);
+  }
+}
+
+finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job,
+                                       add_generated_comment := true,
+                                       timings_totals: *Build_Timing_Totals = null) -> (target_source: string, ok: bool, diag: IR_Diagnostic) {
+  assert(job != null);
+  diag: IR_Diagnostic;
+  if !job.ok {
+    diag.message = ifx job.error_message.count != 0 then job.error_message else "SPIR-V backend: external toolchain step failed.";
+    if job.ctx && job.ctx.main_fn && job.ctx.main_fn.header {
+      diag.location = make_location(job.ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
+
+  t0 := current_time_monotonic();
+  target_source, read_ok := read_entire_file(job.output_path);
+  if timings_totals timings_totals.spv_read_files_s += to_float64_seconds(current_time_monotonic() - t0);
+  if !read_ok {
+    diag.message = tprint("SPIR-V backend: failed reading emitted target source '%'.", job.output_path);
+    return "", false, diag;
+  }
+
+  if job.ctx.language == .METAL && job.ctx.type != .Compute {
+    target_source = ir_mark_metal_device_pointers_const(target_source);
+    t0 = current_time_monotonic();
+    write_entire_file(job.output_path, target_source);
+    if timings_totals timings_totals.spv_write_files_s += to_float64_seconds(current_time_monotonic() - t0);
+  }
+  if job.ctx.type == .Compute && job.ctx.language == .METAL {
+    target_source = replace(target_source, "[[kernel]] void", "kernel void");
+  }
+  if add_generated_comment {
+    target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_context(job.ctx), ir_pipeline_label_spirv(job.target));
+  }
+  t0 = current_time_monotonic();
+  write_entire_file(job.output_path, target_source);
+  if timings_totals timings_totals.spv_write_files_s += to_float64_seconds(current_time_monotonic() - t0);
+
+  if timings_totals {
+    timings_totals.spv_assemble_s += job.assemble_s;
+    timings_totals.spv_optimize_s += job.optimize_s;
+    timings_totals.spv_validate_s += job.validate_s;
+    timings_totals.spv_cross_s += job.cross_s;
+  }
+
+  return target_source, true, diag;
+}
+
 ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated_comment := true, timings_totals: *Build_Timing_Totals = null) -> (string, string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   single_start := current_time_monotonic();
@@ -986,7 +1354,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   if timings_totals timings_totals.spv_validate_s += to_float64_seconds(current_time_monotonic() - t0);
 
   t0 = current_time_monotonic();
-  if !emit_spirv_cross_target_source(spv_for_target, entry_name, stage, target, output_path, use_metal_argument_buffers) {
+  if !emit_spirv_cross_target_source(spv_for_target, entry_name, stage, target, output_path, use_metal_argument_buffers, source_entry_name=entry_name) {
     diag.message = tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", ctx.name, spv_for_target);
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
@@ -1056,6 +1424,98 @@ ir_metal_suffix_descriptor_set_types :: (source: string, suffix: string) -> stri
   return out;
 }
 
+ir_metal_collect_struct_names :: (source: string, names: *Table(string, bool)) {
+  assert(names != null);
+  i: s64 = 0;
+  while i < source.count {
+    line_start := i;
+    while i < source.count && source[i] != #char "\n" i += 1;
+    line: string;
+    line.data = source.data + line_start;
+    line.count = i - line_start;
+    if begins_with(line, "struct ") {
+      cursor := cast(s64) 7;
+      while cursor < line.count && line[cursor] == #char " " cursor += 1;
+      name_start := cursor;
+      while cursor < line.count {
+        ch := line[cursor];
+        if ch == #char " " || ch == #char "{" || ch == #char "\t" break;
+        cursor += 1;
+      }
+      if cursor > name_start {
+        name: string;
+        name.data = line.data + name_start;
+        name.count = cursor - name_start;
+        table_add(names, copy_string(name), true);
+      }
+    }
+    if i < source.count && source[i] == #char "\n" i += 1;
+  }
+}
+
+ir_metal_remove_duplicate_structs :: (source: string, existing_names: *Table(string, bool)) -> string {
+  assert(existing_names != null);
+  out: [..] u8;
+  i: s64 = 0;
+  while i < source.count {
+    line_start := i;
+    while i < source.count && source[i] != #char "\n" i += 1;
+    line: string;
+    line.data = source.data + line_start;
+    line.count = i - line_start;
+    consumed_newline := false;
+    if i < source.count && source[i] == #char "\n" {
+      i += 1;
+      consumed_newline = true;
+    }
+
+    if begins_with(line, "struct ") {
+      cursor := cast(s64) 7;
+      while cursor < line.count && line[cursor] == #char " " cursor += 1;
+      name_start := cursor;
+      while cursor < line.count {
+        ch := line[cursor];
+        if ch == #char " " || ch == #char "{" || ch == #char "\t" break;
+        cursor += 1;
+      }
+      if cursor > name_start {
+        name: string;
+        name.data = line.data + name_start;
+        name.count = cursor - name_start;
+        found, _ := table_find(existing_names, name);
+        if found {
+          // Skip duplicate struct body until matching `};`.
+          depth: s64 = 0;
+          saw_open := false;
+          while i < source.count {
+            ch := source[i];
+            if ch == #char "{" {
+              depth += 1;
+              saw_open = true;
+            } else if ch == #char "}" {
+              if depth > 0 depth -= 1;
+            } else if ch == #char ";" {
+              if saw_open && depth == 0 {
+                i += 1;
+                while i < source.count && (source[i] == #char "\n" || source[i] == #char "\r") i += 1;
+                break;
+              }
+            }
+            i += 1;
+          }
+          continue;
+        }
+      }
+    }
+
+    if line.count > 0 {
+      for j: line_start..(line_start + line.count - 1) array_add(*out, source[j]);
+    }
+    if consumed_newline array_add(*out, #char "\n");
+  }
+  return string.{data=out.data, count=out.count};
+}
+
 write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false, timings_totals: *Build_Timing_Totals = null) -> (string, bool, IR_Diagnostic) {
   _ = emit_line_directives;
 
@@ -1123,8 +1583,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   fragment_spvasm_path := tprint("%/%_frag.spvasm", build_dir, pair_ctx.name);
   vertex_spv_path := tprint("%/%_vert.spv", build_dir, pair_ctx.name);
   fragment_spv_path := tprint("%/%_frag.spv", build_dir, pair_ctx.name);
-  vertex_opt_spv_path := tprint("%/%_vert.opt.spv", build_dir, pair_ctx.name);
-  fragment_opt_spv_path := tprint("%/%_frag.opt.spv", build_dir, pair_ctx.name);
+  linked_spv_path := tprint("%/%_pair.linked.spv", build_dir, pair_ctx.name);
+  linked_opt_spv_path := tprint("%/%_pair.linked.opt.spv", build_dir, pair_ctx.name);
   vertex_output_path := tprint("%/%_vert.metal", build_dir, pair_ctx.name);
   fragment_output_path := tprint("%/%_frag.metal", build_dir, pair_ctx.name);
   t0 = current_time_monotonic();
@@ -1140,35 +1600,34 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   }
   if timings_totals timings_totals.spv_assemble_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
-  if !validate_spirv_binary(vertex_spv_path) || !validate_spirv_binary(fragment_spv_path) {
-    diag.message = "SPIR-V backend: pair SPIR-V validation failed.";
+  if !link_spirv_binaries(.[vertex_spv_path, fragment_spv_path], linked_spv_path) {
+    diag.message = "SPIR-V backend: spirv-link failed for pair module.";
     return "", false, diag;
   }
-  if timings_totals timings_totals.spv_validate_s += to_float64_seconds(current_time_monotonic() - t0);
+  if timings_totals timings_totals.spv_assemble_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
-  if !optimize_spirv_binary(vertex_spv_path, vertex_opt_spv_path) || !optimize_spirv_binary(fragment_spv_path, fragment_opt_spv_path) {
-    diag.message = "SPIR-V backend: pair SPIR-V optimization failed.";
+  if !optimize_spirv_binary(linked_spv_path, linked_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-opt failed for linked pair module.";
     return "", false, diag;
   }
   if timings_totals timings_totals.spv_optimize_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
-  if !validate_spirv_binary(vertex_opt_spv_path) || !validate_spirv_binary(fragment_opt_spv_path) {
-    diag.message = "SPIR-V backend: pair optimized SPIR-V validation failed.";
+  if !validate_spirv_binary(linked_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-val failed for linked pair module.";
     return "", false, diag;
   }
   if timings_totals timings_totals.spv_validate_s += to_float64_seconds(current_time_monotonic() - t0);
-  vertex_use_argument_buffer := false;
-  fragment_use_argument_buffer := false;
   t0 = current_time_monotonic();
-  if !emit_spirv_cross_target_source(vertex_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, vertex_use_argument_buffer) {
+  if !emit_spirv_cross_target_source(linked_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, false, source_entry_name="VertexMain") {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
   }
-  if !emit_spirv_cross_target_source(fragment_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path, fragment_use_argument_buffer) {
+  if !emit_spirv_cross_target_source(linked_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path, false, source_entry_name="FragmentMain") {
     diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
     return "", false, diag;
   }
   if timings_totals timings_totals.spv_cross_s += to_float64_seconds(current_time_monotonic() - t0);
+
   t0 = current_time_monotonic();
   vertex_source, v_ok := read_entire_file(vertex_output_path);
   fragment_source, f_ok := read_entire_file(fragment_output_path);
@@ -1182,6 +1641,9 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   fragment_source = ir_metal_suffix_descriptor_set_types(fragment_source, "frag");
   vertex_source = ir_mark_metal_device_pointers_const(vertex_source);
   fragment_source = ir_mark_metal_device_pointers_const(fragment_source);
+  existing_struct_names: Table(string, bool);
+  ir_metal_collect_struct_names(vertex_source, *existing_struct_names);
+  fragment_source = ir_metal_remove_duplicate_structs(fragment_source, *existing_struct_names);
 
   merged_source := tprint("%\n\n%", vertex_source, ir_strip_metal_preamble_for_pair_merge(fragment_source));
   merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));
@@ -1752,6 +2214,8 @@ PP :: #import "Program_Print";
 #import "String";
 #import "Math";
 #import "Hash_Table";
+#import "Thread";
+#import "System";
 
 #scope_file
 

@@ -3955,7 +3955,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   append(*sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", id_text(state.id_extinst)));
   append(*sb, "               OpMemoryModel PhysicalStorageBuffer64 GLSL450\n");
   entry_point_sb: String_Builder;
-  append(*entry_point_sb, tprint("               OpEntryPoint % % \"main\"", entry_model, id_text(state.id_main)));
+  append(*entry_point_sb, tprint("               OpEntryPoint % % \"%\"", entry_model, id_text(state.id_main), entry_name));
   for state.input_vars append(*entry_point_sb, " ", id_text(it.var_id));
   for state.output_vars append(*entry_point_sb, " ", id_text(it.var_id));
   append(*entry_point_sb, " ", id_text(root_var_id));
@@ -4305,7 +4305,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   append(*sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", id_text(state.id_extinst)));
   append(*sb, "               OpMemoryModel Logical GLSL450\n");
   entry_point_sb: String_Builder;
-  append(*entry_point_sb, tprint("               OpEntryPoint % % \"main\"", entry_model, id_text(state.id_main)));
+  append(*entry_point_sb, tprint("               OpEntryPoint % % \"%\"", entry_model, id_text(state.id_main), entry_name));
   for state.input_vars append(*entry_point_sb, " ", id_text(it.var_id));
   for state.output_vars append(*entry_point_sb, " ", id_text(it.var_id));
   for state.buffers append(*entry_point_sb, " ", id_text(it.var_id));
@@ -4447,7 +4447,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   append(*sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", id_text(state.id_extinst)));
   append(*sb, "               OpMemoryModel Logical GLSL450\n");
   entry_point_sb: String_Builder;
-  append(*entry_point_sb, tprint("               OpEntryPoint GLCompute % \"main\" %", id_text(state.id_main), id_text(state.id_gl_global_invocation_id)));
+  append(*entry_point_sb, tprint("               OpEntryPoint GLCompute % \"%\" %", id_text(state.id_main), shader.entry_name, id_text(state.id_gl_global_invocation_id)));
   for state.buffers append(*entry_point_sb, " ", id_text(it.var_id));
   append(*entry_point_sb, "\n");
   append(*sb, builder_to_string(*entry_point_sb));
