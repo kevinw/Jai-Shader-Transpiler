@@ -481,6 +481,27 @@ ir_prepend_generated_comment :: (target_source: string, source_jai_file: string,
   return tprint("// Generated from % with (<<%>>)\n%", jai_file, pipeline_label, target_source);
 }
 
+normalize_vertex_ir :: (shader: *IR_Vertex_Shader) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(shader != null);
+  base := cast(*IR_Shader) shader;
+  ok, diag := normalize_shader(base);
+  return ok, diag;
+}
+
+normalize_fragment_ir :: (shader: *IR_Fragment_Shader) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(shader != null);
+  base := cast(*IR_Shader) shader;
+  ok, diag := normalize_shader(base);
+  return ok, diag;
+}
+
+normalize_compute_ir :: (shader: *IR_Compute_Shader) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(shader != null);
+  base := cast(*IR_Shader) shader;
+  ok, diag := normalize_shader(base);
+  return ok, diag;
+}
+
 write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directives := false) -> (string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   if !ir_supports_single_context(ctx) {
@@ -511,6 +532,8 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
       #if VERBOSE log("IR lowering failed for %", ctx.name);
       return "", false, lowered_diag;
     }
+    normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
+    if !normalized return "", false, normalize_diag;
     emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
     if !emitted {
       #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
@@ -527,6 +550,8 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
       #if VERBOSE log("IR lowering failed for %", ctx.name);
       return "", false, lowered_diag;
     }
+    normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
+    if !normalized return "", false, normalize_diag;
     emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
     if !emitted {
       #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
@@ -543,6 +568,8 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
       #if VERBOSE log("IR lowering failed for %", ctx.name);
       return "", false, lowered_diag;
     }
+    normalized, normalize_diag := normalize_compute_ir(*ir_compute);
+    if !normalized return "", false, normalize_diag;
     emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
     if !emitted {
       #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
@@ -697,6 +724,8 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   if ctx.type == .Vertex {
     ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
+    if !normalized return "", "", false, normalize_diag;
     emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
     if !emitted {
       diag.message = tprint("IR->Slang emission failed for vertex shader '%'.", ctx.name);
@@ -711,6 +740,8 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   } else if ctx.type == .Fragment {
     ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
+    if !normalized return "", "", false, normalize_diag;
     emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
     if !emitted {
       diag.message = tprint("IR->Slang emission failed for fragment shader '%'.", ctx.name);
@@ -725,6 +756,8 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   } else {
     ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    normalized, normalize_diag := normalize_compute_ir(*ir_compute);
+    if !normalized return "", "", false, normalize_diag;
     emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
     if !emitted {
       diag.message = tprint("IR->Slang emission failed for compute shader '%'.", ctx.name);
@@ -779,14 +812,20 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   if ctx.type == .Compute {
     ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    normalized, normalize_diag := normalize_compute_ir(*ir_compute);
+    if !normalized return "", "", false, normalize_diag;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
   } else if ctx.type == .Vertex {
     ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
+    if !normalized return "", "", false, normalize_diag;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
   } else if ctx.type == .Fragment {
     ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
+    if !normalized return "", "", false, normalize_diag;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
   } else {
     diag.message = "SPIR-V backend: unsupported shader stage.";
@@ -926,6 +965,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     }
     return "", false, vertex_diag;
   }
+  vertex_normalized, vertex_normalize_diag := normalize_vertex_ir(*ir_vertex);
+  if !vertex_normalized return "", false, vertex_normalize_diag;
 
   ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(.{name=fragment_ctx.name, header=fragment_ctx.main_fn.header});
   if !fragment_ok {
@@ -935,6 +976,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     }
     return "", false, fragment_diag;
   }
+  fragment_normalized, fragment_normalize_diag := normalize_fragment_ir(*ir_fragment);
+  if !fragment_normalized return "", false, fragment_normalize_diag;
 
   vertex_spvasm, fragment_spvasm, pair_spvasm_ok, pair_spvasm_diag := emit_ir_graphics_pair_to_spirv_text_branch(ir_vertex, ir_fragment);
   if !pair_spvasm_ok {
@@ -1034,8 +1077,12 @@ write_shader_pair_ir_slang :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
   ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(.{name=vertex_ctx.name, header=vertex_ctx.main_fn.header});
   if !vertex_ok return "", false, vertex_diag;
+  vertex_normalized, vertex_normalize_diag := normalize_vertex_ir(*ir_vertex);
+  if !vertex_normalized return "", false, vertex_normalize_diag;
   ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(.{name=fragment_ctx.name, header=fragment_ctx.main_fn.header});
   if !fragment_ok return "", false, fragment_diag;
+  fragment_normalized, fragment_normalize_diag := normalize_fragment_ir(*ir_fragment);
+  if !fragment_normalized return "", false, fragment_normalize_diag;
 
   slang_source, emitted := emit_ir_graphics_pair_to_slang(ir_vertex, ir_fragment);
   if !emitted {

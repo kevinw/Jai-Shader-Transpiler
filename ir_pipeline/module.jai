@@ -14,6 +14,7 @@ append :: inline (builder: *String_Builder, strings: ..string) {
 #load "external_toolchain.jai";
 #load "ir_shared.jai";
 #load "ir_lowering.jai";
+#load "ir_normalize.jai";
 #load "spirv_text_backend.jai";
 #load "spv_types.jai";
 

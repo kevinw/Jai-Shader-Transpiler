@@ -1516,14 +1516,28 @@ eval_inline_helper_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Fun
   diag: IR_Diagnostic;
   if !helper return 0, .UNKNOWN, false, false, diag;
 
-  eval_from_index :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, return_kind: IR_SPV_Gen_Type, stmt_index: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
+  eval_return_block_value :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, return_kind: IR_SPV_Gen_Type, block: *IR_Block) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
     diag: IR_Diagnostic;
-    if stmt_index >= helper.body.statements.count {
-      diag.message = tprint("SPIR-V backend: helper '%' has no return statement.", helper.name);
-      return 0, .UNKNOWN, false, true, diag;
+    if !block || block.statements.count == 0 return 0, .UNKNOWN, false, false, diag;
+
+    // Canonical helper-return block:
+    //   <side-effect statements...>
+    //   return X;
+    // or:
+    //   <side-effect statements...>
+    //   if (...) { ...return... } else { ...return... }
+    for i: 0..block.statements.count-2 {
+      pre_stmt := *block.statements[i];
+      pre_ok, pre_terminated, pre_diag := emit_stmt(s, pre_stmt);
+      if !pre_ok return 0, .UNKNOWN, false, true, pre_diag;
+      if pre_terminated {
+        diag.message = tprint("SPIR-V backend: helper '%' has unsupported early control-flow termination in return prelude.", helper.name);
+        return 0, .UNKNOWN, false, true, diag;
+      }
     }
 
-    stmt := *helper.body.statements[stmt_index];
+    stmt := *block.statements[block.statements.count-1];
+
     if stmt.kind == .RETURN {
       if !stmt.return_expr {
         diag.message = tprint("SPIR-V backend: helper '%' must return a value.", helper.name);
@@ -1539,59 +1553,50 @@ eval_inline_helper_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Fun
       return coerced_id, coerced_type, true, true, diag;
     }
 
-    if stmt.kind == .IF && stmt.if_then && !stmt.if_else {
-      if stmt.if_then.statements.count == 1 && stmt.if_then.statements[0].kind == .RETURN && stmt.if_then.statements[0].return_expr {
-        cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.if_condition);
-        if !cond_ok return 0, .UNKNOWN, false, true, cond_diag;
-        if cond_type != .BOOL {
-          diag.message = tprint("SPIR-V backend: helper '%' if-condition must lower to bool.", helper.name);
-          return 0, .UNKNOWN, false, true, diag;
-        }
-
-        then_stmt := stmt.if_then.statements[0];
-        then_raw_id, then_raw_type, then_raw_ok, then_raw_diag := emit_expr(s, then_stmt.return_expr);
-        if !then_raw_ok return 0, .UNKNOWN, false, true, then_raw_diag;
-        then_id, then_type, then_ok, then_diag := coerce_to_exact_kind(s, then_raw_id, then_raw_type, return_kind);
-        if !then_ok {
-          if then_diag.message.count == 0 then_diag.message = tprint("SPIR-V backend: helper '%' return expression must lower to %.", helper.name, return_kind);
-          return 0, .UNKNOWN, false, true, then_diag;
-        }
-
-        else_id, else_type, else_ok, else_handled, else_diag := eval_from_index(s, helper, return_kind, stmt_index + 1);
-        if !else_handled return 0, .UNKNOWN, false, false, diag;
-        if !else_ok return 0, .UNKNOWN, false, true, else_diag;
-        if then_type != else_type {
-          diag.message = tprint("SPIR-V backend: helper '%' if-return branches must resolve to same type.", helper.name);
-          return 0, .UNKNOWN, false, true, diag;
-        }
-        result_type_id := type_id_from_kind(s, then_type);
-        if result_type_id == 0 {
-          diag.message = tprint("SPIR-V backend: helper '%' return type % is unsupported for OpSelect.", helper.name, then_type);
-          return 0, .UNKNOWN, false, true, diag;
-        }
-        selected := new_id(s);
-        add_op(s, tprint("         % = OpSelect % % % %",
-                         id_text(selected),
-                         id_text(result_type_id),
-                         id_text(cond_id),
-                         id_text(then_id),
-                         id_text(else_id)));
-        return selected, then_type, true, true, diag;
+    if stmt.kind == .IF && stmt.if_then && stmt.if_else {
+      cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.if_condition);
+      if !cond_ok return 0, .UNKNOWN, false, true, cond_diag;
+      if cond_type != .BOOL {
+        diag.message = tprint("SPIR-V backend: helper '%' if-condition must lower to bool.", helper.name);
+        return 0, .UNKNOWN, false, true, diag;
       }
+
+      then_id, then_type, then_ok, then_handled, then_diag := eval_return_block_value(s, helper, return_kind, stmt.if_then);
+      if !then_handled return 0, .UNKNOWN, false, false, diag;
+      if !then_ok return 0, .UNKNOWN, false, true, then_diag;
+
+      else_id, else_type, else_ok, else_handled, else_diag := eval_return_block_value(s, helper, return_kind, stmt.if_else);
+      if !else_handled return 0, .UNKNOWN, false, false, diag;
+      if !else_ok return 0, .UNKNOWN, false, true, else_diag;
+      if then_type != else_type {
+        diag.message = tprint("SPIR-V backend: helper '%' if-return branches must resolve to same type.", helper.name);
+        return 0, .UNKNOWN, false, true, diag;
+      }
+      result_type_id := type_id_from_kind(s, then_type);
+      if result_type_id == 0 {
+        diag.message = tprint("SPIR-V backend: helper '%' return type % is unsupported for OpSelect.", helper.name, then_type);
+        return 0, .UNKNOWN, false, true, diag;
+      }
+      selected := new_id(s);
+      add_op(s, tprint("         % = OpSelect % % % %",
+                       id_text(selected),
+                       id_text(result_type_id),
+                       id_text(cond_id),
+                       id_text(then_id),
+                       id_text(else_id)));
+      return selected, then_type, true, true, diag;
     }
 
-    stmt_ok, stmt_terminated, stmt_diag := emit_stmt(s, stmt);
-    if !stmt_ok return 0, .UNKNOWN, false, true, stmt_diag;
-    if stmt_terminated {
-      diag.message = tprint("SPIR-V backend: helper '%' has unsupported early control-flow termination.", helper.name);
-      return 0, .UNKNOWN, false, true, diag;
-    }
-    value_id, value_type, ok, handled, next_diag := eval_from_index(s, helper, return_kind, stmt_index + 1);
-    return value_id, value_type, ok, handled, next_diag;
+    return 0, .UNKNOWN, false, false, diag;
   }
 
-  value_id, value_type, ok, handled, chain_diag := eval_from_index(s, helper, return_kind, 0);
-  return value_id, value_type, ok, handled, chain_diag;
+  // Canonical helper bodies:
+  //   <prelude...>; return X;
+  //   <prelude...>; if (...) ...return... else ...return...
+  value_id, value_type, ok, handled, chain_diag := eval_return_block_value(s, helper, return_kind, *helper.body);
+  if handled return value_id, value_type, ok, true, chain_diag;
+  diag.message = tprint("SPIR-V backend: helper '%' body is not in canonical return form (normalize pass required).", helper.name);
+  return 0, .UNKNOWN, false, true, diag;
 }
 
 eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
@@ -1939,94 +1944,149 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
     return false, diag;
   }
 
-  got_return := false;
-  for *helper.body.statements {
-    stmt := it;
-    if stmt.kind == .RETURN {
-      if !stmt.return_expr {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' must return a struct value.", helper.name);
+  apply_return_expr_to_out :: (s: *IR_SPV_Gen_State, helper_name: string, out_struct: *IR_SPV_Gen_Local_Struct, out_struct_type: string, dst_name: string, expr: *IR_Expr) -> (ok: bool, handled: bool, diag: IR_Diagnostic) {
+    diag: IR_Diagnostic;
+    if !expr {
+      diag.message = tprint("SPIR-V backend: helper '%' must return a struct value.", helper_name);
+      return false, true, diag;
+    }
+    if expr.kind != .IDENT return false, false, diag;
+    dst_struct := find_local_struct(s, dst_name);
+    if !dst_struct dst_struct = out_struct;
+    src_struct := find_local_struct(s, expr.text);
+    if !src_struct {
+      diag.message = tprint("SPIR-V backend: helper '%' return identifier '%' is not a local struct value.", helper_name, expr.text);
+      return false, true, diag;
+    }
+    if src_struct.type_name != out_struct_type {
+      diag.message = tprint("SPIR-V backend: helper '%' return struct type mismatch ('%' vs '%').", helper_name, src_struct.type_name, out_struct_type);
+      return false, true, diag;
+    }
+    copy_ok, copy_diag := copy_local_struct_fields(s, dst_struct, src_struct);
+    if !copy_ok return false, true, copy_diag;
+    return true, true, diag;
+  }
+
+  select_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, then_src: *IR_SPV_Gen_Local_Struct, else_src: *IR_SPV_Gen_Local_Struct, cond_id: s64) -> (ok: bool, diag: IR_Diagnostic) {
+    diag: IR_Diagnostic;
+    if !dst || !then_src || !else_src {
+      diag.message = "SPIR-V backend: null struct while selecting return fields.";
+      return false, diag;
+    }
+    if dst.type_name != then_src.type_name || dst.type_name != else_src.type_name {
+      diag.message = tprint("SPIR-V backend: struct select type mismatch ('%', '%', '%').", dst.type_name, then_src.type_name, else_src.type_name);
+      return false, diag;
+    }
+
+    for dst.fields {
+      then_field := find_local_struct_field(then_src, it.name);
+      else_field := find_local_struct_field(else_src, it.name);
+      if !then_field || !else_field {
+        diag.message = tprint("SPIR-V backend: selected struct '%' missing field '%'.", dst.type_name, it.name);
         return false, diag;
       }
 
-      if stmt.return_expr.kind == .IDENT {
-        ret_struct := find_local_struct(s, stmt.return_expr.text);
-        if !ret_struct {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          diag.message = tprint("SPIR-V backend: helper '%' return identifier '%' is not a struct.", helper.name, stmt.return_expr.text);
-          return false, diag;
-        }
-        dst_struct := find_local_struct(s, out_struct_name);
-        if !dst_struct dst_struct = out_struct;
-        copy_ok, copy_diag := copy_local_struct_fields(s, dst_struct, ret_struct);
-        if !copy_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return false, copy_diag;
-        }
-        got_return = true;
-        break;
+      if it.type == .STRUCT {
+        dst_nested := find_local_struct(s, it.nested_struct_name);
+        then_nested := find_local_struct(s, then_field.nested_struct_name);
+        else_nested := find_local_struct(s, else_field.nested_struct_name);
+        nested_ok, nested_diag := select_struct_fields(s, dst_nested, then_nested, else_nested, cond_id);
+        if !nested_ok return false, nested_diag;
+        continue;
       }
 
-      if stmt.return_expr.kind == .CONSTRUCTOR && stmt.return_expr.text == out_struct_type {
-        dst_struct := find_local_struct(s, out_struct_name);
-        if !dst_struct dst_struct = out_struct;
-        if stmt.return_expr.args.count != dst_struct.fields.count {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          diag.message = tprint("SPIR-V backend: helper '%' return constructor field count mismatch.", helper.name);
-          return false, diag;
-        }
-        for dst_struct.fields {
-          value_id, value_type, value_ok, value_diag := emit_expr(s, stmt.return_expr.args[it_index]);
-          if !value_ok {
-            s.locals.count = local_count_before;
-            s.local_structs.count = local_struct_count_before;
-            return false, value_diag;
-          }
-          if value_type != it.type {
-            s.locals.count = local_count_before;
-            s.local_structs.count = local_struct_count_before;
-            diag.message = tprint("SPIR-V backend: helper '%' return constructor field '%' type mismatch.", helper.name, it.name);
-            return false, diag;
-          }
-          add_op(s, tprint("               OpStore % %",
-                           id_text(it.ptr_id),
-                           id_text(value_id)));
-        }
-        got_return = true;
-        break;
+      if then_field.type != it.type || else_field.type != it.type {
+        diag.message = tprint("SPIR-V backend: selected struct field '%' type mismatch.", it.name);
+        return false, diag;
       }
 
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      diag.message = tprint("SPIR-V backend: helper '%' return expression kind % is unsupported for struct return.", helper.name, stmt.return_expr.kind);
-      return false, diag;
+      type_id := type_id_from_kind(s, it.type);
+      if type_id == 0 {
+        diag.message = tprint("SPIR-V backend: selected struct field '%' has unsupported type %.", it.name, it.type);
+        return false, diag;
+      }
+      then_val := new_id(s);
+      else_val := new_id(s);
+      emit_load(s, then_val, type_id, then_field.ptr_id, then_field.type);
+      emit_load(s, else_val, type_id, else_field.ptr_id, else_field.type);
+      selected := new_id(s);
+      add_op(s, tprint("         % = OpSelect % % % %",
+                       id_text(selected),
+                       id_text(type_id),
+                       id_text(cond_id),
+                       id_text(then_val),
+                       id_text(else_val)));
+      emit_store(s, it.ptr_id, selected, it.type);
     }
 
-    stmt_ok, stmt_terminated, stmt_diag := emit_stmt(s, stmt);
-    if !stmt_ok {
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      return false, stmt_diag;
-    }
-    if stmt_terminated {
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      diag.message = tprint("SPIR-V backend: helper '%' has unsupported early control-flow termination.", helper.name);
-      return false, diag;
-    }
+    return true, diag;
   }
 
+  eval_struct_return_block :: (s: *IR_SPV_Gen_State, helper_name: string, out_struct: *IR_SPV_Gen_Local_Struct, out_struct_type: string, dst_name: string, block: *IR_Block) -> (ok: bool, handled: bool, diag: IR_Diagnostic) {
+    diag: IR_Diagnostic;
+    if !block || block.statements.count == 0 return false, false, diag;
+
+    // Canonical struct-return block:
+    //   <side-effect statements...>
+    //   return <struct expr>;
+    // or:
+    //   <side-effect statements...>
+    //   if (...) { ...return struct... } else { ...return struct... }
+    for i: 0..block.statements.count-2 {
+      pre_stmt := *block.statements[i];
+      pre_ok, pre_terminated, pre_diag := emit_stmt(s, pre_stmt);
+      if !pre_ok return false, true, pre_diag;
+      if pre_terminated {
+        diag.message = tprint("SPIR-V backend: helper '%' has unsupported early control-flow termination in struct-return prelude.", helper_name);
+        return false, true, diag;
+      }
+    }
+
+    stmt := *block.statements[block.statements.count-1];
+
+    if stmt.kind == .RETURN {
+      ok, handled, diag := apply_return_expr_to_out(s, helper_name, out_struct, out_struct_type, dst_name, stmt.return_expr);
+      return ok, handled, diag;
+    }
+
+    if stmt.kind == .IF && stmt.if_then && stmt.if_else {
+      cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.if_condition);
+      if !cond_ok return false, true, cond_diag;
+      if cond_type != .BOOL {
+        diag.message = tprint("SPIR-V backend: helper '%' if-condition must lower to bool.", helper_name);
+        return false, true, diag;
+      }
+
+      then_tmp_name := tprint("__ret_then_%", new_id(s));
+      else_tmp_name := tprint("__ret_else_%", new_id(s));
+      then_tmp, then_tmp_ok, then_tmp_diag := alloc_local_struct(s, then_tmp_name, out_struct_type);
+      if !then_tmp_ok return false, true, then_tmp_diag;
+      else_tmp, else_tmp_ok, else_tmp_diag := alloc_local_struct(s, else_tmp_name, out_struct_type);
+      if !else_tmp_ok return false, true, else_tmp_diag;
+
+      then_ok, then_handled, then_diag := eval_struct_return_block(s, helper_name, out_struct, out_struct_type, then_tmp_name, stmt.if_then);
+      else_ok, else_handled, else_diag := eval_struct_return_block(s, helper_name, out_struct, out_struct_type, else_tmp_name, stmt.if_else);
+
+      if !then_handled || !else_handled return false, false, diag;
+      if !then_ok return false, true, then_diag;
+      if !else_ok return false, true, else_diag;
+
+      dst_struct := find_local_struct(s, dst_name);
+      if !dst_struct dst_struct = out_struct;
+      select_ok, select_diag := select_struct_fields(s, dst_struct, then_tmp, else_tmp, cond_id);
+      if !select_ok return false, true, select_diag;
+      return true, true, diag;
+    }
+
+    return false, false, diag;
+  }
+
+  fast_ok, fast_handled, fast_diag := eval_struct_return_block(s, helper.name, out_struct, out_struct_type, out_struct_name, *helper.body);
   s.locals.count = local_count_before;
   s.local_structs.count = local_struct_count_before;
-  if !got_return {
-    diag.message = tprint("SPIR-V backend: helper '%' has no return statement.", helper.name);
-    return false, diag;
-  }
-  return true, diag;
+  if fast_handled return fast_ok, fast_diag;
+  diag.message = tprint("SPIR-V backend: helper '%' body is not in canonical struct-return form (normalize pass required).", helper.name);
+  return false, diag;
 }
 
 // -----------------------------------------------------------------------------

@@ -15,26 +15,33 @@ IR_Struct :: struct {
   fields: [..] IR_Field;
 }
 
-IR_Vertex_Shader :: struct {
+IR_Shader_Kind :: enum {
+  Vertex;
+  Fragment;
+  Compute;
+}
+
+IR_Shader :: struct {
   source_name: string;
   entry_name: string;
-  input: IR_Struct;
-  output: IR_Struct;
+  kind: IR_Shader_Kind;
   extra_structs: [..] IR_Struct;
-  args: [..] IR_Function_Arg;
   helpers: [..] IR_Helper_Function;
   body: IR_Block;
 }
 
-IR_Fragment_Shader :: struct {
-  source_name: string;
-  entry_name: string;
+IR_Vertex_Shader :: struct {
+  using #as ir_shader: IR_Shader;
   input: IR_Struct;
   output: IR_Struct;
-  extra_structs: [..] IR_Struct;
   args: [..] IR_Function_Arg;
-  helpers: [..] IR_Helper_Function;
-  body: IR_Block;
+}
+
+IR_Fragment_Shader :: struct {
+  using #as ir_shader: IR_Shader;
+  input: IR_Struct;
+  output: IR_Struct;
+  args: [..] IR_Function_Arg;
 }
 
 IR_Compute_Buffer :: struct {
@@ -60,13 +67,9 @@ IR_Helper_Function :: struct {
 }
 
 IR_Compute_Shader :: struct {
-  source_name: string;
-  entry_name: string;
+  using #as ir_shader: IR_Shader;
   input: IR_Struct;
-  extra_structs: [..] IR_Struct;
   buffers: [..] IR_Compute_Buffer;
-  helpers: [..] IR_Helper_Function;
-  body: IR_Block;
 }
 
 IR_Using_Source :: struct {
@@ -1231,6 +1234,7 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Ve
 
   out.source_name = ctx.name;
   out.entry_name = "VertexMain";
+  out.kind = .Vertex;
   out.input = in_struct;
   out.output = out_struct;
   for i: 1..ctx.header.arguments.count-1 {
@@ -1328,6 +1332,7 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
 
   out.source_name = ctx.name;
   out.entry_name = "FragmentMain";
+  out.kind = .Fragment;
   out.input = in_struct;
   out.output = out_struct;
   for i: 1..ctx.header.arguments.count-1 {
@@ -1409,6 +1414,7 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
 
   out.source_name = ctx.name;
   out.entry_name = "ComputeMain";
+  out.kind = .Compute;
   out.input = input_struct;
 
   for i: 1..header.arguments.count-1 {

@@ -1,0 +1,152 @@
+// Canonicalize IR into a smaller set of control-flow shapes so backends need fewer special cases.
+#scope_export
+
+normalize_shader :: (shader: *IR_Shader) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(shader != null);
+  diag: IR_Diagnostic;
+
+  for *shader.helpers {
+    normalize_value_return_if_chains_in_block(*it.body);
+    normalize_helper_struct_returns_to_temp(it);
+  }
+  normalize_value_return_if_chains_in_block(*shader.body);
+  return true, diag;
+}
+
+#scope_module
+
+block_is_single_value_return :: (block: *IR_Block) -> bool {
+  if !block return false;
+  if block.statements.count != 1 return false;
+  stmt := block.statements[0];
+  return stmt.kind == .RETURN && stmt.return_expr != null;
+}
+
+normalize_stmt_children :: (stmt: *IR_Stmt) -> bool {
+  assert(stmt != null);
+  changed := false;
+  if stmt.if_then changed = normalize_value_return_if_chains_in_block(stmt.if_then) || changed;
+  if stmt.if_else changed = normalize_value_return_if_chains_in_block(stmt.if_else) || changed;
+  for stmt.switch_cases if it.body changed = normalize_value_return_if_chains_in_block(it.body) || changed;
+  if stmt.for_body changed = normalize_value_return_if_chains_in_block(stmt.for_body) || changed;
+  if stmt.while_body changed = normalize_value_return_if_chains_in_block(stmt.while_body) || changed;
+  return changed;
+}
+
+normalize_value_return_if_chains_in_block :: (block: *IR_Block) -> bool {
+  assert(block != null);
+  changed_any := false;
+
+  changed_in_pass := true;
+  while changed_in_pass {
+    changed_in_pass = false;
+    i: s64 = 0;
+    while i < block.statements.count {
+      stmt := *block.statements[i];
+      if normalize_stmt_children(stmt) changed_any = true;
+
+      // Canonicalize:
+      //   if (cond) return X;
+      //   tail...
+      // into:
+      //   if (cond) return X;
+      //   else { tail... }
+      if stmt.kind == .IF &&
+         stmt.if_else == null &&
+         block_is_single_value_return(stmt.if_then) &&
+         i + 1 < block.statements.count {
+        else_block := New(IR_Block);
+        for j: i+1..block.statements.count-1 array_add(*else_block.statements, block.statements[j]);
+        stmt.if_else = else_block;
+        block.statements.count = i + 1;
+        changed_in_pass = true;
+        changed_any = true;
+        break;
+      }
+
+      i += 1;
+    }
+  }
+
+  return changed_any;
+}
+
+is_struct_like_type_name :: (name: string) -> bool {
+  if name.count == 0 return false;
+  if name == {
+    case "void";
+    case "bool";
+    case "float";
+    case "float2";
+    case "float3";
+    case "float4";
+    case "float2x2";
+    case "Matrix2";
+    case "int";
+    case "s32";
+    case "uint";
+    case "u32";
+    case "int64";
+    case "s64";
+    case "uint64";
+    case "u64";
+      return false;
+  }
+  return true;
+}
+
+make_ident_expr :: (name: string) -> *IR_Expr {
+  ident := New(IR_Expr);
+  ident.kind = .IDENT;
+  ident.text = name;
+  return ident;
+}
+
+normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type_name: string, temp_counter: *s64) -> bool {
+  assert(block != null);
+  assert(temp_counter != null);
+  changed := false;
+
+  i: s64 = 0;
+  while i < block.statements.count {
+    stmt := *block.statements[i];
+    if stmt.if_then changed = normalize_struct_return_exprs_in_block(stmt.if_then, return_type_name, temp_counter) || changed;
+    if stmt.if_else changed = normalize_struct_return_exprs_in_block(stmt.if_else, return_type_name, temp_counter) || changed;
+    for stmt.switch_cases if it.body changed = normalize_struct_return_exprs_in_block(it.body, return_type_name, temp_counter) || changed;
+    if stmt.for_body changed = normalize_struct_return_exprs_in_block(stmt.for_body, return_type_name, temp_counter) || changed;
+    if stmt.while_body changed = normalize_struct_return_exprs_in_block(stmt.while_body, return_type_name, temp_counter) || changed;
+
+    if stmt.kind == .RETURN && stmt.return_expr {
+      temp_name := tprint("__ret_struct_%", temp_counter.*);
+      temp_counter.* += 1;
+
+      decl_stmt: IR_Stmt;
+      decl_stmt.kind = .DECL;
+      decl_stmt.decl_type_name = return_type_name;
+      decl_stmt.decl_name = temp_name;
+      decl_stmt.decl_init = stmt.return_expr;
+
+      ret_stmt: IR_Stmt;
+      ret_stmt.kind = .RETURN;
+      ret_stmt.return_expr = make_ident_expr(temp_name);
+
+      block.statements[i] = decl_stmt;
+      array_insert_at(*block.statements, ret_stmt, i + 1);
+      changed = true;
+      i += 1;
+    }
+
+    i += 1;
+  }
+
+  return changed;
+}
+
+normalize_helper_struct_returns_to_temp :: (helper: *IR_Helper_Function) -> bool {
+  assert(helper != null);
+  if !is_struct_like_type_name(helper.return_type_name) return false;
+  counter: s64 = 0;
+  return normalize_struct_return_exprs_in_block(*helper.body, helper.return_type_name, *counter);
+}
+
+#scope_file

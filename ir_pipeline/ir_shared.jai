@@ -192,11 +192,15 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
                          allow_return_value: bool,
                          active_usings: *[..] IR_Using_Source,
                          active_aliases: *[..] IR_Decl_Alias,
+                         active_defer_entries: *[..] IR_Active_Defer,
+                         scope_depth: s64,
+                         nearest_loop_scope_depth: s64,
                          state: *IR_Lowering_State) -> bool {
   assert(stmt != null);
   assert(out_block != null);
   assert(active_usings != null);
   assert(active_aliases != null);
+  assert(active_defer_entries != null);
   assert(state != null);
 
   if stmt.kind == {
@@ -270,7 +274,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
             if !case_cond_ok return false;
             sw_case.condition = lowered_case_cond;
           }
-          if !ir_shared_lower_block(case_node.then_block, sw_case.body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*) return false;
+          if !ir_shared_lower_block(case_node.then_block, sw_case.body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
           array_add(*out_stmt.switch_cases, sw_case);
         }
 
@@ -288,10 +292,10 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt.kind = .IF;
       out_stmt.if_condition = cond;
       out_stmt.if_then = New(IR_Block);
-      if !ir_shared_lower_block(op.then_block, out_stmt.if_then, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*) return false;
+      if !ir_shared_lower_block(op.then_block, out_stmt.if_then, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
       if op.else_block {
         out_stmt.if_else = New(IR_Block);
-        if !ir_shared_lower_block(op.else_block, out_stmt.if_else, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*) return false;
+        if !ir_shared_lower_block(op.else_block, out_stmt.if_else, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
       }
       array_add(*out_block.statements, out_stmt);
       return true;
@@ -325,7 +329,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         out_stmt.for_step = "-= 1";
       }
       out_stmt.for_body = New(IR_Block);
-      if !ir_shared_lower_block(op.block, out_stmt.for_body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*) return false;
+      if !ir_shared_lower_block(op.block, out_stmt.for_body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, scope_depth + 1) return false;
       array_add(*out_block.statements, out_stmt);
       return true;
     }
@@ -338,7 +342,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt.kind = .WHILE;
       out_stmt.while_condition = cond;
       out_stmt.while_body = New(IR_Block);
-      if !ir_shared_lower_block(op.block, out_stmt.while_body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*) return false;
+      if !ir_shared_lower_block(op.block, out_stmt.while_body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, scope_depth + 1) return false;
       array_add(*out_block.statements, out_stmt);
       return true;
     }
@@ -352,6 +356,11 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         ir_set_diagnostic(state, "IR lowering: unsupported loop-control statement", stmt);
         return false;
       }
+      if nearest_loop_scope_depth < 0 {
+        ir_set_diagnostic(state, "IR lowering: break/continue outside of loop is unsupported", stmt);
+        return false;
+      }
+      ir_shared_emit_deferred_for_exit(out_block, active_defer_entries.*, nearest_loop_scope_depth);
       array_add(*out_block.statements, out_stmt);
       return true;
     }
@@ -372,7 +381,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       scoped_aliases: [..] IR_Decl_Alias;
       for active_usings.* array_add(*scoped_usings, it);
       for active_aliases.* array_add(*scoped_aliases, it);
-      if !ir_shared_lower_block(nested_block, out_block, input_fields, output_fields, allow_return_value, state, scoped_usings, scoped_aliases) return false;
+      if !ir_shared_lower_block(nested_block, out_block, input_fields, output_fields, allow_return_value, state, scoped_usings, scoped_aliases, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
       return true;
     }
 
@@ -440,6 +449,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
 
             out_stmt.return_expr = ir_expr_new(.IDENT);
             out_stmt.return_expr.text = "o";
+            ir_shared_emit_deferred_for_exit(out_block, active_defer_entries.*, 0);
             array_add(*out_block.statements, out_stmt);
             return true;
           }
@@ -452,6 +462,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         ir_set_diagnostic(state, "IR lowering: multi-value return is unsupported", stmt);
         return false;
       }
+      ir_shared_emit_deferred_for_exit(out_block, active_defer_entries.*, 0);
       array_add(*out_block.statements, out_stmt);
       return true;
     }
@@ -509,6 +520,37 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
   return false;
 }
 
+ir_shared_append_deferred_statements :: (out_block: *IR_Block, defer_blocks: [] IR_Block) {
+  assert(out_block != null);
+  if defer_blocks.count == 0 return;
+  i := defer_blocks.count - 1;
+  while i >= 0 {
+    defer_block := defer_blocks[i];
+    for defer_block.statements array_add(*out_block.statements, it);
+    if i == 0 break;
+    i -= 1;
+  }
+}
+
+IR_Active_Defer :: struct {
+  scope_depth: s64;
+  block: IR_Block;
+}
+
+ir_shared_emit_deferred_for_exit :: (out_block: *IR_Block, active_defer_entries: [] IR_Active_Defer, min_scope_depth: s64) {
+  assert(out_block != null);
+  if active_defer_entries.count == 0 return;
+  i := active_defer_entries.count - 1;
+  while i >= 0 {
+    entry := active_defer_entries[i];
+    if entry.scope_depth >= min_scope_depth {
+      for entry.block.statements array_add(*out_block.statements, it);
+    }
+    if i == 0 break;
+    i -= 1;
+  }
+}
+
 ir_shared_lower_block :: (block: *Code_Block,
                           out_block: *IR_Block,
                           input_fields: [] string,
@@ -516,7 +558,10 @@ ir_shared_lower_block :: (block: *Code_Block,
                           allow_return_value: bool,
                           state: *IR_Lowering_State,
                           incoming_usings: [] IR_Using_Source = .[],
-                          incoming_aliases: [] IR_Decl_Alias = .[]) -> bool {
+                          incoming_aliases: [] IR_Decl_Alias = .[],
+                          incoming_defer_entries: [] IR_Active_Defer = .[],
+                          scope_depth: s64 = 0,
+                          nearest_loop_scope_depth: s64 = -1) -> bool {
   assert(out_block != null);
   assert(state != null);
   if !block return true;
@@ -524,9 +569,26 @@ ir_shared_lower_block :: (block: *Code_Block,
   for incoming_usings array_add(*active_usings, it);
   active_aliases: [..] IR_Decl_Alias;
   for incoming_aliases array_add(*active_aliases, it);
+  active_defer_entries: [..] IR_Active_Defer;
+  for incoming_defer_entries array_add(*active_defer_entries, it);
+  local_defer_blocks: [..] IR_Block;
   for block.statements {
-    if !ir_shared_lower_stmt(it, out_block, input_fields, output_fields, allow_return_value, *active_usings, *active_aliases, state) return false;
+    if it.kind == .DEFER {
+      defer_node := cast(*Code_Defer) it;
+      if !defer_node.block {
+        ir_set_diagnostic(state, "IR lowering: malformed defer statement (missing block).", it);
+        return false;
+      }
+      defer_block: IR_Block;
+      if !ir_shared_lower_block(defer_node.block, *defer_block, input_fields, output_fields, allow_return_value, state, active_usings, active_aliases, active_defer_entries, scope_depth + 1, nearest_loop_scope_depth) return false;
+      array_add(*active_defer_entries, .{scope_depth = scope_depth, block = defer_block});
+      array_add(*local_defer_blocks, defer_block);
+      continue;
+    }
+
+    if !ir_shared_lower_stmt(it, out_block, input_fields, output_fields, allow_return_value, *active_usings, *active_aliases, *active_defer_entries, scope_depth, nearest_loop_scope_depth, state) return false;
   }
+  ir_shared_append_deferred_statements(out_block, local_defer_blocks);
   return true;
 }
 

@@ -14,6 +14,8 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"with_continue", .Bare},
   {"with_switch", .Bare},
   {"compound_assign", .Bare},
+  {"defer_assign", .Bare},
+  {"defer_block", .Bare},
   {"matrix_math", .Bare},
   {"intrinsics", .Bare},
   {"edge_case_10_float4_component_lvalue", .Bare},
@@ -264,6 +266,31 @@ compound_assign :: (using in: Compute_Semantics_In, values: *u32) {
   v |= 1;
   v &= 255;
   values[idx] = v;
+} @compute_shader
+
+defer_assign :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  foo := values[idx];
+  defer values[idx] = foo;
+  defer foo = 42;
+  foo = foo + idx + 1;
+} @compute_shader
+
+defer_block :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  foo: u32 = 1;
+  bar: u32 = 10;
+  defer {
+    foo *= 42;
+    bar -= 1;
+    values[idx] = foo + bar;
+  }
+  foo = idx + 2;
+  bar = idx + 3;
+  if (idx % 2) == 0 return;
+  values[idx] += 777;
 } @compute_shader
 
 vector_index :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
