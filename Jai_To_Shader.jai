@@ -1564,6 +1564,76 @@ ir_uses_pointer_abi_local :: (args: [] IR_Function_Arg, extra_structs: [] IR_Str
   return false;
 }
 
+ir_semantic_upper_local :: (semantic: string) -> string {
+  if semantic.count == 0 return "";
+  return to_upper_copy(trim(semantic));
+}
+
+ir_vertex_output_field_is_builtin_local :: (field: *IR_Field) -> bool {
+  if !field return false;
+  sem := ir_semantic_upper_local(field.semantic);
+  if sem == "SV_POSITION" || sem == "GL_POSITION" || sem == "POSITION" return true;
+  if sem == "FRAG_COORD" || sem == "GL_FRAGCOORD" return true;
+  return false;
+}
+
+ir_fragment_input_field_is_builtin_local :: (field: *IR_Field) -> bool {
+  if !field return false;
+  if field.name == "gl_FragCoord" return true;
+  sem := ir_semantic_upper_local(field.semantic);
+  if sem == "SV_POSITION" || sem == "POSITION" || sem == "GL_POSITION" || sem == "FRAG_COORD" || sem == "GL_FRAGCOORD" return true;
+  return false;
+}
+
+ir_pair_varying_field_label_local :: (field: *IR_Field) -> string {
+  if !field return "<null>";
+  if field.semantic.count != 0 return tprint("% (semantic %)", field.name, field.semantic);
+  return field.name;
+}
+
+ir_pair_varyings_match_local :: (vertex_field: *IR_Field, fragment_field: *IR_Field) -> bool {
+  assert(vertex_field != null);
+  assert(fragment_field != null);
+
+  vertex_sem := ir_semantic_upper_local(vertex_field.semantic);
+  fragment_sem := ir_semantic_upper_local(fragment_field.semantic);
+  if vertex_sem.count != 0 && fragment_sem.count != 0 return vertex_sem == fragment_sem;
+  return vertex_field.name == fragment_field.name;
+}
+
+ir_validate_pair_stage_interface_local :: (pair_name: string, vertex: *IR_Vertex_Shader, fragment: *IR_Fragment_Shader) -> (bool, string) {
+  assert(vertex != null);
+  assert(fragment != null);
+
+  vertex_varyings: [..] IR_Field;
+  fragment_varyings: [..] IR_Field;
+  for vertex.output.fields {
+    if ir_vertex_output_field_is_builtin_local(*it) continue;
+    array_add(*vertex_varyings, it);
+  }
+  for fragment.input.fields {
+    if ir_fragment_input_field_is_builtin_local(*it) continue;
+    array_add(*fragment_varyings, it);
+  }
+
+  if vertex_varyings.count != fragment_varyings.count {
+    return false, tprint("SPIR-V backend: pair '%': stage interface mismatch: vertex exports % user varyings but fragment consumes %.", pair_name, vertex_varyings.count, fragment_varyings.count);
+  }
+
+  for i: 0..fragment_varyings.count-1 {
+    v := vertex_varyings[i];
+    f := fragment_varyings[i];
+    if v.type_name != f.type_name {
+      return false, tprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' has type '%', fragment '%' has type '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), v.type_name, ir_pair_varying_field_label_local(*f), f.type_name);
+    }
+    if !ir_pair_varyings_match_local(*v, *f) {
+      return false, tprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' does not match fragment '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), ir_pair_varying_field_label_local(*f));
+    }
+  }
+
+  return true, "";
+}
+
 write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false, timings_totals: *Build_Timing_Totals = null) -> (string, bool, IR_Diagnostic) {
   _ = emit_line_directives;
 
@@ -1618,6 +1688,16 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   fragment_uses_pointer_abi := ir_uses_pointer_abi_local(ir_fragment.args, ir_fragment.extra_structs);
   if vertex_uses_pointer_abi != fragment_uses_pointer_abi {
     diag.message = tprint("SPIR-V backend: pair '%': vertex and fragment use incompatible resource ABI styles (vertex pointer-ABI=%; fragment pointer-ABI=%). Pair shaders must agree on resource ABI.", pair_ctx.name, vertex_uses_pointer_abi, fragment_uses_pointer_abi);
+    if pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+      diag.location = make_location(pair_ctx.vertex_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
+
+  interface_ok, interface_err := ir_validate_pair_stage_interface_local(pair_ctx.name, *ir_vertex, *ir_fragment);
+  if !interface_ok {
+    diag.message = interface_err;
     if pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
       diag.location = make_location(pair_ctx.vertex_fn.header);
       diag.has_location = true;

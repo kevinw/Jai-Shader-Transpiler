@@ -9,10 +9,10 @@ This file tracks real gaps found while getting the reaction-diffusion prototype 
 - Trigger: vertex stage with pointer-ABI root arg while fragment stage lowered to logical path.
 - Current behavior: fail early with explicit ABI mismatch diagnostic; link-time diagnostics also include per-stage memory models.
 
-2. Pair Metal output can still be brittle when stages are lowered independently.
+2. Pair stage interfaces can still fail if vertex/fragment semantics diverge in unsupported ways.
 - Historically observed runtime error: fragment input `user(locn1)` mismatched vertex output.
-- Recent fix covers one concrete source (`@position` semantic being treated as non-builtin in fragment stage).
-- Remaining risk: other semantic/location edge-cases may still exist.
+- Current behavior now fail-fasts before SPIR-V emission with an explicit stage-interface mismatch diagnostic (type + semantic/name checks after builtin filtering).
+- Remaining risk: some legacy semantic aliases may still need explicit policy decisions.
 
 ## Resolved in this pass
 
@@ -38,7 +38,12 @@ This file tracks real gaps found while getting the reaction-diffusion prototype 
 - Fix: add component load emission for `thread_id.{x,y,z}` / `input.thread_id.{x,y,z}`.
 - Coverage: compute semantics test `edge_case_42_thread_id_y_component`.
 
+5. Pair interface mismatch diagnostics were too late (`spirv-link`) and opaque.
+- Fix: pre-link vertex/fragment stage-interface validator in pair SPIR-V path.
+- Behavior: fail-fast with field index + type/semantic/name details.
+- Coverage: existing pair tests remain green and legacy tiles/vulkan examples validate through the new path.
+
 ## Next pass after RD is running
 
 - Add minimal failing tests for each remaining active item above in transpiler headless suite.
-- Fix in this order: (2) broader stage varying/location consistency, (1) addressing model policy unification for pairs.
+- Fix in this order: (1) addressing model policy unification for pairs, then remaining semantic-alias policy cleanups.

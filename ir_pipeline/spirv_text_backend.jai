@@ -3684,6 +3684,7 @@ interface_builtin_from_semantic :: (stage: IR_SPV_Gen_Stage, field_name: string,
     if sem == "SV_VERTEXID" || sem == "VERTEX_ID" return .VERTEX_INDEX;
     if sem == "SV_INSTANCEID" || sem == "INSTANCE_ID" return .INSTANCE_INDEX;
     if sem == "SV_POSITION" || sem == "GL_POSITION" || sem == "POSITION" return .POSITION;
+    if sem == "FRAG_COORD" || sem == "GL_FRAGCOORD" return .NONE;
   } else if stage == .FRAGMENT {
     if field_name == "gl_FragCoord" return .FRAG_COORD;
     if sem == "SV_POSITION" || sem == "POSITION" || sem == "FRAG_COORD" || sem == "GL_FRAGCOORD" return .FRAG_COORD;
