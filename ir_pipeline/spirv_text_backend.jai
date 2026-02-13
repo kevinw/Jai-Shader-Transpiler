@@ -3681,7 +3681,7 @@ interface_builtin_from_semantic :: (stage: IR_SPV_Gen_Stage, field_name: string,
     if sem == "SV_POSITION" || sem == "GL_POSITION" || sem == "POSITION" return .POSITION;
   } else if stage == .FRAGMENT {
     if field_name == "gl_FragCoord" return .FRAG_COORD;
-    if sem == "SV_POSITION" || sem == "FRAG_COORD" || sem == "GL_FRAGCOORD" return .FRAG_COORD;
+    if sem == "SV_POSITION" || sem == "POSITION" || sem == "FRAG_COORD" || sem == "GL_FRAGCOORD" return .FRAG_COORD;
   }
   return .NONE;
 }

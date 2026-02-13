@@ -81,6 +81,11 @@ IR_Headless_Fragment_Out :: struct {
   out_color: Vector4; @semantic_SV_Target0
 }
 
+IR_Headless_Position_Semantic_Vertex_Out :: struct {
+  gl_Position: Vector4; @position
+  color: Vector4;
+}
+
 IR_Headless_Compute_In :: struct {
   thread_id: UVector3; @thread_position_in_grid
 }
@@ -149,6 +154,19 @@ ir_headless_fragment_anonymous_main :: (using input: IR_Headless_Vertex_Out) -> 
   return .{
     out_color = Vector4.{input.color.x, input.color.y, input.color.z, input.color.w},
   };
+} @fragment_shader
+
+ir_headless_vertex_position_semantic_main :: (using input: IR_Headless_Vertex_In, using un: IR_Headless_Vertex_Uniforms) -> IR_Headless_Position_Semantic_Vertex_Out {
+  using out: IR_Headless_Position_Semantic_Vertex_Out;
+  gl_Position = Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
+  color = Vector4.{0.25, 0.5, 0.75, 1.0};
+  return out;
+} @vertex_shader
+
+ir_headless_fragment_position_semantic_main :: (using input: IR_Headless_Position_Semantic_Vertex_Out) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  out_color = input.color;
+  return out;
 } @fragment_shader
 
 ir_headless_compute_root_struct_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_Root) {
@@ -296,6 +314,15 @@ ir_headless_fragment_boost :: (x: float) -> float {
   if !write_entire_file(uint_div_pair_path, uint_div_pair) fail("Could not write %", uint_div_pair_path);
   #if OS == .MACOS {
     compile_metal(uint_div_pair_path);
+  }
+
+  position_semantic_pair := get_transpiled(.METAL, ir_headless_vertex_position_semantic_main, ir_headless_fragment_position_semantic_main);
+  check_contains(position_semantic_pair, "vertex", "position-semantic pair metal output");
+  check_contains(position_semantic_pair, "fragment", "position-semantic pair metal output");
+  position_semantic_pair_path := tprint("%/ir_pair_position_semantic.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(position_semantic_pair_path, position_semantic_pair) fail("Could not write %", position_semantic_pair_path);
+  #if OS == .MACOS {
+    compile_metal(position_semantic_pair_path);
   }
 
   anon_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_anonymous_main);
