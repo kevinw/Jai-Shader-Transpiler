@@ -1434,7 +1434,7 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
       struct_type := cast(*Type_Info_Struct) ptr.pointer_to;
       struct_name := jai_to_hlsl_type_name(get_struct_type_name(struct_type));
       if !ir_is_builtin_slang_type_name(struct_name) {
-        lowered_struct, lowered_ok := ir_lower_struct_from_type(struct_name, ptr.pointer_to);
+        lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, ptr.pointer_to, *out.extra_structs);
         if !lowered_ok {
           ir_set_diagnostic(*state, tprint("IR lowering(compute): could not lower struct type '%' for argument '%'", struct_name, arg.name), cast(*Code_Node) header);
           return out, false, ir_get_diagnostic(*state);
