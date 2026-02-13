@@ -16,6 +16,9 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"compound_assign", .Bare},
   {"defer_assign", .Bare},
   {"defer_block", .Bare},
+  {"defer_break", .Bare},
+  {"defer_continue", .Bare},
+  {"defer_switch_through", .Bare},
   {"matrix_math", .Bare},
   {"intrinsics", .Bare},
   {"edge_case_10_float4_component_lvalue", .Bare},
@@ -291,6 +294,67 @@ defer_block :: (using in: Compute_Semantics_In, values: *u32) {
   bar = idx + 3;
   if (idx % 2) == 0 return;
   values[idx] += 777;
+} @compute_shader
+
+defer_break :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  acc: u32 = 0;
+  i: u32 = 0;
+  while i < 6 {
+    defer acc += 1;
+    if i == 3 break;
+    acc += i;
+    i += 1;
+  }
+  values[idx] = values[idx] + acc;
+} @compute_shader
+
+defer_continue :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  outer: u32 = 0;
+  j: u32 = 0;
+  while j < 4 {
+    defer outer += 100;
+    inner: u32 = 0;
+    k: u32 = 0;
+    while k < 4 {
+      defer inner += 1;
+      if k == 1 {
+        k += 1;
+        continue;
+      }
+      if k == 3 break;
+      inner += 10;
+      k += 1;
+    }
+    outer += inner;
+    j += 1;
+  }
+  values[idx] = values[idx] + outer;
+} @compute_shader
+
+defer_switch_through :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v: u32 = 0;
+  if idx % 4 == {
+    case 0;
+      defer v += 100;
+      v += 1;
+      #through;
+    case 1;
+      defer v += 10;
+      v += 2;
+    case 2;
+      defer v += 20;
+      v += 3;
+    case;
+      defer v += 30;
+      v += 4;
+  }
+  values[idx] = values[idx] + v;
 } @compute_shader
 
 vector_index :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
@@ -782,6 +846,27 @@ run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32, t
   }
 }
 
+Compute_Case_Timings :: struct {
+  compile_s: float64;
+  pipeline_s: float64;
+  gpu_setup_s: float64;
+  dispatch_wait_s: float64;
+  cpu_s: float64;
+  compare_s: float64;
+  total_s: float64;
+}
+
+Compute_Timing_Totals :: struct {
+  case_count: s64;
+  compile_s: float64;
+  pipeline_s: float64;
+  gpu_setup_s: float64;
+  dispatch_wait_s: float64;
+  cpu_s: float64;
+  compare_s: float64;
+  total_s: float64;
+}
+
 fail :: (message: string, args: .. Any) {
   log_error(message, ..args);
   exit(1);
@@ -799,10 +884,14 @@ check_contains_any :: (source: string, p0: string, p1: string, where: string) {
 }
 
 run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F, proc_name: string, $WITH_TABLE := false, $TABLE_TYPE: Type = u32, $TABLE_KIND := Compute_Table_Kind.U32) {
+  case_start := current_time_monotonic();
+  timings: Compute_Case_Timings;
   suffix := ifx WITH_TABLE then " (table)" else "";
   //log("[IR][compute] Running case '%'", case_name, proc_name, suffix);
   error: *NSError = null;
+  t0 := current_time_monotonic();
   lib_compute := MTLDevice.newLibraryWithSource_options_error(g_device, NSString.getTempString(source), g_compile_options, *error);
+  timings.compile_s = to_float64_seconds(current_time_monotonic() - t0);
   if log_nserror("Failed to compile compute shader library", error) || !lib_compute {
     if !lib_compute && error == null fail("Failed to compile compute shader library: %", case_name);
     fail("Compute source compilation failed: %", case_name);
@@ -814,13 +903,16 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
   defer release(fn_compute);
 
   error = null;
+  t0 = current_time_monotonic();
   pipeline_compute := MTLDevice.newComputePipelineStateWithFunction_error(g_device, xx fn_compute, *error);
+  timings.pipeline_s = to_float64_seconds(current_time_monotonic() - t0);
   if log_nserror("Failed to create compute pipeline", error) || !pipeline_compute {
     if !pipeline_compute && error == null fail("Failed to create compute pipeline");
     fail("Compute pipeline creation failed '%'", case_name);
   }
   defer release(pipeline_compute);
 
+  t0 = current_time_monotonic();
   buffer_size := cast(NSUInteger) (ELEMENT_COUNT * size_of(u32));
   out_buffer := MTLDevice.newBufferWithLength_options(g_device, buffer_size, .MTLResourceStorageModeShared);
   if !out_buffer fail("Failed to create shared output buffer");
@@ -868,7 +960,9 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
       }
     }
   }
+  timings.gpu_setup_s = to_float64_seconds(current_time_monotonic() - t0);
 
+  t0 = current_time_monotonic();
   command_buffer := MTLCommandQueue.commandBuffer(g_queue);
   if !command_buffer fail("Failed to create compute command buffer");
 
@@ -887,12 +981,16 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
 
   MTLCommandBuffer.commit(command_buffer);
   MTLCommandBuffer.waitUntilCompleted(command_buffer);
+  timings.dispatch_wait_s = to_float64_seconds(current_time_monotonic() - t0);
   
   // Run the CPU version.
+  t0 = current_time_monotonic();
   #if WITH_TABLE run_cpu_compute_dispatch(expected.count, cpu_shader_proc, expected.data, table_data.data);
   else           run_cpu_compute_dispatch(expected.count, cpu_shader_proc, expected.data);
+  timings.cpu_s = to_float64_seconds(current_time_monotonic() - t0);
   
   // Compare
+  t0 = current_time_monotonic();
   saw_gpu_non_zero, saw_cpu_non_zero: bool;
   for 0..ELEMENT_COUNT-1 {
     if gpu_values[it] != 0 saw_gpu_non_zero = true;
@@ -905,6 +1003,21 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
   // Sanity check
   if !saw_gpu_non_zero fail("Expected at least one GPU compute to return non-zero");
   if !saw_cpu_non_zero fail("Expected at least one CPU run to return non-zero");
+  timings.compare_s = to_float64_seconds(current_time_monotonic() - t0);
+
+  timings.total_s = to_float64_seconds(current_time_monotonic() - case_start);
+
+  if TIMINGS_ENABLED {
+    log("[timing] runtime case %: total=%s compile=%s pipeline=%s setup=%s dispatch=%s cpu=%s compare=%s", case_name, timings.total_s, timings.compile_s, timings.pipeline_s, timings.gpu_setup_s, timings.dispatch_wait_s, timings.cpu_s, timings.compare_s);
+  }
+  g_compute_timing_totals.case_count += 1;
+  g_compute_timing_totals.compile_s += timings.compile_s;
+  g_compute_timing_totals.pipeline_s += timings.pipeline_s;
+  g_compute_timing_totals.gpu_setup_s += timings.gpu_setup_s;
+  g_compute_timing_totals.dispatch_wait_s += timings.dispatch_wait_s;
+  g_compute_timing_totals.cpu_s += timings.cpu_s;
+  g_compute_timing_totals.compare_s += timings.compare_s;
+  g_compute_timing_totals.total_s += timings.total_s;
   
   log("[OK] %", case_name);
 }
@@ -942,6 +1055,9 @@ n :: ($proc: $F, call := #caller_code) #compile_time {
 }
 
 main :: () {
+  for get_command_line_arguments() {
+    if it == "-timings" TIMINGS_ENABLED = true;
+  }
   init_objective_c();
   init_metal();
 
@@ -952,6 +1068,7 @@ main :: () {
 }
 
 run_gpu_cpu_tests :: () {
+  g_compute_timing_totals = .{};
   log("Comparing CPU and GPU results for % functions...", ALL_TEST_FUNCTIONS.count);
   #insert #run -> string {
     sb: String_Builder;
@@ -966,6 +1083,20 @@ run_gpu_cpu_tests :: () {
     }
     return builder_to_string(*sb);
   };
+
+  if TIMINGS_ENABLED {
+    avg := ifx g_compute_timing_totals.case_count > 0 then g_compute_timing_totals.total_s / cast(float64) g_compute_timing_totals.case_count else 0.0;
+    log("[timing] runtime compute totals (% cases): total=%s avg=%s compile=%s pipeline=%s setup=%s dispatch=%s cpu=%s compare=%s",
+      g_compute_timing_totals.case_count,
+      g_compute_timing_totals.total_s,
+      avg,
+      g_compute_timing_totals.compile_s,
+      g_compute_timing_totals.pipeline_s,
+      g_compute_timing_totals.gpu_setup_s,
+      g_compute_timing_totals.dispatch_wait_s,
+      g_compute_timing_totals.cpu_s,
+      g_compute_timing_totals.compare_s);
+  }
   
   log("Passed % functions: (GPU output matches CPU for % elements each).", ALL_TEST_FUNCTIONS.count, ELEMENT_COUNT);
 }
@@ -973,6 +1104,8 @@ run_gpu_cpu_tests :: () {
 g_device: *MTLDevice;
 g_queue: *MTLCommandQueue;
 g_compile_options: *MTLCompileOptions;
+TIMINGS_ENABLED := false;
+g_compute_timing_totals: Compute_Timing_Totals;
 
 log_nserror :: (label: string, error: *NSError) -> bool {
   if !error return false;

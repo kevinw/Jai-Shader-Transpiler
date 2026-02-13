@@ -22,12 +22,14 @@ Proc :: #import "Process";
 
   plugin := get_plugin();
   plugin.workspace = w;
+  timings := false;
 
   for command_line_opts.compile_time_command_line {
 
     if it == "-slang_emit_line_directives" {
       plugin.slang_emit_line_directives = true;
     }
+    if it == "-timings" timings = true;
   }
 
   compiler_begin_intercept(w);
@@ -46,7 +48,10 @@ Proc :: #import "Process";
 
   if !ok exit(1);
 
-  result, output, error, timeout_reached := Proc.run_command("./ir_compute_semantics_runner", capture_and_return_output=true);
+  run_args: [..] string;
+  array_add(*run_args, "./ir_compute_semantics_runner");
+  if timings array_add(*run_args, "-timings");
+  result, output, error, timeout_reached := Proc.run_command(..run_args, capture_and_return_output=true);
   if output.count != 0 log("%", output);
   if error.count != 0 log_error("%", error);
   if timeout_reached {

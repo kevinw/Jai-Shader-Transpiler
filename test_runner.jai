@@ -5,18 +5,52 @@
 Process :: #import "Process";
 
 DEBUG_OUTDIR :: ".generated_shaders";
+TIMINGS_ENABLED := false;
+
+time_scope :: (enabled: bool, label: string) #expand {
+  __jsl_timing_enabled := enabled;
+  __jsl_timing_start := current_time_monotonic();
+  `defer {
+    if __jsl_timing_enabled {
+      __jsl_timing_elapsed := to_float64_seconds(current_time_monotonic() - __jsl_timing_start);
+      log("[timing] %: %s", label, __jsl_timing_elapsed);
+    }
+  }
+}
 
 run_all_tests :: () {
   log("Running tests...");
   use_slang_backend := false;
   for get_command_line_arguments() {
     if it == "-slang_backend" use_slang_backend = true;
+    if it == "-timings" TIMINGS_ENABLED = true;
   }
-  run_command_checked("Clean legacy GLSL SPIR-V outputs", .["rm", "-f", "frag.spv", "vert.spv", "comp.spv"]);
-  run_command_checked("Clean IR Slang output dirs", .["rm", "-rf", ".build/ir_slang", "headless_ir/.build/ir_slang"]);
-  run_command_checked("Run headless IR smoke tests", .["bash", "headless_ir/test_ir_headless.sh"]);
-  run_command_checked("Run headless IR compute semantics tests", .["bash", "headless_ir/test_ir_compute_semantics.sh"]);
-  compile_slang_emitted_metal_shaders();
+  {
+    time_scope(TIMINGS_ENABLED, "run_all_tests total");
+
+    {
+      time_scope(TIMINGS_ENABLED, "Cleanup generated outputs");
+      run_command_checked("Clean legacy GLSL SPIR-V outputs", .["rm", "-f", "frag.spv", "vert.spv", "comp.spv"]);
+      run_command_checked("Clean IR Slang output dirs", .["rm", "-rf", ".build/ir_slang", "headless_ir/.build/ir_slang"]);
+    }
+
+    {
+      time_scope(TIMINGS_ENABLED, "Headless IR smoke tests");
+      run_command_checked("Run headless IR smoke tests", .["bash", "headless_ir/test_ir_headless.sh"]);
+    }
+
+    {
+      time_scope(TIMINGS_ENABLED, "Headless IR compute semantics");
+      args: [..] string;
+      array_add(*args, "bash", "headless_ir/test_ir_compute_semantics.sh");
+      if TIMINGS_ENABLED array_add(*args, "-timings");
+      run_command_checked("Run headless IR compute semantics tests", args);
+    }
+
+    {
+      time_scope(TIMINGS_ENABLED, "Compile Slang-emitted Metal");
+      compile_slang_emitted_metal_shaders();
+    }
   
   debug_path :: (name: string) -> string { return tprint("%/%", DEBUG_OUTDIR, name); }
   
@@ -57,18 +91,40 @@ run_all_tests :: () {
   for collect_generated_files(".glsl") check_file_not_contains(it, "#string END");
   for collect_generated_files(".metal") check_file_not_contains(it, "#string END");
 
-  compile_generated_metal_shaders();
-  compile_generated_glsl_shaders();
-  compile_slang_emitted_metal_shaders();
+    {
+      time_scope(TIMINGS_ENABLED, "Compile generated Metal shaders");
+      compile_generated_metal_shaders();
+    }
+    {
+      time_scope(TIMINGS_ENABLED, "Compile generated GLSL shaders");
+      compile_generated_glsl_shaders();
+    }
+    {
+      time_scope(TIMINGS_ENABLED, "Compile Slang-emitted Metal (post-check)");
+      compile_slang_emitted_metal_shaders();
+    }
   
-  // run example programs with the generated shaders to check they work at runtime (not just compile time).
-  run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe", "-test_readback"]);
-  run_command_checked("Run CPU example", .["./cpu_example", "-single_frame", "-test_readback"]);
-  run_command_checked("Run Vulkan example", .["./vulkan_example", "-single_frame", "-test_readback"]);
-  
-  #if OS == .MACOS 
-    run_command_checked("Run Metal example", .["./metal_example", "-singleframe", "-test_readback"]);
-
+    // run example programs with the generated shaders to check they work at runtime (not just compile time).
+    {
+      time_scope(TIMINGS_ENABLED, "Run GLSL example");
+      run_command_checked("Run GLSL example", .["./glsl_example", "-singleframe", "-test_readback"]);
+    }
+    {
+      time_scope(TIMINGS_ENABLED, "Run CPU example");
+      run_command_checked("Run CPU example", .["./cpu_example", "-single_frame", "-test_readback"]);
+    }
+    {
+      time_scope(TIMINGS_ENABLED, "Run Vulkan example");
+      run_command_checked("Run Vulkan example", .["./vulkan_example", "-single_frame", "-test_readback"]);
+    }
+    
+    #if OS == .MACOS {
+      {
+        time_scope(TIMINGS_ENABLED, "Run Metal example");
+        run_command_checked("Run Metal example", .["./metal_example", "-singleframe", "-test_readback"]);
+      }
+    }
+  }
   log("All Jai-Shader-Transpiler tests passed.");
 }
 

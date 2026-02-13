@@ -196,6 +196,11 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
                          scope_depth: s64,
                          nearest_loop_scope_depth: s64,
                          state: *IR_Lowering_State) -> bool {
+  return_err :: (message: string, node: *Code_Node) #expand {
+    ir_set_diagnostic(state, message, node);
+    `return false;
+  }
+
   assert(stmt != null);
   assert(out_block != null);
   assert(active_usings != null);
@@ -304,12 +309,10 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
     case .FOR; {
       op := cast(*Code_For) stmt;
       if op.macro_expansion_procedure_call || !op.iteration_expression_right {
-        ir_set_diagnostic(state, "IR lowering: unsupported for-loop form (expected numeric range)", stmt);
-        return false;
+        return_err("IR lowering: unsupported for-loop form (expected numeric range)", stmt);
       }
       if op.for_flags & .POINTER {
-        ir_set_diagnostic(state, "IR lowering: pointer-iteration for-loop is unsupported", stmt);
-        return false;
+        return_err("IR lowering: pointer-iteration for-loop is unsupported", stmt);
       }
 
       start_expr, start_ok := ir_lower_expr(op.iteration_expression, input_fields, output_fields, active_usings.*, active_aliases.*, state);
@@ -353,12 +356,10 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       if op.control_type == .BREAK out_stmt.kind = .BREAK;
       else if op.control_type == .CONTINUE out_stmt.kind = .CONTINUE;
       else {
-        ir_set_diagnostic(state, "IR lowering: unsupported loop-control statement", stmt);
-        return false;
+        return_err("IR lowering: unsupported loop-control statement", stmt);
       }
       if nearest_loop_scope_depth < 0 {
-        ir_set_diagnostic(state, "IR lowering: break/continue outside of loop is unsupported", stmt);
-        return false;
+        return_err("IR lowering: break/continue outside of loop is unsupported", stmt);
       }
       ir_shared_emit_deferred_for_exit(out_block, active_defer_entries.*, nearest_loop_scope_depth);
       array_add(*out_block.statements, out_stmt);
@@ -391,8 +392,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt.kind = .RETURN;
       if op.arguments_sorted.count == 1 {
         if !allow_return_value {
-          ir_set_diagnostic(state, "IR lowering: return value not allowed in this context", stmt);
-          return false;
+          return_err("IR lowering: return value not allowed in this context", stmt);
         }
         ret_node := op.arguments_sorted[0];
         ret_type := ret_node.type;
@@ -416,8 +416,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
 
               if field_name.count == 0 {
                 if positional_index >= output_fields.count {
-                  ir_set_diagnostic(state, "IR lowering: struct return literal has more positional fields than output struct", stmt);
-                  return false;
+                  return_err("IR lowering: struct return literal has more positional fields than output struct", stmt);
                 }
                 field_name = output_fields[positional_index];
                 positional_index += 1;
@@ -459,8 +458,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         if !ret_ok return false;
         out_stmt.return_expr = ret_expr;
       } else if op.arguments_sorted.count > 1 {
-        ir_set_diagnostic(state, "IR lowering: multi-value return is unsupported", stmt);
-        return false;
+        return_err("IR lowering: multi-value return is unsupported", stmt);
       }
       ir_shared_emit_deferred_for_exit(out_block, active_defer_entries.*, 0);
       array_add(*out_block.statements, out_stmt);
@@ -470,18 +468,15 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
     case .USING; {
       op := cast(*Code_Using) stmt;
       if !op.expression {
-        ir_set_diagnostic(state, "IR lowering: malformed using statement (missing expression)", stmt);
-        return false;
+        return_err("IR lowering: malformed using statement (missing expression)", stmt);
       }
       if op.filter_type != .NONE {
-        ir_set_diagnostic(state, "IR lowering: using filters (only/except/map) are unsupported", stmt);
-        return false;
+        return_err("IR lowering: using filters (only/except/map) are unsupported", stmt);
       }
 
       using_type := op.expression.type;
       if !using_type || using_type.type != .STRUCT {
-        ir_set_diagnostic(state, "IR lowering: using currently supports struct expressions only", op.expression);
-        return false;
+        return_err("IR lowering: using currently supports struct expressions only", op.expression);
       }
       using_struct := cast(*Type_Info_Struct) using_type;
 
@@ -516,8 +511,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
     }
   }
 
-  ir_set_diagnostic(state, tprint("IR lowering: unsupported statement node kind (%)", stmt.kind), stmt);
-  return false;
+  return_err(tprint("IR lowering: unsupported statement node kind (%)", stmt.kind), stmt);
 }
 
 ir_shared_append_deferred_statements :: (out_block: *IR_Block, defer_blocks: [] IR_Block) {
@@ -562,6 +556,11 @@ ir_shared_lower_block :: (block: *Code_Block,
                           incoming_defer_entries: [] IR_Active_Defer = .[],
                           scope_depth: s64 = 0,
                           nearest_loop_scope_depth: s64 = -1) -> bool {
+  return_err :: (message: string, node: *Code_Node = null) #expand {
+    ir_set_diagnostic(state, message, node);
+    `return false;
+  }
+
   assert(out_block != null);
   assert(state != null);
   if !block return true;
@@ -576,8 +575,7 @@ ir_shared_lower_block :: (block: *Code_Block,
     if it.kind == .DEFER {
       defer_node := cast(*Code_Defer) it;
       if !defer_node.block {
-        ir_set_diagnostic(state, "IR lowering: malformed defer statement (missing block).", it);
-        return false;
+        return_err("IR lowering: malformed defer statement (missing block).", it);
       }
       defer_block: IR_Block;
       if !ir_shared_lower_block(defer_node.block, *defer_block, input_fields, output_fields, allow_return_value, state, active_usings, active_aliases, active_defer_entries, scope_depth + 1, nearest_loop_scope_depth) return false;

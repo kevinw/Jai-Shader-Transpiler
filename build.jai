@@ -6,16 +6,29 @@
 #import "Metaprogram_Plugins";
 #import,file "./module.jai"; // #import "Jai-Shader-Transpiler" in your code.
 
+time_scope :: (enabled: bool, label: string) #expand {
+  __jsl_timing_enabled := enabled;
+  __jsl_timing_start := current_time_monotonic();
+  `defer {
+    if __jsl_timing_enabled {
+      __jsl_timing_elapsed := to_float64_seconds(current_time_monotonic() - __jsl_timing_start);
+      log("[timing] %: %s", label, __jsl_timing_elapsed);
+    }
+  }
+}
+
 #run,stallable {
   command_line_opts := get_build_options();
   run_tests := false;
   use_slang_backend := false;
   verbose_build_progress := false;
+  timings := false;
   ir_case := "";
   for command_line_opts.compile_time_command_line {
     if it == "-run_tests" run_tests = true;
     else if it == "-slang_backend" use_slang_backend = true;
     else if it == "-verbose_build_progress" verbose_build_progress = true;
+    else if it == "-timings" timings = true;
     else if begins_with(it, "-ir_case=") {
       ir_case = slice(it, 9, it.count);
     } else {
@@ -30,23 +43,23 @@
       log("All examples built in %s", elapsed_time);
     }
     
-    build("example/cpu_example.jai", "cpu_example", verbose_build_progress);
-    build("example/vulkan_example.jai", "vulkan_example", verbose_build_progress);
+    build("example/cpu_example.jai", "cpu_example", verbose_build_progress, timings);
+    build("example/vulkan_example.jai", "vulkan_example", verbose_build_progress, timings);
     //build("example/glsl_example.jai", "glsl_example", verbose_build_progress);
     //build("example/hlsl_example.jai", "hlsl_example", verbose_build_progress);
     #if OS == .MACOS {
-      build("example/metal_example.jai", "metal_example", verbose_build_progress);
+      build("example/metal_example.jai", "metal_example", verbose_build_progress, timings);
     }
     if ir_case.count == 0 {
-      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress);
-      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress);
-      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress);
+      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress, timings);
+      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress, timings);
+      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress, timings);
     } else if ir_case == "metal_pair" {
-      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress);
+      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress, timings);
     } else if ir_case == "vk_compute" {
-      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress);
+      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress, timings);
     } else if ir_case == "vk_bindless" {
-      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress);
+      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress, timings);
     } else {
       compiler_report(tprint("Unknown -ir_case value '%'. Expected one of: metal_pair, vk_compute, vk_bindless.", ir_case));
     }
@@ -58,7 +71,14 @@
     targs: [..]string;
     array_add(*targs, "jai", TEST_RUNNER, "+Autorun");
     if use_slang_backend array_add(*targs, "-slang_backend");
-    result, output, error, timeout_reached := run_command(..targs);
+    if timings array_add(*targs, "-timings");
+    result: Process_Result;
+    output, error: string;
+    timeout_reached: bool;
+    {
+      time_scope(timings, "Run test_runner.jai");
+      result, output, error, timeout_reached = run_command(..targs);
+    }
     if timeout_reached {
       compiler_report(tprint("% timed out.", TEST_RUNNER));
     }
@@ -71,7 +91,7 @@
   }
 }
 
-build :: (build_file: string, output_exe_name: string, verbose_build_progress: bool=false) {
+build :: (build_file: string, output_exe_name: string, verbose_build_progress: bool=false, timings: bool=false) {
   set_build_options_dc(.{do_output=false, write_added_strings=false});
 
   command_line_opts := get_build_options();
@@ -105,7 +125,11 @@ build :: (build_file: string, output_exe_name: string, verbose_build_progress: b
   compiler_begin_intercept(w);
   defer compiler_end_intercept(w);
   add_build_file(build_file, w);
-  compile_ok := message_loop(w, jai_to_shader_plugin, verbose_build_progress);
+  compile_ok: bool;
+  {
+    time_scope(timings, tprint("Compile %", output_exe_name));
+    compile_ok = message_loop(w, jai_to_shader_plugin, verbose_build_progress);
+  }
   if !compile_ok {
     exit(1);
   }
