@@ -1399,121 +1399,130 @@ write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context, timings_totals: *Bu
   return decl, true, diag;
 }
 
-ir_strip_metal_preamble_for_pair_merge :: (source: string) -> string {
+ir_metal_find_preamble_end :: (source: string) -> s64 {
   marker := "using namespace metal;";
   index := find_index_from_left(source, marker);
-  if index == -1 return source;
+  if index == -1 return 0;
 
-  start := index + marker.count;
-  while start < source.count && (source[start] == #char "\n" || source[start] == #char "\r")
-    start += 1;
-
-  stripped: string;
-  stripped.data = source.data + start;
-  stripped.count = source.count - start;
-  return stripped;
+  end := index + marker.count;
+  while end < source.count && (source[end] == #char "\n" || source[end] == #char "\r") end += 1;
+  return end;
 }
 
-ir_metal_suffix_descriptor_set_types :: (source: string, suffix: string) -> string {
-  out := source;
-  for i: 0..31 {
-    type_name := tprint("spvDescriptorSetBuffer%", i);
-    suffixed := tprint("%_%", type_name, suffix);
-    out = replace(out, type_name, suffixed);
-  }
-  return out;
-}
-
-ir_metal_collect_struct_names :: (source: string, names: *Table(string, bool)) {
-  assert(names != null);
-  i: s64 = 0;
-  while i < source.count {
-    line_start := i;
-    while i < source.count && source[i] != #char "\n" i += 1;
-    line: string;
-    line.data = source.data + line_start;
-    line.count = i - line_start;
-    if begins_with(line, "struct ") {
-      cursor := cast(s64) 7;
-      while cursor < line.count && line[cursor] == #char " " cursor += 1;
-      name_start := cursor;
-      while cursor < line.count {
-        ch := line[cursor];
-        if ch == #char " " || ch == #char "{" || ch == #char "\t" break;
-        cursor += 1;
-      }
-      if cursor > name_start {
-        name: string;
-        name.data = line.data + name_start;
-        name.count = cursor - name_start;
-        table_add(names, copy_string(name), true);
-      }
-    }
-    if i < source.count && source[i] == #char "\n" i += 1;
-  }
-}
-
-ir_metal_remove_duplicate_structs :: (source: string, existing_names: *Table(string, bool)) -> string {
-  assert(existing_names != null);
+ir_metal_compact_decl_key :: (decl: string) -> string {
   out: [..] u8;
-  i: s64 = 0;
-  while i < source.count {
-    line_start := i;
-    while i < source.count && source[i] != #char "\n" i += 1;
-    line: string;
-    line.data = source.data + line_start;
-    line.count = i - line_start;
-    consumed_newline := false;
-    if i < source.count && source[i] == #char "\n" {
-      i += 1;
-      consumed_newline = true;
-    }
+  for decl {
+    ch := it;
+    if ch == #char " " || ch == #char "\t" || ch == #char "\r" || ch == #char "\n" continue;
+    array_add(*out, ch);
+  }
+  return string.{data = out.data, count = out.count};
+}
 
-    if begins_with(line, "struct ") {
-      cursor := cast(s64) 7;
-      while cursor < line.count && line[cursor] == #char " " cursor += 1;
-      name_start := cursor;
-      while cursor < line.count {
-        ch := line[cursor];
-        if ch == #char " " || ch == #char "{" || ch == #char "\t" break;
-        cursor += 1;
+ir_metal_split_top_level_decls :: (source: string, out_preamble: *string, out_decls: *[..] string) {
+  assert(out_preamble != null);
+  assert(out_decls != null);
+
+  preamble_end := ir_metal_find_preamble_end(source);
+  preamble: string;
+  preamble.data = source.data;
+  preamble.count = preamble_end;
+  out_preamble.* = preamble;
+
+  i := preamble_end;
+  while i < source.count {
+    while i < source.count {
+      ch := source[i];
+      if ch != #char " " && ch != #char "\t" && ch != #char "\r" && ch != #char "\n" break;
+      i += 1;
+    }
+    if i >= source.count break;
+
+    start := i;
+    brace_depth: s64 = 0;
+    paren_depth: s64 = 0;
+    saw_block := false;
+    ended := false;
+
+    while i < source.count {
+      ch := source[i];
+      if ch == #char "(" paren_depth += 1;
+      if ch == #char ")" && paren_depth > 0 paren_depth -= 1;
+      if ch == #char "{" {
+        brace_depth += 1;
+        saw_block = true;
       }
-      if cursor > name_start {
-        name: string;
-        name.data = line.data + name_start;
-        name.count = cursor - name_start;
-        found, _ := table_find(existing_names, name);
-        if found {
-          // Skip duplicate struct body until matching `};`.
-          depth: s64 = 0;
-          saw_open := false;
-          while i < source.count {
-            ch := source[i];
-            if ch == #char "{" {
-              depth += 1;
-              saw_open = true;
-            } else if ch == #char "}" {
-              if depth > 0 depth -= 1;
-            } else if ch == #char ";" {
-              if saw_open && depth == 0 {
-                i += 1;
-                while i < source.count && (source[i] == #char "\n" || source[i] == #char "\r") i += 1;
-                break;
-              }
-            }
-            i += 1;
+      if ch == #char "}" && brace_depth > 0 {
+        brace_depth -= 1;
+        if brace_depth == 0 && saw_block {
+          cursor := i + 1;
+          while cursor < source.count && (source[cursor] == #char " " || source[cursor] == #char "\t" || source[cursor] == #char "\r" || source[cursor] == #char "\n") {
+            cursor += 1;
           }
-          continue;
+          // Struct/enum declarations terminate with `};`, function definitions at `}`.
+          if cursor >= source.count || source[cursor] != #char ";" {
+            i += 1;
+            ended = true;
+            break;
+          }
         }
       }
+      if ch == #char ";" && brace_depth == 0 && paren_depth == 0 {
+        i += 1;
+        ended = true;
+        break;
+      }
+      i += 1;
     }
 
-    if line.count > 0 {
-      for j: line_start..(line_start + line.count - 1) array_add(*out, source[j]);
+    if !ended && i >= source.count {
+      // Accept trailing declaration-like chunk at EOF.
     }
-    if consumed_newline array_add(*out, #char "\n");
+
+    decl: string;
+    decl.data = source.data + start;
+    decl.count = i - start;
+    if decl.count > 0 array_add(out_decls, copy_string(decl));
   }
-  return string.{data=out.data, count=out.count};
+}
+
+ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) -> string {
+  preamble_v: string;
+  preamble_f: string;
+  decls_v: [..] string;
+  decls_f: [..] string;
+  ir_metal_split_top_level_decls(vertex_source, *preamble_v, *decls_v);
+  ir_metal_split_top_level_decls(fragment_source, *preamble_f, *decls_f);
+
+  sb: String_Builder;
+  if preamble_v.count != 0 append(*sb, preamble_v);
+  else if preamble_f.count != 0 append(*sb, preamble_f);
+  append(*sb, "\n");
+
+  seen: Table(string, bool);
+  for decls_v {
+    decl := it;
+    key := ir_metal_compact_decl_key(decl);
+    if key.count == 0 continue;
+    found, _ := table_find(*seen, key);
+    if found continue;
+    table_add(*seen, copy_string(key), true);
+    append(*sb, decl);
+    append(*sb, "\n");
+  }
+
+  for decls_f {
+    decl := it;
+    key := ir_metal_compact_decl_key(decl);
+    if key.count == 0 continue;
+    found, _ := table_find(*seen, key);
+    if found continue;
+    table_add(*seen, copy_string(key), true);
+    append(*sb, decl);
+    append(*sb, "\n");
+  }
+
+  return builder_to_string(*sb);
 }
 
 write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false, timings_totals: *Build_Timing_Totals = null) -> (string, bool, IR_Diagnostic) {
@@ -1583,8 +1592,9 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   fragment_spvasm_path := tprint("%/%_frag.spvasm", build_dir, pair_ctx.name);
   vertex_spv_path := tprint("%/%_vert.spv", build_dir, pair_ctx.name);
   fragment_spv_path := tprint("%/%_frag.spv", build_dir, pair_ctx.name);
-  linked_spv_path := tprint("%/%_pair.linked.spv", build_dir, pair_ctx.name);
-  linked_opt_spv_path := tprint("%/%_pair.linked.opt.spv", build_dir, pair_ctx.name);
+  pair_spv_path := tprint("%/%_pair.spv", build_dir, pair_ctx.name);
+  pair_opt_spv_path := tprint("%/%_pair.opt.spv", build_dir, pair_ctx.name);
+  pair_spvasm_path := tprint("%/%_pair.spvasm", build_dir, pair_ctx.name);
   vertex_output_path := tprint("%/%_vert.metal", build_dir, pair_ctx.name);
   fragment_output_path := tprint("%/%_frag.metal", build_dir, pair_ctx.name);
   t0 = current_time_monotonic();
@@ -1600,29 +1610,35 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   }
   if timings_totals timings_totals.spv_assemble_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
-  if !link_spirv_binaries(.[vertex_spv_path, fragment_spv_path], linked_spv_path) {
+  if !link_spirv_binaries(.[vertex_spv_path, fragment_spv_path], pair_spv_path) {
     diag.message = "SPIR-V backend: spirv-link failed for pair module.";
     return "", false, diag;
   }
   if timings_totals timings_totals.spv_assemble_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
-  if !optimize_spirv_binary(linked_spv_path, linked_opt_spv_path) {
-    diag.message = "SPIR-V backend: spirv-opt failed for linked pair module.";
+  if !optimize_spirv_binary(pair_spv_path, pair_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-opt failed for pair module.";
     return "", false, diag;
   }
   if timings_totals timings_totals.spv_optimize_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
-  if !validate_spirv_binary(linked_opt_spv_path) {
-    diag.message = "SPIR-V backend: spirv-val failed for linked pair module.";
+  if !validate_spirv_binary(pair_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-val failed for pair module.";
     return "", false, diag;
   }
   if timings_totals timings_totals.spv_validate_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
-  if !emit_spirv_cross_target_source(linked_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, false, source_entry_name="VertexMain") {
+  if !disassemble_spirv_binary(pair_opt_spv_path, pair_spvasm_path) {
+    diag.message = "SPIR-V backend: spirv-dis failed for optimized pair module.";
+    return "", false, diag;
+  }
+  if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
+  t0 = current_time_monotonic();
+  if !emit_spirv_cross_target_source(pair_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, false, source_entry_name="VertexMain") {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
   }
-  if !emit_spirv_cross_target_source(linked_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path, false, source_entry_name="FragmentMain") {
+  if !emit_spirv_cross_target_source(pair_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path, false, source_entry_name="FragmentMain") {
     diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
     return "", false, diag;
   }
@@ -1637,15 +1653,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     return "", false, diag;
   }
 
-  vertex_source = ir_metal_suffix_descriptor_set_types(vertex_source, "vert");
-  fragment_source = ir_metal_suffix_descriptor_set_types(fragment_source, "frag");
-  vertex_source = ir_mark_metal_device_pointers_const(vertex_source);
-  fragment_source = ir_mark_metal_device_pointers_const(fragment_source);
-  existing_struct_names: Table(string, bool);
-  ir_metal_collect_struct_names(vertex_source, *existing_struct_names);
-  fragment_source = ir_metal_remove_duplicate_structs(fragment_source, *existing_struct_names);
-
-  merged_source := tprint("%\n\n%", vertex_source, ir_strip_metal_preamble_for_pair_merge(fragment_source));
+  merged_source := ir_merge_metal_pair_sources(vertex_source, fragment_source);
+  merged_source = ir_mark_metal_device_pointers_const(merged_source);
   merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));
   output_path := ir_output_path_from_pair_context(pair_ctx);
   t0 = current_time_monotonic();

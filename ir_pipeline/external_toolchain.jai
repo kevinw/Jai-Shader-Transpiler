@@ -75,6 +75,12 @@ optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool {
     .["spirv-opt", "-O", input_spv, "-o", output_spv]);
 }
 
+disassemble_spirv_binary :: (input_spv: string, output_spvasm: string) -> bool {
+  return ir_run_command_checked(
+    tprint("spirv-dis %", input_spv),
+    .["spirv-dis", input_spv, "-o", output_spvasm]);
+}
+
 link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool {
   if inputs.count == 0 {
     log_error("SPIR-V link requires at least one input.");
