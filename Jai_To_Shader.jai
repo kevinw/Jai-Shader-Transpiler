@@ -580,6 +580,10 @@ ir_mark_metal_device_pointers_const :: (source: string) -> string {
   return replace(source, " device*", " const device*");
 }
 
+ir_metal_enable_unsafe_runtime_array_indexing :: (source: string) -> string {
+  return source;
+}
+
 ir_source_file_from_proc :: (proc: *Code_Procedure_Body) -> string {
   if !proc || !proc.header return "";
   loc := make_location(proc.header);
@@ -766,6 +770,7 @@ write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directive
   }
   if ctx.language == .METAL && ctx.type != .Compute {
     target_source = ir_mark_metal_device_pointers_const(target_source);
+    target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
     // Keep .build/ir_slang output aligned with the embedded string for debugging and test checks.
     write_entire_file(output_path, target_source);
   }
@@ -829,6 +834,7 @@ ir_graphics_requires_metal_argument_buffer :: (args: [] IR_Function_Arg, extra_s
     struct_name := it.type_name;
     param_block_name, is_param_block := ir_parse_parameter_block_struct_name_for_args(it.type_name);
     if is_param_block struct_name = param_block_name;
+    if ir_is_resource_buffer_type_name(struct_name) return true;
     if ir_lowered_struct_has_resource_fields(extra_structs, struct_name) return true;
   }
   return false;
@@ -1133,6 +1139,7 @@ finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job,
 
   if job.ctx.language == .METAL && job.ctx.type != .Compute {
     target_source = ir_mark_metal_device_pointers_const(target_source);
+    target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
     t0 = current_time_monotonic();
     write_entire_file(job.output_path, target_source);
     if timings_totals timings_totals.spv_write_files_s += to_float64_seconds(current_time_monotonic() - t0);
@@ -1373,6 +1380,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   }
   if ctx.language == .METAL && ctx.type != .Compute {
     target_source = ir_mark_metal_device_pointers_const(target_source);
+    target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
     t0 = current_time_monotonic();
     write_entire_file(output_path, target_source);
     if timings_totals timings_totals.spv_write_files_s += to_float64_seconds(current_time_monotonic() - t0);
@@ -1705,6 +1713,12 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     return "", false, diag;
   }
 
+  // Pair graphics shaders are expected to bind resources via SGPU's direct buffer-slot ABI
+  // (e.g. `[[buffer(0)]]`), which maps to Vulkan descriptor bindings without MSL argument-buffer
+  // indirection. Keep pair emission on direct bindings for now.
+  use_metal_argument_buffers := false;
+
+
   t0 = current_time_monotonic();
   vertex_spvasm, fragment_spvasm, pair_spvasm_ok, pair_spvasm_diag := emit_ir_graphics_pair_to_spirv_text_branch(ir_vertex, ir_fragment);
   if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
@@ -1770,11 +1784,11 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   }
   if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
-  if !emit_spirv_cross_target_source(pair_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, false, source_entry_name="VertexMain") {
+  if !emit_spirv_cross_target_source(pair_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, use_metal_argument_buffers, source_entry_name="VertexMain") {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
   }
-  if !emit_spirv_cross_target_source(pair_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path, false, source_entry_name="FragmentMain") {
+  if !emit_spirv_cross_target_source(pair_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path, use_metal_argument_buffers, source_entry_name="FragmentMain") {
     diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
     return "", false, diag;
   }
@@ -1791,6 +1805,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
 
   merged_source := ir_merge_metal_pair_sources(vertex_source, fragment_source);
   merged_source = ir_mark_metal_device_pointers_const(merged_source);
+  merged_source = ir_metal_enable_unsafe_runtime_array_indexing(merged_source);
   merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));
   output_path := ir_output_path_from_pair_context(pair_ctx);
   t0 = current_time_monotonic();
@@ -1866,6 +1881,7 @@ write_shader_pair_ir_slang :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     return "", false, diag;
   }
   target_source = ir_mark_metal_device_pointers_const(target_source);
+  target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
   target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_slang(.METAL));
   // Keep .build/ir_slang output aligned with the embedded string for debugging and test checks.
   write_entire_file(output_path, target_source);

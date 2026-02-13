@@ -203,6 +203,14 @@ ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
 ir_type_to_slang_name :: (type: *Type_Info) -> (string, bool) {
   if !type return "", false;
 
+  if type.type == .POINTER {
+    ptr := cast(*Type_Info_Pointer) type;
+    if !ptr.pointer_to return "", false;
+    pointee_name, pointee_ok := ir_type_to_slang_name(ptr.pointer_to);
+    if !pointee_ok return "", false;
+    return tprint("*%", pointee_name), true;
+  }
+
   if type.type == .ARRAY {
     base_type, suffix := split_array_type_and_suffix("IR lowering", type);
     if !base_type return "", false;
@@ -484,6 +492,15 @@ ir_lookup_decl_alias :: (active_aliases: [] IR_Decl_Alias, declaration: *Code_De
   return "", false;
 }
 
+ir_decl_is_compile_constant :: (decl: *Code_Declaration) -> bool {
+  if !decl return false;
+  if !(decl.flags & .IS_CONSTANT) return false;
+  if !decl.expression return false;
+  // Do not inline procedure declarations through identifier lowering.
+  if decl.expression.kind == .PROCEDURE_BODY || decl.expression.kind == .PROCEDURE_HEADER return false;
+  return true;
+}
+
 ir_struct_has_pointer_members :: (type: *Type_Info) -> bool {
   if !type || type.type != .STRUCT return false;
   st := cast(*Type_Info_Struct) type;
@@ -615,11 +632,25 @@ ir_expr_new :: (kind: IR_Expr_Kind) -> *IR_Expr {
   return e;
 }
 
+ir_float_literal_to_text :: (v: float64) -> string {
+  text := tprint("%", v);
+  has_decimal_or_exp := false;
+  for 0..text.count-1 {
+    ch := text[it];
+    if ch == #char "." || ch == #char "e" || ch == #char "E" {
+      has_decimal_or_exp = true;
+      break;
+    }
+  }
+  if has_decimal_or_exp return text;
+  return tprint("%.0", text);
+}
+
 ir_literal_to_text :: (using lit: *Code_Literal) -> (string, bool) {
   assert(lit != null);
   if value_type == .BOOLEAN return ifx _s64 != 0 then "true" else "false", true;
   if value_type == .NUMBER {
-    if value_flags & .FLOAT return tprint("%", _float64), true;
+    if value_flags & .FLOAT return ir_float_literal_to_text(_float64), true;
     if type && type.type == .INTEGER {
       inttype := cast(*Type_Info_Integer) type;
       if inttype.signed return tprint("%", _s64), true;
@@ -650,6 +681,11 @@ ir_lower_expr :: (node: *Code_Node,
           out := ir_expr_new(.IDENT);
           out.text = alias_text;
           return out, true;
+        }
+
+        if ir_decl_is_compile_constant(ident.resolved_declaration) {
+          inlined, inlined_ok := ir_lower_expr(ident.resolved_declaration.expression, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
+          if inlined_ok return inlined, true;
         }
       }
 

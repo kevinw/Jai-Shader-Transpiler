@@ -102,6 +102,33 @@ parse_i64_literal_expr :: (expr: *IR_Expr) -> (s64, bool) {
   return value, ok;
 }
 
+resolve_ident_or_zero_deref :: (expr: *IR_Expr) -> (name: string, ok: bool) {
+  if !expr return "", false;
+  if expr.kind == .IDENT return expr.text, true;
+  if expr.kind == .CAST && expr.left {
+    name, ok := resolve_ident_or_zero_deref(expr.left);
+    return name, ok;
+  }
+  if expr.kind == .UNARY && expr.left && expr.text == "*" {
+    name, ok := resolve_ident_or_zero_deref(expr.left);
+    return name, ok;
+  }
+  if expr.kind == .SUBSCRIPT && expr.left && expr.left.kind == .IDENT {
+    index_u32, index_u32_ok := parse_u32_literal_expr(expr.right);
+    if index_u32_ok && index_u32 == 0 return expr.left.text, true;
+    index_i64, index_i64_ok := parse_i64_literal_expr(expr.right);
+    if index_i64_ok && index_i64 == 0 return expr.left.text, true;
+  }
+  return "", false;
+}
+
+resolve_member_root_and_field :: (expr: *IR_Expr) -> (root_name: string, field_name: string, ok: bool) {
+  if !expr || expr.kind != .MEMBER return "", "", false;
+  root_name, root_ok := resolve_ident_or_zero_deref(expr.left);
+  if !root_ok return "", "", false;
+  return root_name, expr.text, true;
+}
+
 expr_text :: (expr: *IR_Expr) -> string {
   text, ok := ir_expr_to_slang_from_ir(expr);
   if !ok return "";
@@ -152,6 +179,7 @@ IR_SPV_Gen_Type :: enum {
   UINT64;
   FLOAT;
   FLOAT2;
+  FLOAT3;
   FLOAT4;
   FLOAT2X2;
   BOOL;
@@ -272,6 +300,8 @@ IR_SPV_Gen_Buffer :: struct {
   element_kind: IR_SPV_Gen_Type;
   element_type_id: s64;
   runtimearr_type_id: s64;
+  fixed_array_count: s64;
+  fixed_array_count_const_id: s64;
   wrapper_struct_type_id: s64;
   ptr_wrapper_type_id: s64;
   ptr_storage_element_type_id: s64;
@@ -341,6 +371,7 @@ IR_SPV_Gen_State :: struct {
   id_uint: s64;
   id_float: s64;
   id_float2: s64;
+  id_float3: s64;
   id_float4: s64;
   id_float2x2: s64;
   id_bool: s64;
@@ -366,14 +397,18 @@ IR_SPV_Gen_State :: struct {
   id_ptr_storage_uint64: s64;
   id_ptr_storage_float: s64;
   id_ptr_storage_float2: s64;
+  id_ptr_storage_float3: s64;
   id_ptr_input_float: s64;
   id_ptr_input_float2: s64;
+  id_ptr_input_float3: s64;
   id_ptr_input_float4: s64;
   id_ptr_output_float: s64;
   id_ptr_output_float2: s64;
+  id_ptr_output_float3: s64;
   id_ptr_output_float4: s64;
   id_ptr_uniform_float: s64;
   id_ptr_uniform_float2: s64;
+  id_ptr_uniform_float3: s64;
   id_ptr_uniform_float4: s64;
   id_ptr_uniform_int: s64;
   id_ptr_uniform_uint: s64;
@@ -381,6 +416,7 @@ IR_SPV_Gen_State :: struct {
   id_ptr_uniform_uint64: s64;
   id_ptr_func_float: s64;
   id_ptr_func_float2: s64;
+  id_ptr_func_float3: s64;
   id_ptr_func_float4: s64;
   id_ptr_func_float2x2: s64;
   id_ptr_func_bool: s64;
@@ -490,13 +526,41 @@ find_by_name :: (arr: *[]$T, name: string) -> *T {
   return null;
 }
 
-find_local  :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local  { return find_by_name(*s.locals, name); }
-find_local_array :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Array { return find_by_name(*s.local_arrays, name); }
+find_local  :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local  {
+  i := s.locals.count - 1;
+  while i >= 0 {
+    candidate := s.locals.data + i;
+    if candidate.name == name return candidate;
+    if i == 0 break;
+    i -= 1;
+  }
+  return null;
+}
+
+find_local_array :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Array {
+  i := s.local_arrays.count - 1;
+  while i >= 0 {
+    candidate := s.local_arrays.data + i;
+    if candidate.name == name return candidate;
+    if i == 0 break;
+    i -= 1;
+  }
+  return null;
+}
 find_buffer :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Buffer { return find_by_name(*s.buffers, name); }
 find_uniform_block :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Uniform_Block { return find_by_name(*s.uniform_blocks, name); }
 find_helper :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Helper_Function { return find_by_name(*s.helpers, name); }
 find_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Struct { return find_by_name(*s.extra_structs, name); }
-find_local_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Struct { return find_by_name(*s.local_structs, name); }
+find_local_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Struct {
+  i := s.local_structs.count - 1;
+  while i >= 0 {
+    candidate := s.local_structs.data + i;
+    if candidate.name == name return candidate;
+    if i == 0 break;
+    i -= 1;
+  }
+  return null;
+}
 find_local_struct_field :: (s: *IR_SPV_Gen_Local_Struct, name: string) -> *IR_SPV_Gen_Local_Struct_Field { return find_by_name(*s.fields, name); }
 find_interface_var :: (arr: *[]IR_SPV_Gen_Interface_Var, name: string) -> *IR_SPV_Gen_Interface_Var { return find_by_name(arr, name); }
 find_uniform_field :: (uniform: *IR_SPV_Gen_Uniform_Block, name: string) -> *IR_SPV_Gen_Uniform_Field { return find_by_name(*uniform.fields, name); }
@@ -767,6 +831,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   s.id_uint = new_id(s);
   s.id_float = new_id(s);
   s.id_float2 = new_id(s);
+  s.id_float3 = new_id(s);
   s.id_float4 = new_id(s);
   s.id_float2x2 = new_id(s);
   s.id_bool = new_id(s);
@@ -793,11 +858,14 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   s.id_ptr_storage_uint64 = new_id(s);
   s.id_ptr_storage_float = new_id(s);
   s.id_ptr_storage_float2 = new_id(s);
+  s.id_ptr_storage_float3 = new_id(s);
   s.id_ptr_input_float = new_id(s);
   s.id_ptr_input_float2 = new_id(s);
+  s.id_ptr_input_float3 = new_id(s);
   s.id_ptr_input_float4 = new_id(s);
   s.id_ptr_output_float = new_id(s);
   s.id_ptr_output_float2 = new_id(s);
+  s.id_ptr_output_float3 = new_id(s);
   s.id_ptr_output_float4 = new_id(s);
   s.id_ptr_uniform_int = new_id(s);
   s.id_ptr_uniform_uint = new_id(s);
@@ -805,9 +873,11 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   s.id_ptr_uniform_uint64 = new_id(s);
   s.id_ptr_uniform_float = new_id(s);
   s.id_ptr_uniform_float2 = new_id(s);
+  s.id_ptr_uniform_float3 = new_id(s);
   s.id_ptr_uniform_float4 = new_id(s);
   s.id_ptr_func_float = new_id(s);
   s.id_ptr_func_float2 = new_id(s);
+  s.id_ptr_func_float3 = new_id(s);
   s.id_ptr_func_float4 = new_id(s);
   s.id_ptr_func_float2x2 = new_id(s);
   s.id_ptr_func_bool = new_id(s);
@@ -823,16 +893,26 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     buffer_info.name = it.name;
     buffer_info.var_id = var_id;
     buffer_info.binding_index = it_index;
-    buffer_info.element_type_name = it.element_type_name;
-    elem_kind := expr_type_from_decl(it.element_type_name);
+    element_type_name := it.element_type_name;
+    parsed_elem_type_name, parsed_array_count, parsed_fixed_array := parse_fixed_array_type_name(element_type_name);
+    if parsed_fixed_array {
+      element_type_name = parsed_elem_type_name;
+      if parsed_array_count > 0xFFFF_FFFF {
+        return_err("SPIR-V generic backend: buffer '%' fixed array count % exceeds u32.", it.name, parsed_array_count);
+      }
+      buffer_info.fixed_array_count = parsed_array_count;
+      buffer_info.fixed_array_count_const_id = get_u32_const(s, cast(u32) parsed_array_count);
+    }
+    buffer_info.element_type_name = element_type_name;
+    elem_kind := expr_type_from_decl(element_type_name);
     if elem_kind != .UNKNOWN && elem_kind != .STRUCT {
       buffer_info.element_kind = elem_kind;
       buffer_info.element_type_id = type_id_from_kind(s, elem_kind);
       if buffer_info.element_type_id == 0 {
-        return_err("SPIR-V generic backend: buffer '%' has unsupported primitive element type '%'.", it.name, it.element_type_name);
+        return_err("SPIR-V generic backend: buffer '%' has unsupported primitive element type '%'.", it.name, element_type_name);
       }
 
-      if elem_kind == .UINT {
+      if elem_kind == .UINT && !parsed_fixed_array {
         buffer_info.runtimearr_type_id = s.id_runtimearr_uint;
         buffer_info.wrapper_struct_type_id = s.id_buffer_struct;
         buffer_info.ptr_wrapper_type_id = s.id_ptr_storage_buffer_struct;
@@ -852,9 +932,9 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       continue;
     }
 
-    struct_def := find_struct(s, it.element_type_name);
+    struct_def := find_struct(s, element_type_name);
     if !struct_def {
-      return_err("SPIR-V generic backend: buffer '%' has unsupported element type '%'.", it.name, it.element_type_name);
+      return_err("SPIR-V generic backend: buffer '%' has unsupported element type '%'.", it.name, element_type_name);
     }
 
     element_struct_type_id := new_id(s);
@@ -890,7 +970,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       offset += field_size;
     }
     buffer_info.array_stride = offset;
-    add_debug_name(s, buffer_info.element_type_id, debug_type_name(s, buffer_info.element_type_name));
+    add_debug_name(s, buffer_info.element_type_id, debug_type_name(s, element_type_name));
     add_debug_name(s, buffer_info.runtimearr_type_id, debug_type_name(s, tprint("%_data_array", buffer_info.name)));
     add_debug_name(s, buffer_info.wrapper_struct_type_id, debug_type_name(s, tprint("%_buffer", buffer_info.name)));
     add_debug_member_name(s, buffer_info.wrapper_struct_type_id, 0, "data");
@@ -1157,11 +1237,16 @@ emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, fiel
   diag: IR_Diagnostic;
   if !subscript || subscript.kind != .SUBSCRIPT return_err("SPIR-V backend: expected subscript expression for buffer struct field access.");
 
-  buffer_name := "";
-  if subscript.left && subscript.left.kind == .IDENT {
-    buffer_name = subscript.left.text;
+  buffer_name, base_ok := resolve_ident_or_zero_deref(subscript.left);
+  if base_ok {
+    // already resolved
   } else if subscript.left && subscript.left.kind == .MEMBER {
-    buffer_name = expr_text(subscript.left);
+    member_root, member_field, member_ok := resolve_member_root_and_field(subscript.left);
+    if member_ok {
+      buffer_name = tprint("%.%", member_root, member_field);
+    } else {
+      buffer_name = expr_text(subscript.left);
+    }
   } else {
     return_err("SPIR-V backend: subscript base must resolve to a buffer identifier/member.");
   }
@@ -1335,6 +1420,15 @@ coerce_to_float2 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen
   return 0, false, diag;
 }
 
+coerce_to_float3 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float3_id: s64, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if value_type == .FLOAT3 return value_id, true, diag;
+  if value_type == .FLOAT return splat_float3(s, value_id), true, diag;
+  diag.message = "SPIR-V backend: cannot coerce value to float3.";
+  return 0, false, diag;
+}
+
 coerce_to_float4 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float4_id: s64, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
@@ -1413,6 +1507,11 @@ coerce_to_exact_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_G
     if !coerced_ok return 0, .UNKNOWN, false, coerced_diag;
     return coerced, .FLOAT2, true, diag;
   }
+  if dst_type == .FLOAT3 {
+    coerced, coerced_ok, coerced_diag := coerce_to_float3(s, value_id, src_type);
+    if !coerced_ok return 0, .UNKNOWN, false, coerced_diag;
+    return coerced, .FLOAT3, true, diag;
+  }
   if dst_type == .FLOAT4 {
     coerced, coerced_ok, coerced_diag := coerce_to_float4(s, value_id, src_type);
     if !coerced_ok return 0, .UNKNOWN, false, coerced_diag;
@@ -1452,6 +1551,18 @@ splat_float2 :: (s: *IR_SPV_Gen_State, scalar_id: s64) -> s64 {
   return out;
 }
 
+splat_float3 :: (s: *IR_SPV_Gen_State, scalar_id: s64) -> s64 {
+  assert(s != null);
+  out := new_id(s);
+  add_op(s, tprint("         % = OpCompositeConstruct % % % %",
+                   id_text(out),
+                   id_text(s.id_float3),
+                   id_text(scalar_id),
+                   id_text(scalar_id),
+                   id_text(scalar_id)));
+  return out;
+}
+
 splat_float4 :: (s: *IR_SPV_Gen_State, scalar_id: s64) -> s64 {
   assert(s != null);
   out := new_id(s);
@@ -1474,6 +1585,18 @@ emit_float2_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_
   if op == "*" { add_op(s, tprint("         % = OpFMul % % %", id_text(result), id_text(s.id_float2), id_text(left_id), id_text(right_id))); return result, .FLOAT2, true, diag; }
   if op == "/" { add_op(s, tprint("         % = OpFDiv % % %", id_text(result), id_text(s.id_float2), id_text(left_id), id_text(right_id))); return result, .FLOAT2, true, diag; }
   diag.message = tprint("SPIR-V backend: unsupported float2 binary op '%'.", op);
+  return 0, .UNKNOWN, false, diag;
+}
+
+emit_float3_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  result := new_id(s);
+  if op == "+" { add_op(s, tprint("         % = OpFAdd % % %", id_text(result), id_text(s.id_float3), id_text(left_id), id_text(right_id))); return result, .FLOAT3, true, diag; }
+  if op == "-" { add_op(s, tprint("         % = OpFSub % % %", id_text(result), id_text(s.id_float3), id_text(left_id), id_text(right_id))); return result, .FLOAT3, true, diag; }
+  if op == "*" { add_op(s, tprint("         % = OpFMul % % %", id_text(result), id_text(s.id_float3), id_text(left_id), id_text(right_id))); return result, .FLOAT3, true, diag; }
+  if op == "/" { add_op(s, tprint("         % = OpFDiv % % %", id_text(result), id_text(s.id_float3), id_text(left_id), id_text(right_id))); return result, .FLOAT3, true, diag; }
+  diag.message = tprint("SPIR-V backend: unsupported float3 binary op '%'.", op);
   return 0, .UNKNOWN, false, diag;
 }
 
@@ -1687,6 +1810,15 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
         }
         final_value = coerced;
         final_type = .FLOAT2;
+      } else if arg_kind == .FLOAT3 && arg_type != .FLOAT3 {
+        coerced, coerced_ok, coerced_diag := coerce_to_float3(s, arg_value, arg_type);
+        if !coerced_ok {
+          s.locals.count = local_count_before;
+          s.local_structs.count = local_struct_count_before;
+          return 0, .UNKNOWN, false, coerced_diag;
+        }
+        final_value = coerced;
+        final_type = .FLOAT3;
       } else if arg_kind == .FLOAT4 && arg_type != .FLOAT4 {
         coerced, coerced_ok, coerced_diag := coerce_to_float4(s, arg_value, arg_type);
         if !coerced_ok {
@@ -1863,6 +1995,15 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
         }
         final_value = coerced;
         final_type = .FLOAT2;
+      } else if arg_type == .FLOAT3 && value_type != .FLOAT3 {
+        coerced, coerced_ok, coerced_diag := coerce_to_float3(s, arg_value, value_type);
+        if !coerced_ok {
+          s.locals.count = local_count_before;
+          s.local_structs.count = local_struct_count_before;
+          return false, coerced_diag;
+        }
+        final_value = coerced;
+        final_type = .FLOAT3;
       } else if arg_type == .FLOAT4 && value_type != .FLOAT4 {
         coerced, coerced_ok, coerced_diag := coerce_to_float4(s, arg_value, value_type);
         if !coerced_ok {
@@ -2219,7 +2360,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
         if !skip_direct_left_eval {
           left_id, left_type, left_ok, left_diag := emit_expr(s, expr.left);
-          if left_ok && (left_type == .FLOAT2 || left_type == .FLOAT4) {
+          if left_ok && (left_type == .FLOAT2 || left_type == .FLOAT3 || left_type == .FLOAT4) {
             if expr.text == "xy" {
               if left_type == .FLOAT2 return left_id, .FLOAT2, true, diag;
               swz := new_id(s);
@@ -2237,6 +2378,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
             if expr.text == "w" comp_index = 3;
             if comp_index >= 0 {
               if left_type == .FLOAT2 && comp_index > 1 return_err("SPIR-V backend: component '%' out of range for float2.", expr.text);
+              if left_type == .FLOAT3 && comp_index > 2 return_err("SPIR-V backend: component '%' out of range for float3.", expr.text);
               scalar_value := new_id(s);
               add_op(s, tprint("         % = OpCompositeExtract % % %",
                                id_text(scalar_value),
@@ -2251,10 +2393,11 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           }
         }
       }
-      if expr.left && expr.left.kind == .IDENT {
-        uniform := find_uniform_block(s, expr.left.text);
+      if expr.left {
+        uniform_name, uniform_field, uniform_ok := resolve_member_root_and_field(expr);
+        uniform := ifx uniform_ok then find_uniform_block(s, uniform_name) else null;
         if uniform {
-          field_ptr, field_type, field_ok, field_diag := emit_uniform_field_ptr(s, expr.left.text, expr.text);
+          field_ptr, field_type, field_ok, field_diag := emit_uniform_field_ptr(s, uniform_name, uniform_field);
           if !field_ok return 0, .UNKNOWN, false, field_diag;
           value_id := new_id(s);
           value_type_id := type_id_from_kind(s, field_type);
@@ -2265,14 +2408,16 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           return value_id, field_type, true, diag;
         }
         local := find_local(s, expr.left.text);
-        if local && (local.type == .FLOAT2 || local.type == .FLOAT4) {
+        if local && (local.type == .FLOAT2 || local.type == .FLOAT3 || local.type == .FLOAT4) {
           comp_index: s64 = -1;
           if expr.text == "x" comp_index = 0;
           if expr.text == "y" comp_index = 1;
           if expr.text == "z" comp_index = 2;
           if expr.text == "w" comp_index = 3;
           vec_value := new_id(s);
-          vec_type_id := ifx local.type == .FLOAT2 then s.id_float2 else s.id_float4;
+          vec_type_id := s.id_float4;
+          if local.type == .FLOAT2 vec_type_id = s.id_float2;
+          if local.type == .FLOAT3 vec_type_id = s.id_float3;
           add_op(s, tprint("         % = OpLoad % %",
                            id_text(vec_value),
                            id_text(vec_type_id),
@@ -2289,6 +2434,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           }
           if comp_index >= 0 {
             if local.type == .FLOAT2 && comp_index > 1 return_err("SPIR-V backend: component '%' out of range for float2.", expr.text);
+            if local.type == .FLOAT3 && comp_index > 2 return_err("SPIR-V backend: component '%' out of range for float3.", expr.text);
             scalar_value := new_id(s);
             add_op(s, tprint("         % = OpCompositeExtract % % %",
                              id_text(scalar_value),
@@ -2340,6 +2486,24 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
     }
 
     case .SUBSCRIPT; {
+      if expr.left && expr.left.kind == .MEMBER {
+        uniform_name, uniform_field, uniform_ok := resolve_member_root_and_field(expr.left);
+        if uniform_ok {
+          idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
+          if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+          ptr, elem_type, ptr_ok, ptr_diag := emit_uniform_array_element_ptr(s, uniform_name, uniform_field, idx, idx_type);
+          if ptr_ok {
+            value_id := new_id(s);
+            value_type_id := type_id_from_kind(s, elem_type);
+            add_op(s, tprint("         % = OpLoad % %",
+                                        id_text(value_id),
+                                        id_text(value_type_id),
+                                        id_text(ptr)));
+            return value_id, elem_type, true, diag;
+          }
+        }
+      }
+
       if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .IDENT {
         idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
         if !idx_ok return 0, .UNKNOWN, false, idx_diag;
@@ -2379,11 +2543,16 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
       }
 
-      buffer_name := "";
-      if expr.left && expr.left.kind == .IDENT {
-        buffer_name = expr.left.text;
+      buffer_name, base_ok := resolve_ident_or_zero_deref(expr.left);
+      if base_ok {
+        // already resolved
       } else if expr.left && expr.left.kind == .MEMBER {
-        buffer_name = expr_text(expr.left);
+        member_root, member_field, member_ok := resolve_member_root_and_field(expr.left);
+        if member_ok {
+          buffer_name = tprint("%.%", member_root, member_field);
+        } else {
+          buffer_name = expr_text(expr.left);
+        }
       } else {
         return_err("SPIR-V backend: subscript base must resolve to an identifier/member.");
       }
@@ -2482,6 +2651,34 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
                          id_text(right_id)));
         return result_id, .FLOAT2, true, diag;
       }
+      if left_type == .FLOAT3 && right_type == .FLOAT3 {
+        result_id, result_type, result_ok, result_diag := emit_float3_binary_op(s, op, left_id, right_id);
+        return result_id, result_type, result_ok, result_diag;
+      }
+      if left_type == .FLOAT3 && right_type == .FLOAT {
+        right_v3 := splat_float3(s, right_id);
+        result_id, result_type, result_ok, result_diag := emit_float3_binary_op(s, op, left_id, right_v3);
+        return result_id, result_type, result_ok, result_diag;
+      }
+      if left_type == .FLOAT3 && is_integral_kind(right_type) {
+        right_f, right_f_ok, right_f_diag := coerce_to_float(s, right_id, right_type);
+        if !right_f_ok return 0, .UNKNOWN, false, right_f_diag;
+        right_v3 := splat_float3(s, right_f);
+        result_id, result_type, result_ok, result_diag := emit_float3_binary_op(s, op, left_id, right_v3);
+        return result_id, result_type, result_ok, result_diag;
+      }
+      if left_type == .FLOAT && right_type == .FLOAT3 {
+        left_v3 := splat_float3(s, left_id);
+        result_id, result_type, result_ok, result_diag := emit_float3_binary_op(s, op, left_v3, right_id);
+        return result_id, result_type, result_ok, result_diag;
+      }
+      if is_integral_kind(left_type) && right_type == .FLOAT3 {
+        left_f, left_f_ok, left_f_diag := coerce_to_float(s, left_id, left_type);
+        if !left_f_ok return 0, .UNKNOWN, false, left_f_diag;
+        left_v3 := splat_float3(s, left_f);
+        result_id, result_type, result_ok, result_diag := emit_float3_binary_op(s, op, left_v3, right_id);
+        return result_id, result_type, result_ok, result_diag;
+      }
       if left_type == .FLOAT4 && right_type == .FLOAT4 {
         result_id, result_type, result_ok, result_diag := emit_float4_binary_op(s, op, left_id, right_id);
         return result_id, result_type, result_ok, result_diag;
@@ -2566,6 +2763,12 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           add_op(s, tprint("         % = OpFNegate % %",
                            id_text(out), id_text(s.id_float2), id_text(inner_id)));
           return out, .FLOAT2, true, diag;
+        }
+        if inner_type == .FLOAT3 {
+          out := new_id(s);
+          add_op(s, tprint("         % = OpFNegate % %",
+                           id_text(out), id_text(s.id_float3), id_text(inner_id)));
+          return out, .FLOAT3, true, diag;
         }
         if inner_type == .FLOAT4 {
           out := new_id(s);
@@ -2809,6 +3012,29 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
                          id_text(bf)));
         return out, .FLOAT2, true, diag;
       }
+      if ctor_type == .FLOAT3 {
+        if expr.args.count != 3 return_err("SPIR-V backend: float3 constructor expects 3 args, got %.", expr.args.count);
+        a0_id, a0_type, a0_ok, a0_diag := emit_expr(s, expr.args[0]);
+        if !a0_ok return 0, .UNKNOWN, false, a0_diag;
+        a1_id, a1_type, a1_ok, a1_diag := emit_expr(s, expr.args[1]);
+        if !a1_ok return 0, .UNKNOWN, false, a1_diag;
+        a2_id, a2_type, a2_ok, a2_diag := emit_expr(s, expr.args[2]);
+        if !a2_ok return 0, .UNKNOWN, false, a2_diag;
+        f0, f0_ok, f0_diag := coerce_to_float(s, a0_id, a0_type);
+        if !f0_ok return 0, .UNKNOWN, false, f0_diag;
+        f1, f1_ok, f1_diag := coerce_to_float(s, a1_id, a1_type);
+        if !f1_ok return 0, .UNKNOWN, false, f1_diag;
+        f2, f2_ok, f2_diag := coerce_to_float(s, a2_id, a2_type);
+        if !f2_ok return 0, .UNKNOWN, false, f2_diag;
+        out := new_id(s);
+        add_op(s, tprint("         % = OpCompositeConstruct % % % %",
+                         id_text(out),
+                         id_text(s.id_float3),
+                         id_text(f0),
+                         id_text(f1),
+                         id_text(f2)));
+        return out, .FLOAT3, true, diag;
+      }
       if ctor_type == .FLOAT4 {
         if expr.args.count != 4 return_err("SPIR-V backend: float4 constructor expects 4 args, got %.", expr.args.count);
         a0_id, a0_type, a0_ok, a0_diag := emit_expr(s, expr.args[0]);
@@ -2915,11 +3141,26 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       }
     }
 
-    buffer_name := "";
-    if expr.left && expr.left.kind == .IDENT {
-      buffer_name = expr.left.text;
+    if expr.left && expr.left.kind == .MEMBER {
+      uniform_name, uniform_field, uniform_ok := resolve_member_root_and_field(expr.left);
+      if uniform_ok {
+        idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
+        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+        ptr, elem_type, ptr_ok, ptr_diag := emit_uniform_array_element_ptr(s, uniform_name, uniform_field, idx, idx_type);
+        if ptr_ok return ptr, elem_type, true, diag;
+      }
+    }
+
+    buffer_name, base_ok := resolve_ident_or_zero_deref(expr.left);
+    if base_ok {
+      // already resolved
     } else if expr.left && expr.left.kind == .MEMBER {
-      buffer_name = expr_text(expr.left);
+      member_root, member_field, member_ok := resolve_member_root_and_field(expr.left);
+      if member_ok {
+        buffer_name = tprint("%.%", member_root, member_field);
+      } else {
+        buffer_name = expr_text(expr.left);
+      }
     } else {
       return_err("SPIR-V backend: unsupported lvalue subscript base.");
     }
@@ -2949,7 +3190,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
     if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .SUBSCRIPT {
       field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
       if !field_ok return 0, .UNKNOWN, false, field_diag;
-      if field_type != .FLOAT2 && field_type != .FLOAT4 return_err("SPIR-V backend: lvalue component access requires float2/float4 field, got %.", field_type);
+      if field_type != .FLOAT2 && field_type != .FLOAT3 && field_type != .FLOAT4 return_err("SPIR-V backend: lvalue component access requires float2/float3/float4 field, got %.", field_type);
       comp_index: u32 = 0;
       if expr.text == "x" comp_index = 0;
       else if expr.text == "y" comp_index = 1;
@@ -2957,6 +3198,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       else if expr.text == "w" comp_index = 3;
       else return_err("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
       if field_type == .FLOAT2 && comp_index > 1 return_err("SPIR-V backend: vector component '%' out of range for float2 lvalue.", expr.text);
+      if field_type == .FLOAT3 && comp_index > 2 return_err("SPIR-V backend: vector component '%' out of range for float3 lvalue.", expr.text);
       comp_index_id := get_u32_const(s, comp_index);
       ptr := new_id(s);
       add_op(s, tprint("         % = OpAccessChain % % %",
@@ -2968,7 +3210,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
     }
     if expr.left && expr.left.kind == .IDENT {
       local_vec := find_local(s, expr.left.text);
-      if local_vec && (local_vec.type == .FLOAT2 || local_vec.type == .FLOAT4) {
+      if local_vec && (local_vec.type == .FLOAT2 || local_vec.type == .FLOAT3 || local_vec.type == .FLOAT4) {
         comp_index: u32 = 0;
         if expr.text == "x" comp_index = 0;
         else if expr.text == "y" comp_index = 1;
@@ -2976,6 +3218,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
         else if expr.text == "w" comp_index = 3;
         else return_err("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
         if local_vec.type == .FLOAT2 && comp_index > 1 return_err("SPIR-V backend: vector component '%' out of range for float2 lvalue.", expr.text);
+        if local_vec.type == .FLOAT3 && comp_index > 2 return_err("SPIR-V backend: vector component '%' out of range for float3 lvalue.", expr.text);
         comp_index_id := get_u32_const(s, comp_index);
         ptr := new_id(s);
         add_op(s, tprint("         % = OpAccessChain % % %",
@@ -3006,7 +3249,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
           if nested_field.type == .STRUCT return_err("SPIR-V backend: nested struct field '%.%.%' must be accessed through a member.", expr.left.left.text, expr.left.text, expr.text);
           return nested_field.ptr_id, nested_field.type, true, diag;
         }
-        if field.type != .FLOAT2 && field.type != .FLOAT4 return_err("SPIR-V backend: component lvalue requires float2/float4 field, got %.", field.type);
+        if field.type != .FLOAT2 && field.type != .FLOAT3 && field.type != .FLOAT4 return_err("SPIR-V backend: component lvalue requires float2/float3/float4 field, got %.", field.type);
         comp_index: u32 = 0;
         if expr.text == "x" comp_index = 0;
         else if expr.text == "y" comp_index = 1;
@@ -3014,6 +3257,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
         else if expr.text == "w" comp_index = 3;
         else return_err("SPIR-V backend: unsupported vector component '%' for lvalue.", expr.text);
         if field.type == .FLOAT2 && comp_index > 1 return_err("SPIR-V backend: vector component '%' out of range for float2 lvalue.", expr.text);
+        if field.type == .FLOAT3 && comp_index > 2 return_err("SPIR-V backend: vector component '%' out of range for float3 lvalue.", expr.text);
         comp_index_id := get_u32_const(s, comp_index);
         ptr := new_id(s);
         add_op(s, tprint("         % = OpAccessChain % % %",
@@ -3038,6 +3282,12 @@ lvalue_hits_storage_buffer :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> bool {
       return find_buffer(s, expr.left.text) != null;
     }
     if expr.left && expr.left.kind == .MEMBER {
+      uniform_name, _, uniform_ok := resolve_member_root_and_field(expr.left);
+      if uniform_ok && find_uniform_block(s, uniform_name) != null return false;
+    }
+    if expr.left && expr.left.kind == .MEMBER {
+      member_root, member_field, member_ok := resolve_member_root_and_field(expr.left);
+      if member_ok return find_buffer(s, tprint("%.%", member_root, member_field)) != null;
       return find_buffer(s, expr_text(expr.left)) != null;
     }
     return false;
@@ -3061,7 +3311,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
     case .DECL; {
       decl_type := expr_type_from_decl(stmt.decl_type_name);
       if decl_type == .INT || decl_type == .UINT || decl_type == .INT64 || decl_type == .UINT64 ||
-         decl_type == .BOOL || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT4 || decl_type == .FLOAT2X2 {
+         decl_type == .BOOL || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT3 || decl_type == .FLOAT4 || decl_type == .FLOAT2X2 {
         ptr_id := new_id(s);
         ptr_type_id := func_ptr_type_id_from_kind(s, decl_type);
         assert(ptr_type_id != 0);
@@ -3305,7 +3555,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return true, false, diag;
       }
 
-      if lhs_type == .FLOAT || lhs_type == .FLOAT2 || lhs_type == .FLOAT4 {
+      if lhs_type == .FLOAT || lhs_type == .FLOAT2 || lhs_type == .FLOAT3 || lhs_type == .FLOAT4 {
         base_op: string = "";
         if op == "+=" base_op = "+";
         if op == "-=" base_op = "-";
@@ -3337,6 +3587,16 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             return_err("SPIR-V backend: float2 compound assignment rhs must be float or float2.");
           }
           result_id, result_type, result_ok, result_diag = emit_float2_binary_op(s, base_op, lhs_vec, rhs_vec);
+        } else if lhs_type == .FLOAT3 {
+          lhs_vec := lhs_value;
+          rhs_vec := rhs_id;
+          if rhs_type == .FLOAT rhs_vec = splat_float3(s, rhs_id);
+          if rhs_type == .FLOAT3 {
+            // keep
+          } else if rhs_type != .FLOAT {
+            return_err("SPIR-V backend: float3 compound assignment rhs must be float or float3.");
+          }
+          result_id, result_type, result_ok, result_diag = emit_float3_binary_op(s, base_op, lhs_vec, rhs_vec);
         } else {
           assert(lhs_type == .FLOAT4);
           lhs_vec := lhs_value;
@@ -3742,6 +4002,17 @@ emit_output_return_from_struct :: (s: *IR_SPV_Gen_State, local_struct: *IR_SPV_G
   return true, diag;
 }
 
+spv_append_buffer_array_type :: (sb: *String_Builder, buffer: IR_SPV_Gen_Buffer) {
+  if buffer.fixed_array_count > 0 {
+    append(sb, tprint("% = OpTypeArray % %\n",
+                      id_text(buffer.runtimearr_type_id),
+                      id_text(buffer.element_type_id),
+                      id_text(buffer.fixed_array_count_const_id)));
+    return;
+  }
+  append(sb, tprint("% = OpTypeRuntimeArray %\n", id_text(buffer.runtimearr_type_id), id_text(buffer.element_type_id)));
+}
+
 parse_parameter_block_struct_name :: (type_name: string) -> (string, bool) {
   prefix :: "ParameterBlock<";
   if !begins_with(type_name, prefix) return "", false;
@@ -4109,7 +4380,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
       append(*struct_type_line_sb, "\n");
       append(*sb, builder_to_string(*struct_type_line_sb));
     }
-    append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(buffer.runtimearr_type_id), id_text(buffer.element_type_id)));
+    spv_append_buffer_array_type(*sb, buffer);
     append(*sb, tprint("% = OpTypeStruct %\n", id_text(buffer.wrapper_struct_type_id), id_text(buffer.runtimearr_type_id)));
     append(*sb, tprint("% = OpTypePointer % %\n", id_text(buffer.ptr_wrapper_type_id), storage_class, id_text(buffer.wrapper_struct_type_id)));
     append(*sb, tprint("% = OpTypePointer % %\n", id_text(buffer.ptr_storage_element_type_id), storage_class, id_text(buffer.element_type_id)));
@@ -4160,6 +4431,21 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   graphics_buffers: [..] IR_Compute_Buffer;
   for args {
     arg := it;
+    if arg.is_pointer && !arg.pointer_pointee_is_struct && arg.pointer_pointee_type_name.count != 0 {
+      array_add(*graphics_buffers, .{
+        name = arg.name,
+        element_type_name = arg.pointer_pointee_type_name,
+      });
+      continue;
+    }
+    elem_type_name, is_resource_buffer := parse_structured_buffer_element_type(arg.type_name);
+    if is_resource_buffer {
+      array_add(*graphics_buffers, .{
+        name = arg.name,
+        element_type_name = elem_type_name,
+      });
+      continue;
+    }
     is_param_block := false;
     container_type_name := arg.type_name;
     if arg.is_pointer && arg.pointer_pointee_is_struct && arg.pointer_pointee_type_name.count != 0 {
@@ -4284,8 +4570,10 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         if field_type_id == 0 return_err("SPIR-V backend: missing type id for uniform field '%.%'.", struct_name, field.name);
         field_align = 4;
         if field_type == .FLOAT2 field_align = 8;
+        if field_type == .FLOAT3 field_align = 16;
         if field_type == .FLOAT4 field_align = 16;
         field_size = byte_size_of_kind(field_type);
+        if field_type == .FLOAT3 field_size = 16;
       }
 
       offset = align_up(offset, field_align);
@@ -4421,7 +4709,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
       append(*struct_type_line_sb, "\n");
       append(*sb, builder_to_string(*struct_type_line_sb));
     }
-    append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(buffer.runtimearr_type_id), id_text(buffer.element_type_id)));
+    spv_append_buffer_array_type(*sb, buffer);
     append(*sb, tprint("% = OpTypeStruct %\n", id_text(buffer.wrapper_struct_type_id), id_text(buffer.runtimearr_type_id)));
     append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(buffer.ptr_wrapper_type_id), id_text(buffer.wrapper_struct_type_id)));
     append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(buffer.ptr_storage_element_type_id), id_text(buffer.element_type_id)));
@@ -4540,7 +4828,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
       append(*struct_type_line_sb, "\n");
       append(*sb, builder_to_string(*struct_type_line_sb));
     }
-    append(*sb, tprint("% = OpTypeRuntimeArray %\n", id_text(buffer.runtimearr_type_id), id_text(buffer.element_type_id)));
+    spv_append_buffer_array_type(*sb, buffer);
     append(*sb, tprint("% = OpTypeStruct %\n", id_text(buffer.wrapper_struct_type_id), id_text(buffer.runtimearr_type_id)));
     append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(buffer.ptr_wrapper_type_id), id_text(buffer.wrapper_struct_type_id)));
     append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(buffer.ptr_storage_element_type_id), id_text(buffer.element_type_id)));

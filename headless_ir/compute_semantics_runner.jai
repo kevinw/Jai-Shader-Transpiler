@@ -58,6 +58,11 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"edge_case_40_vector_component_swap", .Boids},
   {"edge_case_41_matrix_reassign_chain", .Bare},
   {"edge_case_42_thread_id_y_component", .Bare},
+  {"edge_case_43_global_constants_subscript", .Bare},
+  {"edge_case_44_local_float3_components", .Bare},
+  {"edge_case_45_wrap_helper_constants", .Bare},
+  {"edge_case_46_wrap_xy_cell_index", .Bare},
+  {"edge_case_47_float_constant_division", .Bare},
   {"edge_case_26_vector_negate", .Bare},
   {"edge_case_27_helper_nested_call", .Bare},
   {"edge_case_28_struct_constructor_from_member_expr", .Boids},
@@ -836,6 +841,88 @@ edge_case_41_matrix_reassign_chain :: (using in: Compute_Semantics_In, values: *
 edge_case_42_thread_id_y_component :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   values[thread_id.x] = values[thread_id.x] + thread_id.y + 1;
+} @compute_shader
+
+EDGE_CONST_MUL :: 5;
+EDGE_CONST_ADD :: 11;
+
+edge_case_43_global_constants_subscript :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  values[thread_id.x] = values[thread_id.x] * EDGE_CONST_MUL + EDGE_CONST_ADD;
+} @compute_shader
+
+edge_case_44_local_float3_components :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  t := cast(float) (idx % 5);
+  v := Vector3.{1.0 + t, 2.0, 3.0};
+  v.y += 4.0;
+  v.z = v.z * 2.0;
+  values[idx] = cast(u32) (v.x + v.y + v.z);
+} @compute_shader
+
+EDGE_WRAP_WIDTH :: 8;
+
+edge_wrap_left_const :: (x: u32) -> u32 {
+  if x == 0 return EDGE_WRAP_WIDTH - 1;
+  return x - 1;
+}
+
+edge_wrap_right_const :: (x: u32) -> u32 {
+  n := x + 1;
+  if n >= EDGE_WRAP_WIDTH return 0;
+  return n;
+}
+
+edge_case_45_wrap_helper_constants :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  x := thread_id.x % EDGE_WRAP_WIDTH;
+  l := edge_wrap_left_const(x);
+  r := edge_wrap_right_const(x);
+  values[thread_id.x] = x * 100 + l * 10 + r;
+} @compute_shader
+
+edge_wrap_up_const :: (y: u32) -> u32 {
+  if y == 0 return EDGE_WRAP_WIDTH - 1;
+  return y - 1;
+}
+
+edge_wrap_down_const :: (y: u32) -> u32 {
+  n := y + 1;
+  if n >= EDGE_WRAP_WIDTH return 0;
+  return n;
+}
+
+edge_cell_index_const :: (x: u32, y: u32) -> u32 {
+  return y * EDGE_WRAP_WIDTH + x;
+}
+
+edge_case_46_wrap_xy_cell_index :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  x := idx % EDGE_WRAP_WIDTH;
+  y := idx / EDGE_WRAP_WIDTH;
+
+  left_x := edge_wrap_left_const(x);
+  right_x := edge_wrap_right_const(x);
+  up_y := edge_wrap_up_const(y);
+  down_y := edge_wrap_down_const(y);
+
+  l := edge_cell_index_const(left_x, y);
+  r := edge_cell_index_const(right_x, y);
+  u := edge_cell_index_const(x, up_y);
+  d := edge_cell_index_const(x, down_y);
+
+  values[idx] = l + r * 64 + u * 4096 + d * 262144;
+} @compute_shader
+
+EDGE_FLOAT_DT :: 1.0 / 60.0;
+
+edge_case_47_float_constant_division :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v := cast(float) (idx + 1) * EDGE_FLOAT_DT * 120.0;
+  values[idx] = cast(u32) (v * 1000.0);
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {

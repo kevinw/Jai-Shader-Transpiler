@@ -86,6 +86,7 @@ IR_Headless_Position_Semantic_Vertex_Out :: struct {
   color: Vector4;
 }
 
+
 IR_Headless_Compute_In :: struct {
   thread_id: UVector3; @thread_position_in_grid
 }
@@ -168,6 +169,7 @@ ir_headless_fragment_position_semantic_main :: (using input: IR_Headless_Positio
   out_color = input.color;
   return out;
 } @fragment_shader
+
 
 ir_headless_compute_root_struct_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_Root) {
   if thread_id.x < 64 {
