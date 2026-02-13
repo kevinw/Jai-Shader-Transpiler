@@ -1223,6 +1223,11 @@ emit_int_binary_op :: (s: *IR_SPV_Gen_State, op: string, kind: IR_SPV_Gen_Type, 
   if op == "+" { add_op(s, tprint("         % = OpIAdd % % %", id_text(result_id), id_text(type_id), id_text(left_id), id_text(right_id))); return result_id, kind, true, diag; }
   if op == "-" { add_op(s, tprint("         % = OpISub % % %", id_text(result_id), id_text(type_id), id_text(left_id), id_text(right_id))); return result_id, kind, true, diag; }
   if op == "*" { add_op(s, tprint("         % = OpIMul % % %", id_text(result_id), id_text(type_id), id_text(left_id), id_text(right_id))); return result_id, kind, true, diag; }
+  if op == "/" {
+    op_name := ifx is_signed then "OpSDiv" else "OpUDiv";
+    add_op(s, tprint("         % = % % % %", id_text(result_id), op_name, id_text(type_id), id_text(left_id), id_text(right_id)));
+    return result_id, kind, true, diag;
+  }
   if op == "%" {
     op_name := ifx is_signed then "OpSMod" else "OpUMod";
     add_op(s, tprint("         % = % % % %", id_text(result_id), op_name, id_text(type_id), id_text(left_id), id_text(right_id)));

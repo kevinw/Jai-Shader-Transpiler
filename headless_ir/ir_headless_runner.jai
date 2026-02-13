@@ -68,6 +68,15 @@ ir_headless_vertex_helpers_main :: (using input: IR_Headless_Vertex_In, using un
   return out;
 } @vertex_shader
 
+ir_headless_vertex_uint_div_main :: (using input: IR_Headless_Vertex_In, using un: IR_Headless_Vertex_Uniforms) -> IR_Headless_Vertex_Out {
+  using out: IR_Headless_Vertex_Out;
+  half_id := vertex_id / 2;
+  t := cast(float) half_id * 0.1;
+  position = Vector4.{a_pos.x + t, a_pos.y, 0.0, 1.0};
+  color = Vector4.{t, 0.0, 1.0, 1.0};
+  return out;
+} @vertex_shader
+
 IR_Headless_Fragment_Out :: struct {
   out_color: Vector4; @semantic_SV_Target0
 }
@@ -174,6 +183,14 @@ ir_headless_fragment_boost :: (x: float) -> float {
     compile_metal(helper_vert_path);
   }
 
+  metal_vertex_uint_div := get_transpiled(.METAL, ir_headless_vertex_uint_div_main);
+  check_contains(metal_vertex_uint_div, "/", "uint division vertex metal output");
+  uint_div_vert_path := tprint("%/ir_vertex_uint_div.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(uint_div_vert_path, metal_vertex_uint_div) fail("Could not write %", uint_div_vert_path);
+  #if OS == .MACOS {
+    compile_metal(uint_div_vert_path);
+  }
+
   vulkan_vertex_helpers := get_transpiled(.VULKAN_GLSL, ir_headless_vertex_helpers_main);
   check_contains(vulkan_vertex_helpers, "#version", "vertex helper Vulkan GLSL output");
   check_contains(vulkan_vertex_helpers, "0.25", "vertex helper Vulkan GLSL output");
@@ -222,6 +239,15 @@ ir_headless_fragment_boost :: (x: float) -> float {
   if !write_entire_file(pair_path, metal_pair) fail("Could not write %", pair_path);
   #if OS == .MACOS {
     compile_metal(pair_path);
+  }
+
+  uint_div_pair := get_transpiled(.METAL, ir_headless_vertex_uint_div_main, ir_headless_fragment_main);
+  check_contains(uint_div_pair, "vertex", "uint division pair metal output");
+  check_contains(uint_div_pair, "fragment", "uint division pair metal output");
+  uint_div_pair_path := tprint("%/ir_pair_uint_div.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(uint_div_pair_path, uint_div_pair) fail("Could not write %", uint_div_pair_path);
+  #if OS == .MACOS {
+    compile_metal(uint_div_pair_path);
   }
 
   anon_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_anonymous_main);
