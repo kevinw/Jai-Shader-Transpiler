@@ -7,7 +7,7 @@ This file tracks real gaps found while getting the reaction-diffusion prototype 
 1. Pair linking fails when stages use different addressing models.
 - Error from `spirv-link`: `Conflicting addressing models: PhysicalStorageBuffer64 vs Logical`.
 - Trigger: vertex stage with pointer-ABI root arg while fragment stage lowered to logical path.
-- Current behavior: fail with explicit per-stage memory-model diagnostic in pair path.
+- Current behavior: fail early with explicit ABI mismatch diagnostic; link-time diagnostics also include per-stage memory models.
 
 2. Pair Metal output can still be brittle when stages are lowered independently.
 - Historically observed runtime error: fragment input `user(locn1)` mismatched vertex output.

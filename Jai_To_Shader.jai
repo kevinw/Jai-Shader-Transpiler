@@ -1540,6 +1540,30 @@ spv_memory_model_from_text :: (spvasm: string) -> string {
   return trim(line);
 }
 
+ir_find_struct_by_name_local :: (extra_structs: [] IR_Struct, name: string) -> *IR_Struct {
+  for *extra_structs if it.name == name return it;
+  return null;
+}
+
+ir_struct_has_pointer_fields_recursive_local :: (extra_structs: [] IR_Struct, name: string) -> bool {
+  st := ir_find_struct_by_name_local(extra_structs, name);
+  if !st return false;
+  for st.fields {
+    if it.is_pointer return true;
+    if it.type_name.count != 0 && ir_struct_has_pointer_fields_recursive_local(extra_structs, it.type_name) return true;
+  }
+  return false;
+}
+
+ir_uses_pointer_abi_local :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct) -> bool {
+  for args {
+    arg := it;
+    if !arg.is_pointer || !arg.pointer_pointee_is_struct || arg.pointer_pointee_type_name.count == 0 continue;
+    if ir_struct_has_pointer_fields_recursive_local(extra_structs, arg.pointer_pointee_type_name) return true;
+  }
+  return false;
+}
+
 write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false, timings_totals: *Build_Timing_Totals = null) -> (string, bool, IR_Diagnostic) {
   _ = emit_line_directives;
 
@@ -1589,6 +1613,17 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   fragment_normalized, fragment_normalize_diag := normalize_fragment_ir(*ir_fragment);
   if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
   if !fragment_normalized return "", false, fragment_normalize_diag;
+
+  vertex_uses_pointer_abi := ir_uses_pointer_abi_local(ir_vertex.args, ir_vertex.extra_structs);
+  fragment_uses_pointer_abi := ir_uses_pointer_abi_local(ir_fragment.args, ir_fragment.extra_structs);
+  if vertex_uses_pointer_abi != fragment_uses_pointer_abi {
+    diag.message = tprint("SPIR-V backend: pair '%': vertex and fragment use incompatible resource ABI styles (vertex pointer-ABI=%; fragment pointer-ABI=%). Pair shaders must agree on resource ABI.", pair_ctx.name, vertex_uses_pointer_abi, fragment_uses_pointer_abi);
+    if pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+      diag.location = make_location(pair_ctx.vertex_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
 
   t0 = current_time_monotonic();
   vertex_spvasm, fragment_spvasm, pair_spvasm_ok, pair_spvasm_diag := emit_ir_graphics_pair_to_spirv_text_branch(ir_vertex, ir_fragment);
