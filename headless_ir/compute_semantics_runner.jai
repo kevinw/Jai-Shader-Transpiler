@@ -57,6 +57,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"edge_case_39_local_struct_using_update", .Bare},
   {"edge_case_40_vector_component_swap", .Boids},
   {"edge_case_41_matrix_reassign_chain", .Bare},
+  {"edge_case_42_thread_id_y_component", .Bare},
   {"edge_case_26_vector_negate", .Bare},
   {"edge_case_27_helper_nested_call", .Bare},
   {"edge_case_28_struct_constructor_from_member_expr", .Boids},
@@ -830,6 +831,11 @@ edge_case_41_matrix_reassign_chain :: (using in: Compute_Semantics_In, values: *
   m = Matrix2.{2.0, 1.0, 0.0, 1.0};
   r1 := m * r0;
   values[idx] = cast(u32) (r1.x + r1.y);
+} @compute_shader
+
+edge_case_42_thread_id_y_component :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  values[thread_id.x] = values[thread_id.x] + thread_id.y + 1;
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {

@@ -901,13 +901,18 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 }
 
 load_thread_x :: (s: *IR_SPV_Gen_State) -> s64 {
+  return load_thread_component(s, 0);
+}
+
+load_thread_component :: (s: *IR_SPV_Gen_State, component_index: s64) -> s64 {
   assert(s != null);
+  assert(component_index >= 0 && component_index <= 2);
   thread_id_ptr := new_id(s);
   add_op(s, tprint("         % = OpAccessChain % % %",
                               id_text(thread_id_ptr),
                               id_text(s.id_ptr_input_uint),
                               id_text(s.id_gl_global_invocation_id),
-                              id_text(s.id_uint_0)));
+                              id_text(get_u32_const(s, cast(u32) component_index))));
   thread_id := new_id(s);
   add_op(s, tprint("         % = OpLoad % %",
                               id_text(thread_id),
@@ -2167,9 +2172,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
 
     case .MEMBER; {
       path := expr_text(expr);
-      if path == "thread_id.x" || path == "input.thread_id.x" {
-        return load_thread_x(s), .UINT, true, diag;
-      }
+      if path == "thread_id.x" || path == "input.thread_id.x" return load_thread_component(s, 0), .UINT, true, diag;
+      if path == "thread_id.y" || path == "input.thread_id.y" return load_thread_component(s, 1), .UINT, true, diag;
+      if path == "thread_id.z" || path == "input.thread_id.z" return load_thread_component(s, 2), .UINT, true, diag;
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
         helper := find_helper(s, expr.left.left.text);
         if !helper return_err("SPIR-V backend: unknown helper '%'.", expr.left.left.text);

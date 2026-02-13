@@ -4,16 +4,12 @@ This file tracks real gaps found while getting the reaction-diffusion prototype 
 
 ## Active blockers
 
-1. Compute SPIR-V backend had `thread_id` member-expression mismatch in 2D compute form.
-- Error: `SPIR-V backend: unsupported member expression 'input.thread_id'`.
-- Current workaround: use 1D dispatch (`thread_id.x`) and linear indexing.
-
-2. Pair linking fails when stages use different addressing models.
+1. Pair linking fails when stages use different addressing models.
 - Error from `spirv-link`: `Conflicting addressing models: PhysicalStorageBuffer64 vs Logical`.
 - Trigger: vertex stage with pointer-ABI root arg while fragment stage lowered to logical path.
 - Current behavior: fail with explicit per-stage memory-model diagnostic in pair path.
 
-3. Pair Metal output can still be brittle when stages are lowered independently.
+2. Pair Metal output can still be brittle when stages are lowered independently.
 - Historically observed runtime error: fragment input `user(locn1)` mismatched vertex output.
 - Recent fix covers one concrete source (`@position` semantic being treated as non-builtin in fragment stage).
 - Remaining risk: other semantic/location edge-cases may still exist.
@@ -37,7 +33,12 @@ This file tracks real gaps found while getting the reaction-diffusion prototype 
 - Fix: map fragment semantic `POSITION` to FragCoord builtin handling.
 - Coverage: headless pair test added for `@position` + color varying pass-through.
 
+4. Compute thread-id component member access beyond `.x`.
+- Error was: `SPIR-V backend: unsupported member expression 'input.thread_id'`.
+- Fix: add component load emission for `thread_id.{x,y,z}` / `input.thread_id.{x,y,z}`.
+- Coverage: compute semantics test `edge_case_42_thread_id_y_component`.
+
 ## Next pass after RD is running
 
 - Add minimal failing tests for each remaining active item above in transpiler headless suite.
-- Fix in this order: (1) compute thread_id member expression, (3) broader stage varying/location consistency, (2) addressing model policy unification for pairs.
+- Fix in this order: (2) broader stage varying/location consistency, (1) addressing model policy unification for pairs.
