@@ -655,6 +655,35 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
   return has_resource, has_non_resource;
 }
 
+expand_compute_resource_root_buffers :: (s: *IR_SPV_Gen_State, in_buffers: [] IR_Compute_Buffer, out_buffers: *[..] IR_Compute_Buffer) -> (ok: bool, diag: IR_Diagnostic) {
+  return_err :: (message: string, args: ..Any) #expand { `return false, { message = sprint(message, ..args) }; }
+
+  assert(s != null);
+  assert(out_buffers != null);
+  diag: IR_Diagnostic;
+
+  for in_buffers {
+    buf := it;
+    struct_def := find_struct(s, buf.element_type_name);
+    if !struct_def {
+      array_add(out_buffers, buf);
+      continue;
+    }
+
+    saw_resource, saw_non_resource := collect_struct_resource_fields(s, struct_def, buf.name, out_buffers);
+    if saw_resource {
+      if saw_non_resource {
+        return_err("SPIR-V generic backend: compute resource-root '%' mixes resource and non-resource fields.", buf.name);
+      }
+      continue;
+    }
+
+    array_add(out_buffers, buf);
+  }
+
+  return true, diag;
+}
+
 normalize_f32_literal_text :: (text: string) -> string {
   out := compact_text(text);
   if out.count > 0 {
@@ -4434,7 +4463,10 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   state.debug_type_prefix = tprint("compute_%", shader.source_name);
   state.helpers = shader.helpers;
   for shader.extra_structs array_add(*state.extra_structs, it);
-  init_ok, init_diag := init_base(*state, shader.buffers, bound_value);
+  compute_buffers: [..] IR_Compute_Buffer;
+  expand_ok, expand_diag := expand_compute_resource_root_buffers(*state, shader.buffers, *compute_buffers);
+  if !expand_ok return "", false, expand_diag;
+  init_ok, init_diag := init_base(*state, compute_buffers, bound_value);
   if !init_ok return "", false, init_diag;
 
   entry_label := new_id(*state);

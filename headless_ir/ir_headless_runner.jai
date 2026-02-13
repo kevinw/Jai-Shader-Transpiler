@@ -81,6 +81,23 @@ IR_Headless_Fragment_Out :: struct {
   out_color: Vector4; @semantic_SV_Target0
 }
 
+IR_Headless_Compute_In :: struct {
+  thread_id: UVector3; @thread_position_in_grid
+}
+
+UVector3 :: struct {
+  x, y, z: u32;
+}
+
+IR_Headless_Compute_Root :: struct {
+  values: *u32;
+}
+
+IR_Headless_Compute_PingPong_Root :: struct {
+  src: *u32;
+  dst: *u32;
+}
+
 IR_Boids_Vertex_Params :: struct {
   positions: *Vector2;
   instances: *Vector2;
@@ -133,6 +150,18 @@ ir_headless_fragment_anonymous_main :: (using input: IR_Headless_Vertex_Out) -> 
     out_color = Vector4.{input.color.x, input.color.y, input.color.z, input.color.w},
   };
 } @fragment_shader
+
+ir_headless_compute_root_struct_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_Root) {
+  if thread_id.x < 64 {
+    data.values[thread_id.x] = data.values[thread_id.x] + 1;
+  }
+} @compute_shader
+
+ir_headless_compute_pingpong_root_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_PingPong_Root) {
+  if thread_id.x < 64 {
+    data.dst[thread_id.x] = data.src[thread_id.x] + 2;
+  }
+} @compute_shader
 
 // Intentionally declared after the entry points above to validate order-independence.
 ir_headless_chain_leaf :: (x: float) -> float {
@@ -228,6 +257,25 @@ ir_headless_fragment_boost :: (x: float) -> float {
   if !write_entire_file(anon_frag_path, metal_fragment_anonymous) fail("Could not write %", anon_frag_path);
   #if OS == .MACOS {
     compile_metal(anon_frag_path);
+  }
+
+  metal_compute_root := get_transpiled(.METAL, ir_headless_compute_root_struct_main);
+  check_contains(metal_compute_root, "kernel", "compute root struct metal output");
+  check_contains(metal_compute_root, "buffer(0)", "compute root struct metal output");
+  compute_root_path := tprint("%/ir_compute_root_struct.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(compute_root_path, metal_compute_root) fail("Could not write %", compute_root_path);
+  #if OS == .MACOS {
+    compile_metal(compute_root_path);
+  }
+
+  metal_compute_pingpong := get_transpiled(.METAL, ir_headless_compute_pingpong_root_main);
+  check_contains(metal_compute_pingpong, "kernel", "compute pingpong root struct metal output");
+  check_contains(metal_compute_pingpong, "buffer(0)", "compute pingpong root struct metal output");
+  check_contains(metal_compute_pingpong, "buffer(1)", "compute pingpong root struct metal output");
+  compute_pingpong_path := tprint("%/ir_compute_pingpong_root_struct.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(compute_pingpong_path, metal_compute_pingpong) fail("Could not write %", compute_pingpong_path);
+  #if OS == .MACOS {
+    compile_metal(compute_pingpong_path);
   }
 
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
