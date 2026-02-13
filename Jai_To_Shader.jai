@@ -1525,6 +1525,21 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
   return builder_to_string(*sb);
 }
 
+spv_memory_model_from_text :: (spvasm: string) -> string {
+  marker := "OpMemoryModel ";
+  idx := find_index_from_left(spvasm, marker);
+  if idx == -1 return "";
+  start := idx + marker.count;
+  if start >= spvasm.count return "";
+
+  end := start;
+  while end < spvasm.count && spvasm[end] != #char "\n" && spvasm[end] != #char "\r" end += 1;
+  line: string;
+  line.data = spvasm.data + start;
+  line.count = end - start;
+  return trim(line);
+}
+
 write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false, timings_totals: *Build_Timing_Totals = null) -> (string, bool, IR_Diagnostic) {
   _ = emit_line_directives;
 
@@ -1611,7 +1626,13 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
   if timings_totals timings_totals.spv_assemble_s += to_float64_seconds(current_time_monotonic() - t0);
   t0 = current_time_monotonic();
   if !link_spirv_binaries(.[vertex_spv_path, fragment_spv_path], pair_spv_path) {
-    diag.message = "SPIR-V backend: spirv-link failed for pair module.";
+    vertex_model := spv_memory_model_from_text(vertex_spvasm);
+    fragment_model := spv_memory_model_from_text(fragment_spvasm);
+    if vertex_model.count != 0 || fragment_model.count != 0 {
+      diag.message = tprint("SPIR-V backend: spirv-link failed for pair module (vertex model='%'; fragment model='%').", vertex_model, fragment_model);
+    } else {
+      diag.message = "SPIR-V backend: spirv-link failed for pair module.";
+    }
     return "", false, diag;
   }
   if timings_totals timings_totals.spv_assemble_s += to_float64_seconds(current_time_monotonic() - t0);
