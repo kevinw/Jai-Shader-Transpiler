@@ -129,6 +129,7 @@ IR_Expr_Kind :: enum {
   ARRAY_LITERAL;
   UNARY;
   BINARY;
+  SELECT;
   MEMBER;
   SUBSCRIPT;
   CALL;
@@ -795,6 +796,34 @@ ir_literal_to_text :: (using lit: *Code_Literal) -> (string, bool) {
   return "", false;
 }
 
+ir_extract_ifx_branch_expr :: (branch: *Code_Block, branch_label: string, state: *IR_Lowering_State, root_node: *Code_Node) -> (*Code_Node, bool) {
+  assert(state != null);
+  assert(root_node != null);
+  if !branch {
+    ir_set_diagnostic(state, tprint("IR lowering: ifx is missing '%' branch.", branch_label), root_node);
+    return null, false;
+  }
+  if branch.statements.count != 1 {
+    ir_set_diagnostic(state, tprint("IR lowering: ifx '%' branch must contain exactly one return.", branch_label), root_node);
+    return null, false;
+  }
+  branch_stmt := branch.statements[0];
+  if !branch_stmt {
+    ir_set_diagnostic(state, tprint("IR lowering: ifx '%' branch is empty.", branch_label), root_node);
+    return null, false;
+  }
+  if branch_stmt.kind == .RETURN {
+    ret := cast(*Code_Return) branch_stmt;
+    if ret.arguments_sorted.count != 1 {
+      ir_set_diagnostic(state, tprint("IR lowering: ifx '%' branch must return exactly one value.", branch_label), branch_stmt);
+      return null, false;
+    }
+    return ret.arguments_sorted[0], true;
+  }
+  // Some ifx forms keep branch payloads as direct expression nodes.
+  return branch_stmt, true;
+}
+
 ir_lower_expr :: (node: *Code_Node,
                   input_fields: [] string,
                   output_fields: [] string,
@@ -1066,6 +1095,36 @@ ir_lower_expr :: (node: *Code_Node,
       return out, true;
     }
 
+    case .IF; {
+      if_node := cast(*Code_If) node;
+      if if_node.if_flags & .IS_SWITCH_STATEMENT {
+        ir_set_diagnostic(state, "IR lowering: switch statement cannot be used as an expression", node);
+        return null, false;
+      }
+
+      cond, cond_ok := ir_lower_expr(if_node.condition, input_fields, output_fields, active_usings, active_aliases, state);
+      if !cond_ok return null, false;
+
+      then_node, then_node_ok := ir_extract_ifx_branch_expr(if_node.then_block, "then", state, node);
+      if !then_node_ok return null, false;
+      else_node, else_node_ok := ir_extract_ifx_branch_expr(if_node.else_block, "else", state, node);
+      if !else_node_ok return null, false;
+
+      then_expr, then_ok := ir_lower_expr(then_node, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
+      if !then_ok return null, false;
+
+      else_expected_type := expected_type;
+      if !else_expected_type else_expected_type = then_node.type;
+      else_expr, else_ok := ir_lower_expr(else_node, input_fields, output_fields, active_usings, active_aliases, state, else_expected_type);
+      if !else_ok return null, false;
+
+      out := ir_expr_new(.SELECT);
+      out.left = cond;
+      out.right = then_expr;
+      array_add(*out.args, else_expr);
+      return out, true;
+    }
+
     case .CAST; {
       cast_node := cast(*Code_Cast) node;
       if !cast_node.target_type {
@@ -1213,6 +1272,17 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
       return tprint("(% % %)", left, expr.text, right), true;
     }
 
+    case .SELECT; {
+      if !expr.left || !expr.right || expr.args.count != 1 return "", false;
+      cond, cond_ok := ir_expr_to_slang_from_ir(expr.left);
+      if !cond_ok return "", false;
+      then_expr, then_ok := ir_expr_to_slang_from_ir(expr.right);
+      if !then_ok return "", false;
+      else_expr, else_ok := ir_expr_to_slang_from_ir(expr.args[0]);
+      if !else_ok return "", false;
+      return tprint("((%) ? (%) : (%))", cond, then_expr, else_expr), true;
+    }
+
     case .MEMBER; {
       left, left_ok := ir_expr_to_slang_postfix_base(expr.left);
       if !left_ok return "", false;
@@ -1279,6 +1349,7 @@ ir_expr_to_slang_postfix_base :: (expr: *IR_Expr) -> (string, bool) {
   need_parens := false;
   if expr.kind == .UNARY need_parens = true;
   if expr.kind == .BINARY need_parens = true;
+  if expr.kind == .SELECT need_parens = true;
   if expr.kind == .CAST need_parens = true;
   if expr.kind == .CONSTRUCTOR need_parens = true;
 

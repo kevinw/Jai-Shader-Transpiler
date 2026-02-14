@@ -2657,6 +2657,51 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       return_err("SPIR-V backend: unsupported binary op '%' for emitted types (% and %).", op, left_type, right_type);
     }
 
+    case .SELECT; {
+      if !expr.left || !expr.right || expr.args.count != 1 {
+        return_err("SPIR-V backend: select expression is malformed.");
+      }
+
+      cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, expr.left);
+      if !cond_ok return 0, .UNKNOWN, false, cond_diag;
+      cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .BOOL);
+      if !cond_ok return 0, .UNKNOWN, false, cond_diag;
+
+      then_id, then_type, then_ok, then_diag := emit_expr(s, expr.right);
+      if !then_ok return 0, .UNKNOWN, false, then_diag;
+      else_id, else_type, else_ok, else_diag := emit_expr(s, expr.args[0]);
+      if !else_ok return 0, .UNKNOWN, false, else_diag;
+
+      result_type := then_type;
+      if then_type != else_type {
+        else_coerced, else_coerced_type, else_coerced_ok, _ := coerce_to_exact_kind(s, else_id, else_type, then_type);
+        if else_coerced_ok {
+          else_id = else_coerced;
+          else_type = else_coerced_type;
+          result_type = then_type;
+        } else {
+          then_coerced, then_coerced_type, then_coerced_ok, then_coerced_diag := coerce_to_exact_kind(s, then_id, then_type, else_type);
+          if !then_coerced_ok return 0, .UNKNOWN, false, then_coerced_diag;
+          then_id = then_coerced;
+          then_type = then_coerced_type;
+          result_type = else_type;
+        }
+      }
+
+      type_id := type_id_from_kind(s, result_type);
+      if type_id == 0 {
+        return_err("SPIR-V backend: select expression type % is unsupported.", result_type);
+      }
+      out := new_id(s);
+      add_op(s, tprint("         % = OpSelect % % % %",
+                       id_text(out),
+                       id_text(type_id),
+                       id_text(cond_id),
+                       id_text(then_id),
+                       id_text(else_id)));
+      return out, result_type, true, diag;
+    }
+
     case .CAST; {
       inner_id, inner_type, inner_ok, inner_diag := emit_expr(s, expr.left);
       if !inner_ok return 0, .UNKNOWN, false, inner_diag;
@@ -3402,8 +3447,24 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
                              id_text(dst_field.ptr_id),
                              id_text(src_value)));
           }
-        } else if stmt.decl_init.kind == .SUBSCRIPT && stmt.decl_init.left && stmt.decl_init.left.kind == .IDENT {
-          buffer := find_buffer(s, stmt.decl_init.left.text);
+        } else if stmt.decl_init.kind == .SUBSCRIPT {
+          buffer_name: string;
+          base_ok := false;
+          resolved_name, resolved_ok := resolve_ident_or_zero_deref(stmt.decl_init.left);
+          if resolved_ok {
+            buffer_name = resolved_name;
+            base_ok = true;
+          } else if stmt.decl_init.left && stmt.decl_init.left.kind == .MEMBER {
+            member_root, member_field, member_ok := resolve_member_root_and_field(stmt.decl_init.left);
+            if member_ok {
+              buffer_name = tprint("%.%", member_root, member_field);
+              base_ok = true;
+            }
+          }
+          if !base_ok {
+            return_err("SPIR-V backend: struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
+          }
+          buffer := find_buffer(s, buffer_name);
           if !buffer || buffer.element_kind != .STRUCT || buffer.element_type_name != struct_type_name {
             return_err("SPIR-V backend: struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }

@@ -8,6 +8,10 @@ normalize_shader :: (shader: *IR_Shader) -> (ok: bool, diag: IR_Diagnostic) {
   for *shader.functions {
     normalize_value_return_if_chains_in_block(*it.body);
     normalize_function_struct_returns_to_temp(it);
+    // Struct-return normalization can turn `return Struct.{...}` into
+    // `tmp := Struct.{...}; return tmp;`, so run return-if canonicalization
+    // again to catch newly multi-statement returning branches.
+    normalize_value_return_if_chains_in_block(*it.body);
   }
   normalize_value_return_if_chains_in_block(*shader.body);
   return true, diag;
@@ -15,11 +19,30 @@ normalize_shader :: (shader: *IR_Shader) -> (ok: bool, diag: IR_Diagnostic) {
 
 #scope_module
 
-block_is_single_value_return :: (block: *IR_Block) -> bool {
+stmt_is_hard_terminator :: (stmt: *IR_Stmt) -> bool {
+  if !stmt return false;
+  return stmt.kind == .RETURN || stmt.kind == .BREAK || stmt.kind == .CONTINUE;
+}
+
+stmt_guarantees_value_return :: (stmt: *IR_Stmt) -> bool {
+  if !stmt return false;
+  if stmt.kind == .RETURN return stmt.return_expr != null;
+  if stmt.kind == .IF && stmt.if_then && stmt.if_else {
+    return block_guarantees_value_return(stmt.if_then) && block_guarantees_value_return(stmt.if_else);
+  }
+  return false;
+}
+
+block_guarantees_value_return :: (block: *IR_Block) -> bool {
   if !block return false;
-  if block.statements.count != 1 return false;
-  stmt := block.statements[0];
-  return stmt.kind == .RETURN && stmt.return_expr != null;
+  if block.statements.count == 0 return false;
+  if block.statements.count > 1 {
+    for i: 0..block.statements.count-2 {
+      stmt := *block.statements[i];
+      if stmt_is_hard_terminator(stmt) return false;
+    }
+  }
+  return stmt_guarantees_value_return(*block.statements[block.statements.count-1]);
 }
 
 normalize_stmt_children :: (stmt: *IR_Stmt) -> bool {
@@ -53,7 +76,7 @@ normalize_value_return_if_chains_in_block :: (block: *IR_Block) -> bool {
       //   else { tail... }
       if stmt.kind == .IF &&
          stmt.if_else == null &&
-         block_is_single_value_return(stmt.if_then) &&
+         block_guarantees_value_return(stmt.if_then) &&
          i + 1 < block.statements.count {
         else_block := New(IR_Block);
         for j: i+1..block.statements.count-1 array_add(*else_block.statements, block.statements[j]);

@@ -85,6 +85,10 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"edge_case_67_vector3_scalar_mix_floor", .Bare},
   {"edge_case_68_helper_pointer_table_arg", .Table},
   {"edge_case_69_boid_nested_shorthand_constructor", .Boids},
+  {"edge_case_70_helper_if_prelude", .Bare},
+  {"edge_case_71_helper_nested_if_prelude", .Bare},
+  {"edge_case_72_struct_helper_if_prelude", .Bare},
+  {"edge_case_73_ifx_select_expr", .Bare},
   {"edge_case_26_vector_negate", .Bare},
   {"edge_case_27_helper_nested_call", .Bare},
   {"edge_case_28_struct_constructor_from_member_expr", .Boids},
@@ -1198,6 +1202,74 @@ edge_case_69_boid_nested_shorthand_constructor :: (using in: Compute_Semantics_I
   };
   boids[idx] = next;
   values[idx] = cast(u32) (next.pos.x * 2.0 + next.pos.y * 2.0 + next.vel.x * 10.0);
+} @compute_shader
+
+edge_case_70_helper_if_prelude_return :: (x: u32) -> u32 {
+  if (x & 1) == 0 {
+    t := x * 3 + 2;
+    return t + 5;
+  }
+  return x + 11;
+}
+
+edge_case_70_helper_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  values[idx] = edge_case_70_helper_if_prelude_return(values[idx] + idx);
+} @compute_shader
+
+edge_case_71_helper_nested_if_prelude_return :: (x: u32) -> u32 {
+  if (x % 5) < 3 {
+    base := x * 2 + 1;
+    if (base & 1) == 0 {
+      tweak := base + 7;
+      return tweak;
+    }
+    return base + 9;
+  }
+  return x + 13;
+}
+
+edge_case_71_helper_nested_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  values[idx] = edge_case_71_helper_nested_if_prelude_return(values[idx] + idx * 2);
+} @compute_shader
+
+Edge_Case_72_Pair :: struct {
+  a: u32;
+  b: u32;
+}
+
+edge_case_72_helper_struct_if_prelude_return :: (x: u32) -> Edge_Case_72_Pair {
+  if (x % 2) == 0 {
+    base := x + 2;
+    return Edge_Case_72_Pair.{a = base * 2, b = base + 3};
+  }
+  return Edge_Case_72_Pair.{a = x + 5, b = x + 7};
+}
+
+edge_case_72_struct_helper_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  p := edge_case_72_helper_struct_if_prelude_return(values[idx] + idx);
+  values[idx] = p.a + p.b * 2;
+} @compute_shader
+
+edge_case_73_ifx_select_helper :: (cond: bool, a: u32, b: u32) -> u32 {
+  return ifx cond then a else b;
+}
+
+edge_case_73_ifx_select_expr :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+
+  idx := thread_id.x;
+  base := values[idx];
+
+  picked := ifx (idx % 2) == 0 then base + idx else base + 7;
+  out: u32 = 0;
+  out = ifx (base % 3) == 0 then picked * 2 else picked + 5;
+  values[idx] = ifx (idx % 5) == 0 then edge_case_73_ifx_select_helper(true, out, base) else edge_case_73_ifx_select_helper(false, out, base);
 } @compute_shader
 
 // Gap probes (not in ALL_TEST_FUNCTIONS yet):

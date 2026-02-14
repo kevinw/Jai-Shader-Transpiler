@@ -46,6 +46,10 @@ run_all_tests :: () {
       if TIMINGS_ENABLED array_add(*args, "-timings");
       run_command_checked("Run headless IR compute semantics tests", args);
     }
+    {
+      time_scope(TIMINGS_ENABLED, "Headless IR graphics semantics");
+      run_command_checked("Run headless IR graphics semantics tests", .["bash", "headless_ir/test_ir_graphics_semantics.sh"]);
+    }
 
     {
       time_scope(TIMINGS_ENABLED, "Syntax-check generated Metal");

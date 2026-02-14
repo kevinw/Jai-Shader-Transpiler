@@ -104,6 +104,16 @@ IR_Headless_Compute_PingPong_Root :: struct {
   dst: *u32;
 }
 
+IR_Headless_Compute_Boid_State :: struct {
+  pos: Vector2;
+  vel: Vector2;
+}
+
+IR_Headless_Compute_Sim_Params :: struct {
+  src: *IR_Headless_Compute_Boid_State;
+  dst: *IR_Headless_Compute_Boid_State;
+}
+
 IR_Boids_Vertex_Params :: struct {
   positions: *Vector2;
   instances: *Vector2;
@@ -185,6 +195,14 @@ ir_headless_compute_root_struct_main :: (using input: IR_Headless_Compute_In, da
 ir_headless_compute_pingpong_root_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_PingPong_Root) {
   if thread_id.x < 64 {
     data.dst[thread_id.x] = data.src[thread_id.x] + 2;
+  }
+} @compute_shader
+
+ir_headless_compute_member_subscript_struct_init_main :: (using input: IR_Headless_Compute_In, sim: *IR_Headless_Compute_Sim_Params) {
+  if thread_id.x < 64 {
+    b := sim.src[thread_id.x];
+    sim.dst[thread_id.x].pos = b.pos;
+    sim.dst[thread_id.x].vel = b.vel;
   }
 } @compute_shader
 
@@ -306,6 +324,16 @@ ir_headless_fragment_boost :: (x: float) -> float {
   if !write_entire_file(compute_pingpong_path, metal_compute_pingpong) fail("Could not write %", compute_pingpong_path);
   #if OS == .MACOS {
     compile_metal(compute_pingpong_path);
+  }
+
+  metal_compute_member_subscript_struct_init := get_transpiled(.METAL, ir_headless_compute_member_subscript_struct_init_main);
+  check_contains(metal_compute_member_subscript_struct_init, "kernel", "compute member-subscript struct-init metal output");
+  check_contains(metal_compute_member_subscript_struct_init, "buffer(0)", "compute member-subscript struct-init metal output");
+  check_contains(metal_compute_member_subscript_struct_init, "buffer(1)", "compute member-subscript struct-init metal output");
+  compute_member_subscript_struct_init_path := tprint("%/ir_compute_member_subscript_struct_init.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(compute_member_subscript_struct_init_path, metal_compute_member_subscript_struct_init) fail("Could not write %", compute_member_subscript_struct_init_path);
+  #if OS == .MACOS {
+    compile_metal(compute_member_subscript_struct_init_path);
   }
 
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
