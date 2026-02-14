@@ -1,4 +1,4 @@
-// Shared IR lowering/emission helpers used across shader stages.
+// Shared IR lowering/emission utilities used across shader stages.
 #scope_file
 
 ir_shared_stmt_indent :: (indent: s64) -> string {
@@ -13,7 +13,9 @@ ir_emit_ir_stmt_lines :: (out_lines: *[..] string, stmt: *IR_Stmt, indent: s64) 
 
   if stmt.kind == {
     case .DECL; {
-      line := tprint("% % %", ir_shared_stmt_indent(indent), stmt.decl_type_name, stmt.decl_name);
+      decl_type_text := stmt.decl_type_name;
+      if stmt.decl_type.display_name.count != 0 decl_type_text = stmt.decl_type.display_name;
+      line := tprint("% % %", ir_shared_stmt_indent(indent), decl_type_text, stmt.decl_name);
       if stmt.decl_init {
         expr_text, ok := ir_expr_to_slang_from_ir(stmt.decl_init);
         if !ok return false;
@@ -221,6 +223,12 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt: IR_Stmt;
       out_stmt.kind = .DECL;
       out_stmt.decl_type_name = type_name;
+      decl_ir_type, decl_ir_type_ok := ir_type_from_type_info(decl_type);
+      if !decl_ir_type_ok {
+        ir_set_diagnostic(state, tprint("IR lowering: unsupported typed declaration info for '%'", decl.name), stmt);
+        return false;
+      }
+      out_stmt.decl_type = decl_ir_type;
       out_stmt.decl_name = decl.name;
       if decl.expression {
         init_expr, init_ok := ir_lower_expr(decl.expression, input_fields, output_fields, active_usings.*, active_aliases.*, state, decl_type);
@@ -702,8 +710,8 @@ ir_shared_collect_calls_in_node :: (node: *Code_Node, called_headers: *[..] *Cod
   }
 }
 
-ir_shared_lower_helper_function :: (header: *Code_Procedure_Header, state: *IR_Lowering_State) -> (IR_Helper_Function, bool) {
-  out: IR_Helper_Function;
+ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering_State) -> (IR_Function, bool) {
+  out: IR_Function;
   assert(state != null);
   if !header return out, false;
   if !header.body_or_null || !header.body_or_null.block return out, false;
@@ -713,10 +721,14 @@ ir_shared_lower_helper_function :: (header: *Code_Procedure_Header, state: *IR_L
   if header.returns.count == 1 {
     ret := header.returns[0];
     ret_type := ifx ret.type_inst then ret.type_inst.result else ifx ret.expression then ret.expression.type else null;
+    ret_ir_type, ret_ir_ok := ir_type_from_type_info(ret_type);
+    if !ret_ir_ok return out, false;
     ret_name, ret_ok := ir_type_to_slang_name(ret_type);
     if !ret_ok return out, false;
+    out.return_type = ret_ir_type;
     out.return_type_name = ret_name;
   } else {
+    out.return_type = .{kind = .UNKNOWN, display_name = "void"};
     out.return_type_name = "void";
   }
 
@@ -750,9 +762,9 @@ ir_shared_lower_helper_function :: (header: *Code_Procedure_Header, state: *IR_L
   return out, true;
 }
 
-ir_shared_collect_helper_functions_recursive :: (header: *Code_Procedure_Header,
+ir_shared_collect_functions_recursive :: (header: *Code_Procedure_Header,
                                                 seen_headers: *[..] *Code_Procedure_Header,
-                                                helpers: *[..] IR_Helper_Function,
+                                                functions: *[..] IR_Function,
                                                 main_header: *Code_Procedure_Header,
                                                 state: *IR_Lowering_State) -> bool {
   assert(state != null);
@@ -764,42 +776,46 @@ ir_shared_collect_helper_functions_recursive :: (header: *Code_Procedure_Header,
   for header.body_or_null.block.statements ir_shared_collect_calls_in_node(it, *called);
   for called {
     if it == main_header continue;
-    if !ir_shared_collect_helper_functions_recursive(it, seen_headers, helpers, main_header, state) return false;
+    if !ir_shared_collect_functions_recursive(it, seen_headers, functions, main_header, state) return false;
   }
 
   if header != main_header {
-    helper, ok := ir_shared_lower_helper_function(header, state);
+    function_ir, ok := ir_shared_lower_function(header, state);
     if !ok return false;
-    array_add(helpers, helper);
+    array_add(functions, function_ir);
   }
   return true;
 }
 
-ir_helper_signature_string :: (helper: *IR_Helper_Function, include_arg_names: bool) -> string {
+ir_function_signature_string :: (ir_function: *IR_Function, include_arg_names: bool) -> string {
   b: String_Builder;
-  append(*b, helper.return_type_name, " ", helper.name, "(");
-  for helper.args {
+  ret_type_name := ir_function.return_type_name;
+  if ir_function.return_type.display_name.count != 0 ret_type_name = ir_function.return_type.display_name;
+  append(*b, ret_type_name, " ", ir_function.name, "(");
+  for ir_function.args {
     if it_index != 0 append(*b, ", ");
-    if include_arg_names append(*b, tprint("% %", it.type_name, it.name));
-    else append(*b, it.type_name);
+    arg_type_name := it.type_name;
+    if it.type.display_name.count != 0 arg_type_name = it.type.display_name;
+    if include_arg_names append(*b, tprint("% %", arg_type_name, it.name));
+    else append(*b, arg_type_name);
   }
   append(*b, ")");
   return builder_to_string(*b);
 }
 
-ir_emit_helper_prototypes :: (sb: *String_Builder, helpers: [] IR_Helper_Function) {
-  if helpers.count == 0 return;
-  for helpers {
-    append(sb, ir_helper_signature_string(*it, include_arg_names=true), ";\n");
+ir_emit_function_prototypes :: (sb: *String_Builder, functions: [] IR_Function) {
+  if functions.count == 0 return;
+  for functions {
+    append(sb, ir_function_signature_string(*it, include_arg_names=true), ";\n");
   }
   append(sb, "\n");
 }
 
-ir_emit_helper_definitions :: (sb: *String_Builder, helpers: [] IR_Helper_Function) -> bool {
+ir_emit_function_definitions :: (sb: *String_Builder, functions: [] IR_Function) -> bool {
   assert(sb != null);
-  if helpers.count == 0 return true;
-  for helpers {
-    append(sb, ir_helper_signature_string(*it, include_arg_names=true), " {\n");
+  if functions.count == 0 return true;
+  for functions {
+    append(sb, ir_function_signature_string(*it, include_arg_names=true), " {\n");
     body_lines: [..] string;
     if !ir_emit_ir_block_lines(*body_lines, *it.body, 1) return false;
     for body_lines append(sb, it, "\n");
@@ -808,7 +824,7 @@ ir_emit_helper_definitions :: (sb: *String_Builder, helpers: [] IR_Helper_Functi
   return true;
 }
 
-ir_add_helper_unique_by_name :: (helpers: *[..] IR_Helper_Function, helper: IR_Helper_Function) {
-  for helpers.* if it.name == helper.name return;
-  array_add(helpers, helper);
+ir_add_function_unique_by_name :: (functions: *[..] IR_Function, ir_function: IR_Function) {
+  for functions.* if it.name == ir_function.name return;
+  array_add(functions, ir_function);
 }

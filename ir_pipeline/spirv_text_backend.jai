@@ -26,12 +26,12 @@ emit_ir_graphics_pair_to_spirv_text_branch :: (vertex: IR_Vertex_Shader, fragmen
 }
 
 emit_ir_vertex_to_spirv_text_branch :: (shader: IR_Vertex_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
-  spvasm, ok, diag := emit_graphics_generic(.VERTEX, shader.source_name, shader.input, shader.output, shader.args, *shader.body, shader.helpers, shader.extra_structs);
+  spvasm, ok, diag := emit_graphics_generic(.VERTEX, shader.source_name, shader.input, shader.output, shader.args, *shader.body, shader.functions, shader.extra_structs);
   return spvasm, ok, diag;
 }
 
 emit_ir_fragment_to_spirv_text_branch :: (shader: IR_Fragment_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
-  spvasm, ok, diag := emit_graphics_generic(.FRAGMENT, shader.source_name, shader.input, shader.output, shader.args, *shader.body, shader.helpers, shader.extra_structs);
+  spvasm, ok, diag := emit_graphics_generic(.FRAGMENT, shader.source_name, shader.input, shader.output, shader.args, *shader.body, shader.functions, shader.extra_structs);
   return spvasm, ok, diag;
 }
 
@@ -352,7 +352,7 @@ IR_SPV_Gen_State :: struct {
   uniform_blocks: [..] IR_SPV_Gen_Uniform_Block;
   loop_targets: [..] IR_SPV_Gen_Loop_Target;
   break_targets: [..] s64;
-  helpers: [] IR_Helper_Function;
+  functions: [] IR_Function;
   extra_structs: [..] IR_Struct;
   local_var_lines: [..] string;
   op_lines: [..] string;
@@ -549,7 +549,7 @@ find_local_array :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Ar
 }
 find_buffer :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Buffer { return find_by_name(*s.buffers, name); }
 find_uniform_block :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Uniform_Block { return find_by_name(*s.uniform_blocks, name); }
-find_helper :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Helper_Function { return find_by_name(*s.helpers, name); }
+find_function :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Function { return find_by_name(*s.functions, name); }
 find_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Struct { return find_by_name(*s.extra_structs, name); }
 find_local_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Struct {
   i := s.local_structs.count - 1;
@@ -605,10 +605,12 @@ struct_has_pointer_fields_recursive :: (extra_structs: [] IR_Struct, struct_name
   for st.fields {
     field := it;
     if field.is_pointer return true;
+    nested_field_struct_name := field.type.struct_name;
+    if nested_field_struct_name.count == 0 nested_field_struct_name = field.type_name;
     for *extra_structs {
       nested := it;
-      if nested.name != field.type_name continue;
-      if struct_has_pointer_fields_recursive(extra_structs, field.type_name, depth + 1) return true;
+      if nested.name != nested_field_struct_name continue;
+      if struct_has_pointer_fields_recursive(extra_structs, nested_field_struct_name, depth + 1) return true;
       break;
     }
   }
@@ -662,8 +664,21 @@ resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> 
 
   if field.is_pointer {
     pointee_name := field.pointer_pointee_type_name;
+    if pointee_name.count == 0 pointee_name = field.type.pointee_struct_name;
+    if pointee_name.count == 0 pointee_name = field.type.pointee_display_name;
     if pointee_name.count == 0 return "", false;
     if field.pointer_pointee_is_struct {
+      nested_struct := find_struct(s, pointee_name);
+      if nested_struct && struct_has_pointer_fields(nested_struct) return "", false;
+    }
+    return pointee_name, true;
+  }
+
+  if field.type.kind == .POINTER {
+    pointee_name := field.type.pointee_struct_name;
+    if pointee_name.count == 0 pointee_name = field.type.pointee_display_name;
+    if pointee_name.count == 0 return "", false;
+    if field.type.pointee_kind == .STRUCT {
       nested_struct := find_struct(s, pointee_name);
       if nested_struct && struct_has_pointer_fields(nested_struct) return "", false;
     }
@@ -682,6 +697,13 @@ resource_walk_nested_struct :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> *IR_S
     nested := find_struct(s, field.pointer_pointee_type_name);
     if nested && struct_has_pointer_fields(nested) return nested;
   }
+  if field.type.kind == .POINTER && field.type.pointee_kind == .STRUCT && field.type.pointee_struct_name.count != 0 {
+    nested := find_struct(s, field.type.pointee_struct_name);
+    if nested && struct_has_pointer_fields(nested) return nested;
+  }
+  if field.type.kind == .STRUCT && field.type.struct_name.count != 0 {
+    return find_struct(s, field.type.struct_name);
+  }
   return find_struct(s, field.type_name);
 }
 
@@ -699,6 +721,7 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
       if out_buffers {
         array_add(out_buffers, .{
           name = field_path,
+          element_type = .{display_name = elem_type_name},
           element_type_name = elem_type_name,
         });
       }
@@ -893,10 +916,28 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     buffer_info.name = it.name;
     buffer_info.var_id = var_id;
     buffer_info.binding_index = it_index;
+
     element_type_name := it.element_type_name;
-    parsed_elem_type_name, parsed_array_count, parsed_fixed_array := parse_fixed_array_type_name(element_type_name);
+    parsed_array_count: s64;
+    parsed_fixed_array := false;
+    elem_kind := spv_kind_from_ir_type_kind(it.element_type.kind);
+
+    if it.element_type.kind == .FIXED_ARRAY {
+      parsed_fixed_array = true;
+      parsed_array_count = it.element_type.array_count;
+      element_type_name = it.element_type.element_display_name;
+      if element_type_name.count == 0 element_type_name = it.element_type_name;
+      elem_kind = spv_kind_from_ir_type_kind(it.element_type.element_kind);
+    } else {
+      parsed_elem_type_name, parsed_count, parsed_array := parse_fixed_array_type_name(element_type_name);
+      if parsed_array {
+        parsed_fixed_array = true;
+        parsed_array_count = parsed_count;
+        element_type_name = parsed_elem_type_name;
+      }
+    }
+
     if parsed_fixed_array {
-      element_type_name = parsed_elem_type_name;
       if parsed_array_count > 0xFFFF_FFFF {
         return_err("SPIR-V generic backend: buffer '%' fixed array count % exceeds u32.", it.name, parsed_array_count);
       }
@@ -904,7 +945,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       buffer_info.fixed_array_count_const_id = get_u32_const(s, cast(u32) parsed_array_count);
     }
     buffer_info.element_type_name = element_type_name;
-    elem_kind := expr_type_from_decl(element_type_name);
+    if elem_kind == .UNKNOWN elem_kind = expr_type_from_decl(element_type_name);
     if elem_kind != .UNKNOWN && elem_kind != .STRUCT {
       buffer_info.element_kind = elem_kind;
       buffer_info.element_type_id = type_id_from_kind(s, elem_kind);
@@ -932,9 +973,16 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       continue;
     }
 
-    struct_def := find_struct(s, element_type_name);
+    struct_type_name := element_type_name;
+    if it.element_type.kind == .STRUCT && it.element_type.struct_name.count != 0 {
+      struct_type_name = it.element_type.struct_name;
+    } else if it.element_type.kind == .FIXED_ARRAY && it.element_type.element_kind == .STRUCT && it.element_type.element_struct_name.count != 0 {
+      struct_type_name = it.element_type.element_struct_name;
+    }
+
+    struct_def := find_struct(s, struct_type_name);
     if !struct_def {
-      return_err("SPIR-V generic backend: buffer '%' has unsupported element type '%'.", it.name, element_type_name);
+      return_err("SPIR-V generic backend: buffer '%' has unsupported element type '%'.", it.name, struct_type_name);
     }
 
     element_struct_type_id := new_id(s);
@@ -952,7 +1000,8 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 
     offset: s64 = 0;
     for struct_def.fields {
-      field_type := expr_type_from_decl(it.type_name);
+      field_type := spv_kind_from_ir_type_kind(it.type.kind);
+      if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
       if field_type == .UNKNOWN {
         return_err("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, it.type_name);
       }
@@ -1047,7 +1096,8 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
   local_struct.name = name;
   local_struct.type_name = type_name;
   for struct_def.fields {
-    field_type := expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type_kind(it.type.kind);
+    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
     if field_type == .UNKNOWN || field_type == .STRUCT {
       nested_def := find_struct(s, it.type_name);
       if !nested_def {
@@ -1673,12 +1723,12 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
   return result, .FLOAT, true, diag;
 }
 
-eval_inline_helper_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, return_kind: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
+eval_inline_function_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Function, return_kind: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
   if !helper return 0, .UNKNOWN, false, false, diag;
 
-  eval_return_block_value :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, return_kind: IR_SPV_Gen_Type, block: *IR_Block) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
+  eval_return_block_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, return_kind: IR_SPV_Gen_Type, block: *IR_Block) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
     diag: IR_Diagnostic;
     if !block || block.statements.count == 0 return 0, .UNKNOWN, false, false, diag;
 
@@ -1819,14 +1869,15 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
   return true, true, diag;
 }
 
-eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
   if !helper {
     diag.message = "SPIR-V backend: missing helper metadata for inline call.";
     return 0, .UNKNOWN, false, diag;
   }
-  return_kind := expr_type_from_decl(helper.return_type_name);
+  return_kind := spv_kind_from_ir_type_kind(helper.return_type.kind);
+  if return_kind == .UNKNOWN return_kind = expr_type_from_decl(helper.return_type_name);
   if return_kind == .UNKNOWN || return_kind == .STRUCT {
     diag.message = tprint("SPIR-V backend: helper '%' has unsupported return type '%'.", helper.name, helper.return_type_name);
     return 0, .UNKNOWN, false, diag;
@@ -1851,7 +1902,8 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
       continue;
     }
 
-    arg_kind := expr_type_from_decl(it.type_name);
+    arg_kind := spv_kind_from_ir_type_kind(it.type.kind);
+    if arg_kind == .UNKNOWN arg_kind = expr_type_from_decl(it.type_name);
     if arg_kind != .UNKNOWN && arg_kind != .STRUCT {
       arg_value, arg_type, arg_ok, arg_diag := emit_expr(s, call_args[it_index]);
       if !arg_ok {
@@ -1923,7 +1975,9 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
       continue;
     }
 
-    arg_struct_def := find_struct(s, it.type_name);
+    arg_struct_name := it.type.struct_name;
+    if arg_struct_name.count == 0 arg_struct_name = it.type_name;
+    arg_struct_def := find_struct(s, arg_struct_name);
     if !arg_struct_def {
       s.locals.count = local_count_before;
       s.local_structs.count = local_struct_count_before;
@@ -1934,7 +1988,7 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
     struct_arg := call_args[it_index];
     arg_local_struct: IR_SPV_Gen_Local_Struct;
     arg_local_struct.name = it.name;
-    arg_local_struct.type_name = it.type_name;
+    arg_local_struct.type_name = arg_struct_name;
 
     if struct_arg && struct_arg.kind == .IDENT {
       source_struct := find_local_struct(s, struct_arg.text);
@@ -1944,7 +1998,7 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
         diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' expects local struct value '%'.", helper.name, it.name, struct_arg.text);
         return 0, .UNKNOWN, false, diag;
       }
-      if source_struct.type_name != it.type_name {
+      if source_struct.type_name != arg_struct_name {
         s.locals.count = local_count_before;
         s.local_structs.count = local_struct_count_before;
         diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' type mismatch ('%' vs '%').", helper.name, it.name, source_struct.type_name, it.type_name);
@@ -1957,7 +2011,7 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
       continue;
     }
 
-    if !struct_arg || struct_arg.kind != .CONSTRUCTOR || struct_arg.text != it.type_name {
+    if !struct_arg || struct_arg.kind != .CONSTRUCTOR || struct_arg.text != arg_struct_name {
       s.locals.count = local_count_before;
       s.local_structs.count = local_struct_count_before;
       diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' only supports constructor or identifier values.", helper.name, it.name);
@@ -1970,7 +2024,10 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
       return 0, .UNKNOWN, false, diag;
     }
     for arg_struct_def.fields {
-      if !is_uint_type_name(it.type_name) {
+      field_kind := spv_kind_from_ir_type_kind(it.type.kind);
+      field_is_uint := field_kind == .UINT;
+      if !field_is_uint field_is_uint = is_uint_type_name(it.type_name);
+      if !field_is_uint {
         s.locals.count = local_count_before;
         s.local_structs.count = local_struct_count_before;
         diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' field '%' has unsupported type '%'.", helper.name, arg_struct_def.name, it.name, it.type_name);
@@ -1999,7 +2056,7 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
     array_add(*s.local_structs, arg_local_struct);
   }
 
-  return_id, return_type, return_ok, return_handled, return_diag := eval_inline_helper_return_chain(s, helper, return_kind);
+  return_id, return_type, return_ok, return_handled, return_diag := eval_inline_function_return_chain(s, helper, return_kind);
   s.locals.count = local_count_before;
   s.local_structs.count = local_struct_count_before;
   if !return_handled {
@@ -2010,7 +2067,7 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
   return return_id, return_type, true, diag;
 }
 
-eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr, out_struct: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
+eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr, out_struct: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
   if !helper {
@@ -2023,7 +2080,9 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
   }
   out_struct_name := out_struct.name;
   out_struct_type := out_struct.type_name;
-  if helper.return_type_name != out_struct_type {
+  helper_return_struct_name := helper.return_type.struct_name;
+  if helper_return_struct_name.count == 0 helper_return_struct_name = helper.return_type_name;
+  if helper_return_struct_name != out_struct_type {
     diag.message = tprint("SPIR-V backend: helper '%' return type '%' does not match destination struct '%'.", helper.name, helper.return_type_name, out_struct_type);
     return false, diag;
   }
@@ -2048,7 +2107,8 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
       continue;
     }
 
-    arg_type := expr_type_from_decl(it.type_name);
+    arg_type := spv_kind_from_ir_type_kind(it.type.kind);
+    if arg_type == .UNKNOWN arg_type = expr_type_from_decl(it.type_name);
     if arg_type != .UNKNOWN && arg_type != .STRUCT {
       arg_value, value_type, value_ok, value_diag := emit_expr(s, call_args[it_index]);
       if !value_ok {
@@ -2121,7 +2181,9 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
       continue;
     }
 
-    arg_struct, arg_struct_ok, arg_struct_diag := alloc_local_struct(s, it.name, it.type_name);
+    arg_struct_name := it.type.struct_name;
+    if arg_struct_name.count == 0 arg_struct_name = it.type_name;
+    arg_struct, arg_struct_ok, arg_struct_diag := alloc_local_struct(s, it.name, arg_struct_name);
     if !arg_struct_ok {
       s.locals.count = local_count_before;
       s.local_structs.count = local_struct_count_before;
@@ -2148,7 +2210,7 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
 
     if arg_expr && arg_expr.kind == .SUBSCRIPT && arg_expr.left && arg_expr.left.kind == .IDENT {
       src_buffer := find_buffer(s, arg_expr.left.text);
-      if src_buffer && src_buffer.element_kind == .STRUCT && src_buffer.element_type_name == it.type_name {
+      if src_buffer && src_buffer.element_kind == .STRUCT && src_buffer.element_type_name == arg_struct_name {
         for arg_struct.fields {
           src_ptr, src_type, src_ok, src_diag := emit_buffer_struct_field_ptr(s, arg_expr, it.name);
           if !src_ok {
@@ -2173,7 +2235,7 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
       }
     }
 
-    if arg_expr && arg_expr.kind == .CONSTRUCTOR && arg_expr.text == it.type_name {
+    if arg_expr && arg_expr.kind == .CONSTRUCTOR && arg_expr.text == arg_struct_name {
       if arg_expr.args.count != arg_struct.fields.count {
         s.locals.count = local_count_before;
         s.local_structs.count = local_struct_count_before;
@@ -2399,13 +2461,17 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if path == "thread_id.y" || path == "input.thread_id.y" return load_thread_component(s, 1), .UINT, true, diag;
       if path == "thread_id.z" || path == "input.thread_id.z" return load_thread_component(s, 2), .UINT, true, diag;
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
-        helper := find_helper(s, expr.left.left.text);
+        helper := find_function(s, expr.left.left.text);
         if !helper return_err("SPIR-V backend: unknown helper '%'.", expr.left.left.text);
-        if expr_type_from_decl(helper.return_type_name) != .UNKNOWN return_err("SPIR-V backend: member access on non-struct call return '%'.", helper.return_type_name);
+        helper_ret_kind := spv_kind_from_ir_type_kind(helper.return_type.kind);
+        if helper_ret_kind == .UNKNOWN helper_ret_kind = expr_type_from_decl(helper.return_type_name);
+        if helper_ret_kind != .STRUCT return_err("SPIR-V backend: member access on non-struct call return '%'.", helper.return_type_name);
         temp_name := tprint("__call_ret_%", new_id(s));
-        temp_struct, temp_ok, temp_diag := alloc_local_struct(s, temp_name, helper.return_type_name);
+        helper_ret_struct_name := helper.return_type.struct_name;
+        if helper_ret_struct_name.count == 0 helper_ret_struct_name = helper.return_type_name;
+        temp_struct, temp_ok, temp_diag := alloc_local_struct(s, temp_name, helper_ret_struct_name);
         if !temp_ok return 0, .UNKNOWN, false, temp_diag;
-        call_ok, call_diag := eval_inline_helper_to_struct(s, helper, expr.left.args, temp_struct);
+        call_ok, call_diag := eval_inline_function_to_struct(s, helper, expr.left.args, temp_struct);
         if !call_ok return 0, .UNKNOWN, false, call_diag;
         temp_struct = find_local_struct(s, temp_name);
         if !temp_struct return_err("SPIR-V backend: inline helper result struct '%' went missing.", temp_name);
@@ -3068,9 +3134,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !builtin_ok return 0, .UNKNOWN, false, builtin_diag;
         return builtin_id, builtin_type, true, diag;
       }
-      helper := find_helper(s, callee);
+      helper := find_function(s, callee);
       if !helper return_err("SPIR-V backend: unsupported call target '%'.", callee);
-      helper_id, helper_type, helper_ok, helper_diag := eval_inline_helper(s, helper, expr.args);
+      helper_id, helper_type, helper_ok, helper_diag := eval_inline_function(s, helper, expr.args);
       return helper_id, helper_type, helper_ok, helper_diag;
     }
 
@@ -3391,7 +3457,10 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
   
   if stmt.kind == {
     case .DECL; {
-      decl_type := expr_type_from_decl(stmt.decl_type_name);
+      decl_type := spv_kind_from_ir_type_kind(stmt.decl_type.kind);
+      if decl_type == .UNKNOWN {
+        decl_type = expr_type_from_decl(stmt.decl_type_name);
+      }
       if decl_type == .INT || decl_type == .UINT || decl_type == .INT64 || decl_type == .UINT64 ||
          decl_type == .BOOL || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT3 || decl_type == .FLOAT4 || decl_type == .FLOAT2X2 {
         ptr_id := new_id(s);
@@ -3414,9 +3483,21 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return true, false, diag;
       }
 
-      array_elem_type_name, array_count, is_fixed_array := parse_fixed_array_type_name(stmt.decl_type_name);
+      array_elem_type_name: string;
+      array_count: s64;
+      is_fixed_array := stmt.decl_type.kind == .FIXED_ARRAY;
+      elem_type := spv_kind_from_ir_type_kind(stmt.decl_type.element_kind);
       if is_fixed_array {
-        elem_type := expr_type_from_decl(array_elem_type_name);
+        array_elem_type_name = stmt.decl_type.element_display_name;
+        array_count = stmt.decl_type.array_count;
+        if elem_type == .UNKNOWN {
+          elem_type = expr_type_from_decl(array_elem_type_name);
+        }
+      } else {
+        array_elem_type_name, array_count, is_fixed_array = parse_fixed_array_type_name(stmt.decl_type_name);
+        elem_type = expr_type_from_decl(array_elem_type_name);
+      }
+      if is_fixed_array {
         if elem_type == .UNKNOWN || elem_type == .STRUCT {
           return_err("SPIR-V backend: unsupported local array element type '%'.", array_elem_type_name);
         }
@@ -3479,20 +3560,24 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return true, false, diag;
       }
 
-      struct_def := find_struct(s, stmt.decl_type_name);
+      struct_type_name := stmt.decl_type_name;
+      if stmt.decl_type.kind == .STRUCT && stmt.decl_type.struct_name.count != 0 {
+        struct_type_name = stmt.decl_type.struct_name;
+      }
+      struct_def := find_struct(s, struct_type_name);
       if !struct_def {
         return_err("SPIR-V backend: unsupported declaration type '%'.", stmt.decl_type_name);
       }
-      local_struct, local_struct_ok, local_struct_diag := alloc_local_struct(s, stmt.decl_name, stmt.decl_type_name);
+      local_struct, local_struct_ok, local_struct_diag := alloc_local_struct(s, stmt.decl_name, struct_type_name);
       if !local_struct_ok return false, false, local_struct_diag;
 
       if stmt.decl_init {
-        if stmt.decl_init.kind == .CONSTRUCTOR && stmt.decl_init.text == stmt.decl_type_name {
+        if stmt.decl_init.kind == .CONSTRUCTOR && stmt.decl_init.text == struct_type_name {
           init_ok, init_diag := init_local_struct_from_expr(s, local_struct, stmt.decl_init);
           if !init_ok return false, false, init_diag;
         } else if stmt.decl_init.kind == .IDENT {
           src_struct := find_local_struct(s, stmt.decl_init.text);
-          if !src_struct || src_struct.type_name != stmt.decl_type_name {
+          if !src_struct || src_struct.type_name != struct_type_name {
             return_err("SPIR-V backend: struct declaration '%': unsupported initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
           for struct_def.fields {
@@ -3529,7 +3614,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           }
         } else if stmt.decl_init.kind == .SUBSCRIPT && stmt.decl_init.left && stmt.decl_init.left.kind == .IDENT {
           buffer := find_buffer(s, stmt.decl_init.left.text);
-          if !buffer || buffer.element_kind != .STRUCT || buffer.element_type_name != stmt.decl_type_name {
+          if !buffer || buffer.element_kind != .STRUCT || buffer.element_type_name != struct_type_name {
             return_err("SPIR-V backend: struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
           for struct_def.fields {
@@ -3550,11 +3635,16 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
                              id_text(src_value)));
           }
         } else if stmt.decl_init.kind == .CALL && stmt.decl_init.left && stmt.decl_init.left.kind == .IDENT {
-          helper := find_helper(s, stmt.decl_init.left.text);
-          if !helper || helper.return_type_name != stmt.decl_type_name {
+          helper := find_function(s, stmt.decl_init.left.text);
+          helper_return_struct_name := "";
+          if helper {
+            helper_return_struct_name = helper.return_type.struct_name;
+            if helper_return_struct_name.count == 0 helper_return_struct_name = helper.return_type_name;
+          }
+          if !helper || helper_return_struct_name != struct_type_name {
             return_err("SPIR-V backend: struct declaration '%': unsupported call initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
-          call_ok, call_diag := eval_inline_helper_to_struct(s, helper, stmt.decl_init.args, local_struct);
+          call_ok, call_diag := eval_inline_function_to_struct(s, helper, stmt.decl_init.args, local_struct);
           if !call_ok return false, false, call_diag;
         } else {
           return_err("SPIR-V backend: struct declaration '%': unsupported initializer expression kind %.", stmt.decl_name, stmt.decl_init.kind);
@@ -3582,14 +3672,19 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             }
           } else if stmt.binary_right && stmt.binary_right.kind == .CALL &&
                     stmt.binary_right.left && stmt.binary_right.left.kind == .IDENT {
-            helper := find_helper(s, stmt.binary_right.left.text);
-            if !helper || helper.return_type_name != dst_buffer.element_type_name {
+            helper := find_function(s, stmt.binary_right.left.text);
+            helper_return_struct_name := "";
+            if helper {
+              helper_return_struct_name = helper.return_type.struct_name;
+              if helper_return_struct_name.count == 0 helper_return_struct_name = helper.return_type_name;
+            }
+            if !helper || helper_return_struct_name != dst_buffer.element_type_name {
               return_err("SPIR-V backend: struct buffer assignment call '%' has incompatible return type.", expr_text(stmt.binary_right));
             }
             tmp_name := tprint("__assign_src_%", new_id(s));
-            tmp_struct, tmp_ok, tmp_diag := alloc_local_struct(s, tmp_name, helper.return_type_name);
+            tmp_struct, tmp_ok, tmp_diag := alloc_local_struct(s, tmp_name, helper_return_struct_name);
             if !tmp_ok return false, false, tmp_diag;
-            call_ok, call_diag := eval_inline_helper_to_struct(s, helper, stmt.binary_right.args, tmp_struct);
+            call_ok, call_diag := eval_inline_function_to_struct(s, helper, stmt.binary_right.args, tmp_struct);
             if !call_ok return false, false, call_diag;
             src_struct = find_local_struct(s, tmp_name);
             if !src_struct {
@@ -4167,7 +4262,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
                                        output: IR_Struct,
                                        args: [] IR_Function_Arg,
                                        body: *IR_Block,
-                                       helpers: [] IR_Helper_Function,
+                                       functions: [] IR_Function,
                                        extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return "", false, { message = sprint(msg, ..args) }; }
 
@@ -4182,7 +4277,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   state.stage = stage;
   stage_prefix := ifx stage == .VERTEX then "vert" else ifx stage == .FRAGMENT then "frag" else "compute";
   state.debug_type_prefix = tprint("%_%", stage_prefix, source_name);
-  state.helpers = helpers;
+  state.functions = functions;
   for extra_structs array_add(*state.extra_structs, it);
   array_add(*state.extra_structs, input);
   array_add(*state.extra_structs, output);
@@ -4200,7 +4295,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   if !init_ok return "", false, init_diag;
 
   for input.fields {
-    field_type := expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type_kind(it.type.kind);
+    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported input field type '%' on '%'.", it.type_name, it.name);
     ptr_type_id := input_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing input pointer type for field '%'.", it.name);
@@ -4217,7 +4313,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   }
 
   for output.fields {
-    field_type := expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type_kind(it.type.kind);
+    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported output field type '%' on '%'.", it.type_name, it.name);
     ptr_type_id := output_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing output pointer type for field '%'.", it.name);
@@ -4403,7 +4500,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
       append(*sb, tprint("               OpMemberDecorate % % Offset %\n", id_text(ps_info.type_id), it_index, offset));
       if field.is_pointer offset += 8;
       else {
-        kind := expr_type_from_decl(field.type_name);
+        kind := spv_kind_from_ir_type_kind(field.type.kind);
+        if kind == .UNKNOWN kind = expr_type_from_decl(field.type_name);
         size := byte_size_of_kind(kind);
         if size <= 0 size = 4;
         offset += size;
@@ -4437,7 +4535,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
           member_type_id = leaf_buffer.ptr_wrapper_type_id;
         }
       } else {
-        kind := expr_type_from_decl(field.type_name);
+        kind := spv_kind_from_ir_type_kind(field.type.kind);
+        if kind == .UNKNOWN kind = expr_type_from_decl(field.type_name);
         member_type_id = type_id_from_kind(*state, kind);
       }
       if member_type_id == 0 return_err("SPIR-V backend: unsupported field type for pointer struct '%.%'.", ps_info.name, field.name);
@@ -4489,14 +4588,14 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   return builder_to_string(*sb), true, diag;
 }
 
-emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: IR_Struct, output: IR_Struct, args: [] IR_Function_Arg, body: *IR_Block, helpers: [] IR_Helper_Function, extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
+emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: IR_Struct, output: IR_Struct, args: [] IR_Function_Arg, body: *IR_Block, functions: [] IR_Function, extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return "", false, { message = sprint(msg, ..args) }; }
   diag: IR_Diagnostic;
   if !body return_err("SPIR-V backend: graphics shader '%' has no body.", source_name);
 
   root_arg, use_pointer_abi := find_pointer_root_arg(args, extra_structs);
   if use_pointer_abi && root_arg {
-    spvasm, ok, pointer_diag := emit_graphics_physical_pointer_abi(stage, source_name, input, output, args, body, helpers, extra_structs);
+    spvasm, ok, pointer_diag := emit_graphics_physical_pointer_abi(stage, source_name, input, output, args, body, functions, extra_structs);
     return spvasm, ok, pointer_diag;
   }
 
@@ -4504,7 +4603,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   state.stage = stage;
   stage_prefix := ifx stage == .VERTEX then "vert" else ifx stage == .FRAGMENT then "frag" else "compute";
   state.debug_type_prefix = tprint("%_%", stage_prefix, source_name);
-  state.helpers = helpers;
+  state.functions = functions;
   for extra_structs array_add(*state.extra_structs, it);
   array_add(*state.extra_structs, input);
   array_add(*state.extra_structs, output);
@@ -4513,9 +4612,22 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   graphics_buffers: [..] IR_Compute_Buffer;
   for args {
     arg := it;
+    if arg.type.kind == .POINTER && arg.type.pointee_kind != .STRUCT && arg.type.pointee_display_name.count != 0 {
+      array_add(*graphics_buffers, .{
+        name = arg.name,
+        element_type = .{
+          kind = arg.type.pointee_kind,
+          display_name = arg.type.pointee_display_name,
+          struct_name = arg.type.pointee_struct_name,
+        },
+        element_type_name = arg.type.pointee_display_name,
+      });
+      continue;
+    }
     if arg.is_pointer && !arg.pointer_pointee_is_struct && arg.pointer_pointee_type_name.count != 0 {
       array_add(*graphics_buffers, .{
         name = arg.name,
+        element_type = .{display_name = arg.pointer_pointee_type_name},
         element_type_name = arg.pointer_pointee_type_name,
       });
       continue;
@@ -4524,15 +4636,22 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     if is_resource_buffer {
       array_add(*graphics_buffers, .{
         name = arg.name,
+        element_type = .{display_name = elem_type_name},
         element_type_name = elem_type_name,
       });
       continue;
     }
     is_param_block := false;
-    container_type_name := arg.type_name;
-    if arg.is_pointer && arg.pointer_pointee_is_struct && arg.pointer_pointee_type_name.count != 0 {
+    container_type_name := arg.type.struct_name;
+    if container_type_name.count == 0 container_type_name = arg.type_name;
+    if arg.type.flags & .PARAMETER_BLOCK {
+      is_param_block = true;
+    }
+    if arg.type.kind == .POINTER && arg.type.pointee_kind == .STRUCT && arg.type.pointee_struct_name.count != 0 {
+      container_type_name = arg.type.pointee_struct_name;
+    } else if arg.is_pointer && arg.pointer_pointee_is_struct && arg.pointer_pointee_type_name.count != 0 {
       container_type_name = arg.pointer_pointee_type_name;
-    } else {
+    } else if !is_param_block {
       struct_name, parsed_param_block := parse_parameter_block_struct_name(arg.type_name);
       if parsed_param_block {
         container_type_name = struct_name;
@@ -4551,7 +4670,8 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   if !init_ok return "", false, init_diag;
 
   for input.fields {
-    field_type := expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type_kind(it.type.kind);
+    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported input field type '%' on '%'.", it.type_name, it.name);
     ptr_type_id := input_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing input pointer type for field '%'.", it.name);
@@ -4568,7 +4688,8 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   }
 
   for output.fields {
-    field_type := expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type_kind(it.type.kind);
+    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported output field type '%' on '%'.", it.type_name, it.name);
     ptr_type_id := output_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing output pointer type for field '%'.", it.name);
@@ -4588,7 +4709,19 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   binding_index: s64 = state.buffers.count;
   for args {
     arg := it;
-    struct_name, is_param_block := parse_parameter_block_struct_name(arg.type_name);
+    struct_name := arg.type.struct_name;
+    is_param_block: bool;
+    if arg.type.flags & .PARAMETER_BLOCK is_param_block = true;
+    if is_param_block && struct_name.count == 0 {
+      struct_name = arg.type_name;
+    }
+    if !is_param_block {
+      parsed_struct_name, parsed_param_block := parse_parameter_block_struct_name(arg.type_name);
+      if parsed_param_block {
+        struct_name = parsed_struct_name;
+        is_param_block = true;
+      }
+    }
     if !is_param_block continue;
     struct_def := find_struct(*state, struct_name);
     if !struct_def return_err("SPIR-V backend: missing lowered uniform struct '%'.", struct_name);
@@ -4605,7 +4738,9 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     offset: s64 = 0;
     for struct_def.fields {
       field := it;
-      nested_struct := find_struct(*state, field.type_name);
+      nested_struct_name := field.type.struct_name;
+      if nested_struct_name.count == 0 nested_struct_name = field.type_name;
+      nested_struct := find_struct(*state, nested_struct_name);
       if nested_struct {
         nested_has_resource, nested_has_non_resource := collect_struct_resource_fields(*state, nested_struct, "", null);
         if nested_has_resource {
@@ -4628,9 +4763,18 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
       field_align: s64 = 0;
       field_size: s64 = 0;
 
-      array_elem_type_name, parsed_array_count, parsed_array := parse_fixed_array_type_name(field.type_name);
+      array_elem_type_name := "";
+      parsed_array_count: s64;
+      parsed_array := field.type.kind == .FIXED_ARRAY;
       if parsed_array {
-        field_type = expr_type_from_decl(array_elem_type_name);
+        array_elem_type_name = field.type.element_display_name;
+        parsed_array_count = field.type.array_count;
+      } else {
+        array_elem_type_name, parsed_array_count, parsed_array = parse_fixed_array_type_name(field.type_name);
+      }
+      if parsed_array {
+        field_type = spv_kind_from_ir_type_kind(field.type.element_kind);
+        if field_type == .UNKNOWN field_type = expr_type_from_decl(array_elem_type_name);
         if field_type == .UNKNOWN || field_type == .STRUCT {
           return_err("SPIR-V backend: uniform array field '%.%' has unsupported element type '%'.", struct_name, field.name, array_elem_type_name);
         }
@@ -4644,7 +4788,8 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         field_align = 16;
         field_size = array_stride * array_count;
       } else {
-        field_type = expr_type_from_decl(field.type_name);
+        field_type = spv_kind_from_ir_type_kind(field.type.kind);
+        if field_type == .UNKNOWN field_type = expr_type_from_decl(field.type_name);
         if field_type == .UNKNOWN || field_type == .STRUCT {
           return_err("SPIR-V backend: uniform field '%.%' has unsupported type '%'.", struct_name, field.name, field.type_name);
         }
@@ -4837,7 +4982,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
 
   state: IR_SPV_Gen_State;
   state.debug_type_prefix = tprint("compute_%", shader.source_name);
-  state.helpers = shader.helpers;
+  state.functions = shader.functions;
   for shader.extra_structs array_add(*state.extra_structs, it);
   compute_buffers: [..] IR_Compute_Buffer;
   expand_ok, expand_diag := expand_compute_resource_root_buffers(*state, shader.buffers, *compute_buffers);

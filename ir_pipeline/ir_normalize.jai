@@ -5,9 +5,9 @@ normalize_shader :: (shader: *IR_Shader) -> (ok: bool, diag: IR_Diagnostic) {
   assert(shader != null);
   diag: IR_Diagnostic;
 
-  for *shader.helpers {
+  for *shader.functions {
     normalize_value_return_if_chains_in_block(*it.body);
-    normalize_helper_struct_returns_to_temp(it);
+    normalize_function_struct_returns_to_temp(it);
   }
   normalize_value_return_if_chains_in_block(*shader.body);
   return true, diag;
@@ -142,11 +142,11 @@ normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type_name: s
   return changed;
 }
 
-normalize_helper_struct_returns_to_temp :: (helper: *IR_Helper_Function) -> bool {
-  assert(helper != null);
-  if !is_struct_like_type_name(helper.return_type_name) return false;
+normalize_function_struct_returns_to_temp :: (ir_function: *IR_Function) -> bool {
+  assert(ir_function != null);
+  if !is_struct_like_type_name(ir_function.return_type_name) return false;
   counter: s64 = 0;
-  return normalize_struct_return_exprs_in_block(*helper.body, helper.return_type_name, *counter);
+  return normalize_struct_return_exprs_in_block(*ir_function.body, ir_function.return_type_name, *counter);
 }
 
 #scope_file

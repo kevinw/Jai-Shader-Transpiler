@@ -17,10 +17,19 @@ IR_Type_Kind :: enum {
   FIXED_ARRAY;
 }
 
+IR_Type_Flags :: enum_flags u32 {
+  PARAMETER_BLOCK :: 0x1;
+}
+
 IR_Type :: struct {
   kind: IR_Type_Kind;
+  flags: IR_Type_Flags;
   display_name: string;
   struct_name: string;
+  element_kind: IR_Type_Kind;
+  element_display_name: string;
+  element_struct_name: string;
+  array_count: s64;
   pointee_kind: IR_Type_Kind;
   pointee_display_name: string;
   pointee_struct_name: string;
@@ -29,6 +38,7 @@ IR_Type :: struct {
 
 IR_Field :: struct {
   name: string;
+  type: IR_Type;
   type_name: string;
   semantic: string;
   original_type_name: string;
@@ -53,7 +63,7 @@ IR_Shader :: struct {
   entry_name: string;
   kind: IR_Shader_Kind;
   extra_structs: [..] IR_Struct;
-  helpers: [..] IR_Helper_Function;
+  functions: [..] IR_Function;
   body: IR_Block;
 }
 
@@ -73,6 +83,7 @@ IR_Fragment_Shader :: struct {
 
 IR_Compute_Buffer :: struct {
   name: string;
+  element_type: IR_Type;
   element_type_name: string;
 }
 
@@ -87,8 +98,9 @@ IR_Function_Arg :: struct {
   pointer_pointee_is_struct: bool;
 }
 
-IR_Helper_Function :: struct {
+IR_Function :: struct {
   name: string;
+  return_type: IR_Type;
   return_type_name: string;
   args: [..] IR_Function_Arg;
   body: IR_Block;
@@ -155,6 +167,7 @@ IR_Stmt :: struct {
   kind: IR_Stmt_Kind;
 
   // DECL
+  decl_type: IR_Type;
   decl_type_name: string;
   decl_name: string;
   decl_init: *IR_Expr;
@@ -330,7 +343,14 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
   }
 
   if type.type == .ARRAY {
+    array_t := cast(*Type_Info_Array) type;
+    elem_ir, elem_ok := ir_type_from_type_info(array_t.element_type);
+    if !elem_ok return out, false;
     out.kind = .FIXED_ARRAY;
+    out.element_kind = elem_ir.kind;
+    out.element_display_name = elem_ir.display_name;
+    out.element_struct_name = elem_ir.struct_name;
+    out.array_count = array_t.array_count;
     return out, true;
   }
 
@@ -375,6 +395,8 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
 
   struct_type := cast(*Type_Info_Struct) type;
   for *struct_type.members {
+    ir_type, ir_type_ok := ir_type_from_type_info(it.type);
+    if !ir_type_ok return out, false;
     type_name, ok := ir_type_to_slang_name(it.type);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
@@ -389,6 +411,7 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
     }
     array_add(*out.fields, .{
       name = it.name,
+      type = ir_type,
       type_name = type_name,
       semantic = field_semantic,
       original_type_name = original_type_name,
@@ -450,6 +473,8 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
 
   st := cast(*Type_Info_Struct) type;
   for *st.members {
+    ir_type, ir_type_ok := ir_type_from_type_info(it.type);
+    if !ir_type_ok return out, false;
     type_name, ok := ir_lower_struct_member_type_name(it.type, extra_structs);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
@@ -464,6 +489,7 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
     }
     array_add(*out.fields, .{
       name = it.name,
+      type = ir_type,
       type_name = type_name,
       semantic = field_semantic,
       original_type_name = original_type_name,
@@ -482,7 +508,11 @@ ir_struct_has_field :: (s: *IR_Struct, name: string) -> bool {
 }
 
 ir_field_type_name :: (s: *IR_Struct, name: string) -> string {
-  for s.fields if it.name == name return it.type_name;
+  for s.fields {
+    if it.name != name continue;
+    if it.type.display_name.count != 0 return it.type.display_name;
+    return it.type_name;
+  }
   return "";
 }
 
@@ -1267,6 +1297,8 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
 
   st := cast(*Type_Info_Struct) type;
   for *st.members {
+    ir_type, ir_type_ok := ir_type_from_type_info(it.type);
+    if !ir_type_ok return out, false;
     builtin_name, found := compute_builtin_note_for_member(it);
     if !found return out, false;
     semantic, sem_ok := ir_compute_builtin_to_semantic(builtin_name);
@@ -1277,6 +1309,7 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
     if !original_ok return out, false;
     array_add(*out.fields, .{
       name = it.name,
+      type = ir_type,
       type_name = type_name,
       semantic = semantic,
       original_type_name = original_type_name,
@@ -1358,7 +1391,7 @@ ir_collect_compute_declared_structs_in_block :: (block: *Code_Block, out_extra_s
   return true;
 }
 
-// Shared lowering helpers moved to ir_pipeline/ir_shared.jai.
+// Shared lowering functions moved to ir_pipeline/ir_shared.jai.
 
 IR_Shader_Header_Context :: struct {
   name: string;
@@ -1424,6 +1457,9 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Ve
       ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported typed IR argument '%'", arg.name), cast(*Code_Node) ctx.header);
       return out, false, ir_get_diagnostic(*state);
     }
+    if arg_type && arg_type.type == .STRUCT {
+      arg_ir_type.flags |= .PARAMETER_BLOCK;
+    }
     pointee_name := "";
     pointee_ok := false;
     pointee_is_struct := false;
@@ -1446,7 +1482,7 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Ve
     });
   }
   seen_headers: [..] *Code_Procedure_Header;
-  if !ir_shared_collect_helper_functions_recursive(ctx.header, *seen_headers, *out.helpers, ctx.header, *state) {
+  if !ir_shared_collect_functions_recursive(ctx.header, *seen_headers, *out.functions, ctx.header, *state) {
     ir_set_diagnostic(*state, "IR lowering(vertex): failed while collecting/lowering helper functions", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
@@ -1528,6 +1564,9 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
       ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported typed IR argument '%'", arg.name), cast(*Code_Node) ctx.header);
       return out, false, ir_get_diagnostic(*state);
     }
+    if arg_type && arg_type.type == .STRUCT {
+      arg_ir_type.flags |= .PARAMETER_BLOCK;
+    }
     pointee_name := "";
     pointee_ok := false;
     pointee_is_struct := false;
@@ -1550,7 +1589,7 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
     });
   }
   seen_headers: [..] *Code_Procedure_Header;
-  if !ir_shared_collect_helper_functions_recursive(ctx.header, *seen_headers, *out.helpers, ctx.header, *state) {
+  if !ir_shared_collect_functions_recursive(ctx.header, *seen_headers, *out.functions, ctx.header, *state) {
     ir_set_diagnostic(*state, "IR lowering(fragment): failed while collecting/lowering helper functions", cast(*Code_Node) ctx.header);
     return out, false, ir_get_diagnostic(*state);
   }
@@ -1606,6 +1645,11 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
       return out, false, ir_get_diagnostic(*state);
     }
     ptr := cast(*Type_Info_Pointer) arg_type;
+    elem_ir_type, elem_ir_ok := ir_type_from_type_info(ptr.pointer_to);
+    if !elem_ir_ok {
+      ir_set_diagnostic(*state, tprint("IR lowering(compute): unsupported typed pointee for argument '%'", arg.name), cast(*Code_Node) header);
+      return out, false, ir_get_diagnostic(*state);
+    }
     elem_type_name, elem_ok := ir_type_to_slang_name(ptr.pointer_to);
     if !elem_ok {
       ir_set_diagnostic(*state, tprint("IR lowering(compute): unsupported pointee type for argument '%'", arg.name), cast(*Code_Node) header);
@@ -1625,12 +1669,13 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
     }
     array_add(*out.buffers, .{
       name = arg.name,
+      element_type = elem_ir_type,
       element_type_name = elem_type_name,
     });
   }
 
   seen_headers: [..] *Code_Procedure_Header;
-  if !ir_shared_collect_helper_functions_recursive(header, *seen_headers, *out.helpers, header, *state) {
+  if !ir_shared_collect_functions_recursive(header, *seen_headers, *out.functions, header, *state) {
     ir_set_diagnostic(*state, "IR lowering(compute): failed while collecting/lowering helper functions", cast(*Code_Node) header);
     return out, false, ir_get_diagnostic(*state);
   }
@@ -1689,11 +1734,24 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
 ir_emit_struct_slang :: (sb: *String_Builder, s: *IR_Struct) {
   append(sb, tprint("struct % {\n", s.name));
   for s.fields {
+    type_name := it.type_name;
+    if it.type.display_name.count != 0 type_name = it.type.display_name;
     semantic := ir_normalize_semantic_for_slang(it.semantic);
-    if semantic.count != 0 append(sb, tprint("    % % : %;\n", it.type_name, it.name, semantic));
-    else append(sb, tprint("    % %;\n", it.type_name, it.name));
+    if semantic.count != 0 append(sb, tprint("    % % : %;\n", type_name, it.name, semantic));
+    else append(sb, tprint("    % %;\n", type_name, it.name));
   }
   append(sb, "};\n\n");
+}
+
+ir_arg_display_type_name :: (arg: IR_Function_Arg) -> string {
+  if arg.type.display_name.count != 0 return arg.type.display_name;
+  return arg.type_name;
+}
+
+ir_arg_is_global_resource :: (arg: IR_Function_Arg) -> bool {
+  if arg.type.flags & .PARAMETER_BLOCK return true;
+  type_name := ir_arg_display_type_name(arg);
+  return ir_type_name_is_global_resource(type_name);
 }
 
 ir_normalize_semantic_for_slang :: (semantic: string) -> string {
@@ -1737,8 +1795,9 @@ ir_emit_graphics_global_resource_args :: (sb: *String_Builder, args: [] IR_Funct
   assert(sb != null);
   emitted_any := false;
   for args {
-    if !ir_type_name_is_global_resource(it.type_name) continue;
-    append(sb, tprint("% %;\n", it.type_name, it.name));
+    type_name := ir_arg_display_type_name(it);
+    if !ir_type_name_is_global_resource(type_name) continue;
+    append(sb, tprint("% %;\n", type_name, it.name));
     emitted_any = true;
   }
   if emitted_any append(sb, "\n");
@@ -1748,12 +1807,14 @@ ir_emit_graphics_global_resource_args :: (sb: *String_Builder, args: [] IR_Funct
 ir_pair_global_resource_arg_conflicts :: (vertex_args: [] IR_Function_Arg, fragment_args: [] IR_Function_Arg) -> bool {
   for vertex_args {
     va := it;
-    if !ir_type_name_is_global_resource(va.type_name) continue;
+    va_type_name := ir_arg_display_type_name(va);
+    if !ir_type_name_is_global_resource(va_type_name) continue;
     for fragment_args {
       fa := it;
-      if !ir_type_name_is_global_resource(fa.type_name) continue;
+      fa_type_name := ir_arg_display_type_name(fa);
+      if !ir_type_name_is_global_resource(fa_type_name) continue;
       if va.name != fa.name continue;
-      if va.type_name != fa.type_name return true;
+      if va_type_name != fa_type_name return true;
     }
   }
   return false;
@@ -1769,11 +1830,12 @@ ir_emit_pair_global_resource_args :: (sb: *String_Builder, vertex_args: [] IR_Fu
   emit_from_args :: (sb: *String_Builder, args: [] IR_Function_Arg, seen_names: *[..] string, emitted_any: *bool) {
     for args {
       arg := it;
-      if !ir_type_name_is_global_resource(arg.type_name) continue;
+      type_name := ir_arg_display_type_name(arg);
+      if !ir_type_name_is_global_resource(type_name) continue;
       already_seen := false;
       for seen_names.* if it == arg.name { already_seen = true; break; }
       if already_seen continue;
-      append(sb, tprint("% %;\n", arg.type_name, arg.name));
+      append(sb, tprint("% %;\n", type_name, arg.name));
       array_add(seen_names, arg.name);
       emitted_any.* = true;
     }
@@ -1789,7 +1851,9 @@ ir_emit_compute_global_buffers :: (sb: *String_Builder, buffers: [] IR_Compute_B
   assert(sb != null);
   if buffers.count == 0 return;
   for buffers {
-    append(sb, tprint("RWStructuredBuffer<%> %;\n", it.element_type_name, it.name));
+    elem_type_name := it.element_type_name;
+    if it.element_type.display_name.count != 0 elem_type_name = it.element_type.display_name;
+    append(sb, tprint("RWStructuredBuffer<%> %;\n", elem_type_name, it.name));
   }
   append(sb, "\n");
 }
@@ -1806,16 +1870,17 @@ emit_ir_vertex_to_slang :: (shader: IR_Vertex_Shader) -> (string, bool) {
   ir_emit_struct_slang(*sb, *shader.input);
   ir_emit_struct_slang(*sb, *shader.output);
   for shader.extra_structs ir_emit_struct_slang(*sb, *it);
-  ir_emit_helper_prototypes(*sb, shader.helpers);
-  if !ir_emit_helper_definitions(*sb, shader.helpers) return "", false;
+  ir_emit_function_prototypes(*sb, shader.functions);
+  if !ir_emit_function_definitions(*sb, shader.functions) return "", false;
   if !ir_emit_graphics_global_resource_args(*sb, shader.args) return "", false;
 
   append(*sb, "[shader(\"vertex\")]\n");
   append(*sb, tprint("% %(% input", shader.output.name, shader.entry_name, shader.input.name));
   for shader.args {
-    if ir_type_name_is_global_resource(it.type_name) continue;
-    if it.is_readonly && !ir_type_name_is_global_resource(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
-    else append(*sb, tprint(", % %", it.type_name, it.name));
+    arg_type_name := ir_arg_display_type_name(it);
+    if ir_arg_is_global_resource(it) continue;
+    if it.is_readonly append(*sb, tprint(", const % %", arg_type_name, it.name));
+    else append(*sb, tprint(", % %", arg_type_name, it.name));
   }
   append(*sb, ") {\n");
   append(*sb, tprint("    % o = (%)0;\n", shader.output.name, shader.output.name));
@@ -1843,16 +1908,17 @@ emit_ir_fragment_to_slang :: (shader: IR_Fragment_Shader) -> (string, bool) {
   ir_emit_struct_slang(*sb, *shader.input);
   ir_emit_struct_slang(*sb, *shader.output);
   for shader.extra_structs ir_emit_struct_slang(*sb, *it);
-  ir_emit_helper_prototypes(*sb, shader.helpers);
-  if !ir_emit_helper_definitions(*sb, shader.helpers) return "", false;
+  ir_emit_function_prototypes(*sb, shader.functions);
+  if !ir_emit_function_definitions(*sb, shader.functions) return "", false;
   if !ir_emit_graphics_global_resource_args(*sb, shader.args) return "", false;
 
   append(*sb, "[shader(\"fragment\")]\n");
   append(*sb, tprint("% %(% input", shader.output.name, shader.entry_name, shader.input.name));
   for shader.args {
-    if ir_type_name_is_global_resource(it.type_name) continue;
-    if it.is_readonly append(*sb, tprint(", const % %", it.type_name, it.name));
-    else append(*sb, tprint(", % %", it.type_name, it.name));
+    arg_type_name := ir_arg_display_type_name(it);
+    if ir_arg_is_global_resource(it) continue;
+    if it.is_readonly append(*sb, tprint(", const % %", arg_type_name, it.name));
+    else append(*sb, tprint(", % %", arg_type_name, it.name));
   }
   append(*sb, ") {\n");
   append(*sb, tprint("    % o = (%)0;\n", shader.output.name, shader.output.name));
@@ -1887,19 +1953,20 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   for vertex.extra_structs append_ir_struct_once(*sb, *emitted_names, *it);
   for fragment.extra_structs append_ir_struct_once(*sb, *emitted_names, *it);
 
-  pair_helpers: [..] IR_Helper_Function;
-  for vertex.helpers ir_add_helper_unique_by_name(*pair_helpers, it);
-  for fragment.helpers ir_add_helper_unique_by_name(*pair_helpers, it);
-  ir_emit_helper_prototypes(*sb, pair_helpers);
-  if !ir_emit_helper_definitions(*sb, pair_helpers) return "", false;
+  pair_functions: [..] IR_Function;
+  for vertex.functions ir_add_function_unique_by_name(*pair_functions, it);
+  for fragment.functions ir_add_function_unique_by_name(*pair_functions, it);
+  ir_emit_function_prototypes(*sb, pair_functions);
+  if !ir_emit_function_definitions(*sb, pair_functions) return "", false;
   if !ir_emit_pair_global_resource_args(*sb, vertex.args, fragment.args) return "", false;
 
   append(*sb, "[shader(\"vertex\")]\n");
   append(*sb, tprint("% %(% input", vertex.output.name, vertex.entry_name, vertex.input.name));
   for vertex.args {
-    if ir_type_name_is_global_resource(it.type_name) continue;
-    if it.is_readonly && !ir_type_name_is_global_resource(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
-    else append(*sb, tprint(", % %", it.type_name, it.name));
+    arg_type_name := ir_arg_display_type_name(it);
+    if ir_arg_is_global_resource(it) continue;
+    if it.is_readonly append(*sb, tprint(", const % %", arg_type_name, it.name));
+    else append(*sb, tprint(", % %", arg_type_name, it.name));
   }
   append(*sb, ") {\n");
   append(*sb, tprint("    % o = (%)0;\n", vertex.output.name, vertex.output.name));
@@ -1916,9 +1983,10 @@ emit_ir_graphics_pair_to_slang :: (vertex: IR_Vertex_Shader, fragment: IR_Fragme
   append(*sb, "[shader(\"fragment\")]\n");
   append(*sb, tprint("% %(% input", fragment.output.name, fragment.entry_name, fragment.input.name));
   for fragment.args {
-    if ir_type_name_is_global_resource(it.type_name) continue;
-    if it.is_readonly && !ir_type_name_is_global_resource(it.type_name) append(*sb, tprint(", const % %", it.type_name, it.name));
-    else append(*sb, tprint(", % %", it.type_name, it.name));
+    arg_type_name := ir_arg_display_type_name(it);
+    if ir_arg_is_global_resource(it) continue;
+    if it.is_readonly append(*sb, tprint(", const % %", arg_type_name, it.name));
+    else append(*sb, tprint(", % %", arg_type_name, it.name));
   }
   append(*sb, ") {\n");
   append(*sb, tprint("    % o = (%)0;\n", fragment.output.name, fragment.output.name));
@@ -1939,8 +2007,8 @@ emit_ir_compute_to_slang :: (shader: IR_Compute_Shader) -> (string, bool) {
   append(*sb, tprint("// source_shader: %\n\n", shader.source_name));
   ir_emit_struct_slang(*sb, *shader.input);
   for shader.extra_structs ir_emit_struct_slang(*sb, *it);
-  ir_emit_helper_prototypes(*sb, shader.helpers);
-  if !ir_emit_helper_definitions(*sb, shader.helpers) return "", false;
+  ir_emit_function_prototypes(*sb, shader.functions);
+  if !ir_emit_function_definitions(*sb, shader.functions) return "", false;
   ir_emit_compute_global_buffers(*sb, shader.buffers);
 
   append(*sb, "[shader(\"compute\")]\n");
