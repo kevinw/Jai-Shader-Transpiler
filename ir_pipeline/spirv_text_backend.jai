@@ -1869,6 +1869,127 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
   return true, true, diag;
 }
 
+bind_inline_function_scalar_arg :: (s: *IR_SPV_Gen_State, function_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (ok: bool, handled: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  arg_type := spv_kind_from_ir_type_kind(arg.type.kind);
+  if arg_type == .UNKNOWN arg_type = expr_type_from_decl(arg.type_name);
+  if arg_type == .UNKNOWN || arg_type == .STRUCT return true, false, diag;
+
+  arg_value, value_type, value_ok, value_diag := emit_expr(s, arg_expr);
+  if !value_ok return false, true, value_diag;
+
+  final_value := arg_value;
+  final_type := value_type;
+  if arg_type == .FLOAT || is_integral_kind(arg_type) || arg_type == .BOOL {
+    coerced, coerced_ok, coerced_diag := coerce_to_kind(s, arg_value, value_type, arg_type);
+    if !coerced_ok return false, true, coerced_diag;
+    final_value = coerced;
+    final_type = arg_type;
+  } else if arg_type == .FLOAT2 && value_type != .FLOAT2 {
+    coerced, coerced_ok, coerced_diag := coerce_to_float2(s, arg_value, value_type);
+    if !coerced_ok return false, true, coerced_diag;
+    final_value = coerced;
+    final_type = .FLOAT2;
+  } else if arg_type == .FLOAT3 && value_type != .FLOAT3 {
+    coerced, coerced_ok, coerced_diag := coerce_to_float3(s, arg_value, value_type);
+    if !coerced_ok return false, true, coerced_diag;
+    final_value = coerced;
+    final_type = .FLOAT3;
+  } else if arg_type == .FLOAT4 && value_type != .FLOAT4 {
+    coerced, coerced_ok, coerced_diag := coerce_to_float4(s, arg_value, value_type);
+    if !coerced_ok return false, true, coerced_diag;
+    final_value = coerced;
+    final_type = .FLOAT4;
+  }
+
+  if final_type != arg_type {
+    diag.message = tprint("SPIR-V backend: helper '%' arg '%' type mismatch (expected %, got %).", function_name, arg.name, arg_type, final_type);
+    return false, true, diag;
+  }
+
+  arg_ptr_type := func_ptr_type_id_from_kind(s, arg_type);
+  if arg_ptr_type == 0 {
+    diag.message = tprint("SPIR-V backend: helper '%' arg '%' type '%' has no function pointer representation.", function_name, arg.name, arg_type);
+    return false, true, diag;
+  }
+  arg_ptr := new_id(s);
+  add_local_decl(s, tprint("         % = OpVariable % Function",
+                           id_text(arg_ptr),
+                           id_text(arg_ptr_type)));
+  add_debug_name(s, arg_ptr, arg.name);
+  add_op(s, tprint("               OpStore % %", id_text(arg_ptr), id_text(final_value)));
+  array_add(*s.locals, .{name=arg.name, ptr_id=arg_ptr, type=arg_type});
+  return true, true, diag;
+}
+
+bind_inline_function_struct_arg :: (s: *IR_SPV_Gen_State, function_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  arg_struct_name := arg.type.struct_name;
+  if arg_struct_name.count == 0 arg_struct_name = arg.type_name;
+  arg_struct, arg_struct_ok, arg_struct_diag := alloc_local_struct(s, arg.name, arg_struct_name);
+  if !arg_struct_ok return false, arg_struct_diag;
+
+  if arg_expr && arg_expr.kind == .SUBSCRIPT && arg_expr.left && arg_expr.left.kind == .IDENT {
+    src_buffer := find_buffer(s, arg_expr.left.text);
+    if src_buffer && src_buffer.element_kind == .STRUCT && src_buffer.element_type_name == arg_struct_name {
+      for arg_struct.fields {
+        src_ptr, src_type, src_ok, src_diag := emit_buffer_struct_field_ptr(s, arg_expr, it.name);
+        if !src_ok return false, src_diag;
+        if src_type != it.type {
+          diag.message = tprint("SPIR-V backend: helper '%' struct arg field '%' type mismatch.", function_name, it.name);
+          return false, diag;
+        }
+        value_id := new_id(s);
+        type_id := type_id_from_kind(s, src_type);
+        emit_load(s, value_id, type_id, src_ptr, src_type, needs_physical_align=true);
+        add_op(s, tprint("               OpStore % %",
+                         id_text(it.ptr_id),
+                         id_text(value_id)));
+      }
+      return true, diag;
+    }
+  }
+
+  init_ok, init_diag := init_local_struct_from_expr(s, arg_struct, arg_expr);
+  if !init_ok {
+    diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' could not be initialized: %", function_name, arg.name, init_diag.message);
+    return false, diag;
+  }
+  return true, diag;
+}
+
+bind_inline_function_args :: (s: *IR_SPV_Gen_State, ir_function: *IR_Function, call_args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if !ir_function {
+    diag.message = "SPIR-V backend: missing function metadata for inline call.";
+    return false, diag;
+  }
+  if ir_function.args.count != call_args.count {
+    diag.message = tprint("SPIR-V backend: helper '%' expected % args but got %.", ir_function.name, ir_function.args.count, call_args.count);
+    return false, diag;
+  }
+
+  for ir_function.args {
+    arg_expr := call_args[it_index];
+    pointer_handled, pointer_ok, pointer_diag := bind_inline_helper_pointer_arg(s, ir_function.name, it, arg_expr);
+    if pointer_handled {
+      if !pointer_ok return false, pointer_diag;
+      continue;
+    }
+
+    scalar_ok, scalar_handled, scalar_diag := bind_inline_function_scalar_arg(s, ir_function.name, it, arg_expr);
+    if scalar_handled {
+      if !scalar_ok return false, scalar_diag;
+      continue;
+    }
+
+    struct_ok, struct_diag := bind_inline_function_struct_arg(s, ir_function.name, it, arg_expr);
+    if !struct_ok return false, struct_diag;
+  }
+
+  return true, diag;
+}
+
 eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
@@ -1882,10 +2003,6 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
     diag.message = tprint("SPIR-V backend: helper '%' has unsupported return type '%'.", helper.name, helper.return_type_name);
     return 0, .UNKNOWN, false, diag;
   }
-  if helper.args.count != call_args.count {
-    diag.message = tprint("SPIR-V backend: helper '%' expected % args but got %.", helper.name, helper.args.count, call_args.count);
-    return 0, .UNKNOWN, false, diag;
-  }
 
   local_count_before := s.locals.count;
   local_struct_count_before := s.local_structs.count;
@@ -1895,166 +2012,8 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
     s.local_structs.count = local_struct_count_before;
     s.buffers.count = buffer_count_before;
   }
-  for helper.args {
-    pointer_handled, pointer_ok, pointer_diag := bind_inline_helper_pointer_arg(s, helper.name, it, call_args[it_index]);
-    if pointer_handled {
-      if !pointer_ok return 0, .UNKNOWN, false, pointer_diag;
-      continue;
-    }
-
-    arg_kind := spv_kind_from_ir_type_kind(it.type.kind);
-    if arg_kind == .UNKNOWN arg_kind = expr_type_from_decl(it.type_name);
-    if arg_kind != .UNKNOWN && arg_kind != .STRUCT {
-      arg_value, arg_type, arg_ok, arg_diag := emit_expr(s, call_args[it_index]);
-      if !arg_ok {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        return 0, .UNKNOWN, false, arg_diag;
-      }
-
-      final_value := arg_value;
-      final_type := arg_type;
-      if arg_kind == .FLOAT || is_integral_kind(arg_kind) || arg_kind == .BOOL {
-        coerced, coerced_ok, coerced_diag := coerce_to_kind(s, arg_value, arg_type, arg_kind);
-        if !coerced_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return 0, .UNKNOWN, false, coerced_diag;
-        }
-        final_value = coerced;
-        final_type = arg_kind;
-      } else if arg_kind == .FLOAT2 && arg_type != .FLOAT2 {
-        coerced, coerced_ok, coerced_diag := coerce_to_float2(s, arg_value, arg_type);
-        if !coerced_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return 0, .UNKNOWN, false, coerced_diag;
-        }
-        final_value = coerced;
-        final_type = .FLOAT2;
-      } else if arg_kind == .FLOAT3 && arg_type != .FLOAT3 {
-        coerced, coerced_ok, coerced_diag := coerce_to_float3(s, arg_value, arg_type);
-        if !coerced_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return 0, .UNKNOWN, false, coerced_diag;
-        }
-        final_value = coerced;
-        final_type = .FLOAT3;
-      } else if arg_kind == .FLOAT4 && arg_type != .FLOAT4 {
-        coerced, coerced_ok, coerced_diag := coerce_to_float4(s, arg_value, arg_type);
-        if !coerced_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return 0, .UNKNOWN, false, coerced_diag;
-        }
-        final_value = coerced;
-        final_type = .FLOAT4;
-      }
-      if final_type != arg_kind {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' arg '%' type mismatch (expected %, got %).", helper.name, it.name, arg_kind, final_type);
-        return 0, .UNKNOWN, false, diag;
-      }
-
-      arg_ptr_type_id := func_ptr_type_id_from_kind(s, arg_kind);
-      if arg_ptr_type_id == 0 {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' arg '%' has unsupported pointer type %.", helper.name, it.name, arg_kind);
-        return 0, .UNKNOWN, false, diag;
-      }
-      arg_ptr := new_id(s);
-      add_local_decl(s, tprint("         % = OpVariable % Function",
-                               id_text(arg_ptr),
-                               id_text(arg_ptr_type_id)));
-      add_debug_name(s, arg_ptr, it.name);
-      add_op(s, tprint("               OpStore % %", id_text(arg_ptr), id_text(final_value)));
-      array_add(*s.locals, .{name=it.name, ptr_id=arg_ptr, type=arg_kind});
-      continue;
-    }
-
-    arg_struct_name := it.type.struct_name;
-    if arg_struct_name.count == 0 arg_struct_name = it.type_name;
-    arg_struct_def := find_struct(s, arg_struct_name);
-    if !arg_struct_def {
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      diag.message = tprint("SPIR-V backend: helper '%' arg '%' has unsupported type '%'.", helper.name, it.name, it.type_name);
-      return 0, .UNKNOWN, false, diag;
-    }
-
-    struct_arg := call_args[it_index];
-    arg_local_struct: IR_SPV_Gen_Local_Struct;
-    arg_local_struct.name = it.name;
-    arg_local_struct.type_name = arg_struct_name;
-
-    if struct_arg && struct_arg.kind == .IDENT {
-      source_struct := find_local_struct(s, struct_arg.text);
-      if !source_struct {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' expects local struct value '%'.", helper.name, it.name, struct_arg.text);
-        return 0, .UNKNOWN, false, diag;
-      }
-      if source_struct.type_name != arg_struct_name {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' type mismatch ('%' vs '%').", helper.name, it.name, source_struct.type_name, it.type_name);
-        return 0, .UNKNOWN, false, diag;
-      }
-      for source_struct.fields {
-        array_add(*arg_local_struct.fields, .{name=it.name, ptr_id=it.ptr_id, type=it.type});
-      }
-      array_add(*s.local_structs, arg_local_struct);
-      continue;
-    }
-
-    if !struct_arg || struct_arg.kind != .CONSTRUCTOR || struct_arg.text != arg_struct_name {
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' only supports constructor or identifier values.", helper.name, it.name);
-      return 0, .UNKNOWN, false, diag;
-    }
-    if struct_arg.args.count != arg_struct_def.fields.count {
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' field count mismatch.", helper.name, it.name);
-      return 0, .UNKNOWN, false, diag;
-    }
-    for arg_struct_def.fields {
-      field_kind := spv_kind_from_ir_type_kind(it.type.kind);
-      field_is_uint := field_kind == .UINT;
-      if !field_is_uint field_is_uint = is_uint_type_name(it.type_name);
-      if !field_is_uint {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' field '%' has unsupported type '%'.", helper.name, arg_struct_def.name, it.name, it.type_name);
-        return 0, .UNKNOWN, false, diag;
-      }
-      field_value, field_type, field_ok, field_diag := emit_expr(s, struct_arg.args[it_index]);
-      if !field_ok {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        return 0, .UNKNOWN, false, field_diag;
-      }
-      if field_type != .UINT {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' struct arg field '%' must lower to uint.", helper.name, it.name);
-        return 0, .UNKNOWN, false, diag;
-      }
-      field_ptr := new_id(s);
-      add_local_decl(s, tprint("         % = OpVariable % Function",
-                               id_text(field_ptr),
-                               id_text(s.id_ptr_func_uint)));
-      add_debug_name(s, field_ptr, tprint("%.%", arg_local_struct.name, it.name));
-      add_op(s, tprint("               OpStore % %", id_text(field_ptr), id_text(field_value)));
-      array_add(*arg_local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=.UINT});
-    }
-    array_add(*s.local_structs, arg_local_struct);
-  }
+  bind_ok, bind_diag := bind_inline_function_args(s, helper, call_args);
+  if !bind_ok return 0, .UNKNOWN, false, bind_diag;
 
   return_id, return_type, return_ok, return_handled, return_diag := eval_inline_function_return_chain(s, helper, return_kind);
   s.locals.count = local_count_before;
@@ -2086,10 +2045,6 @@ eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, c
     diag.message = tprint("SPIR-V backend: helper '%' return type '%' does not match destination struct '%'.", helper.name, helper.return_type_name, out_struct_type);
     return false, diag;
   }
-  if helper.args.count != call_args.count {
-    diag.message = tprint("SPIR-V backend: helper '%' expected % args but got %.", helper.name, helper.args.count, call_args.count);
-    return false, diag;
-  }
 
   local_count_before := s.locals.count;
   local_struct_count_before := s.local_structs.count;
@@ -2100,173 +2055,8 @@ eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, c
     s.buffers.count = buffer_count_before;
   }
 
-  for helper.args {
-    pointer_handled, pointer_ok, pointer_diag := bind_inline_helper_pointer_arg(s, helper.name, it, call_args[it_index]);
-    if pointer_handled {
-      if !pointer_ok return false, pointer_diag;
-      continue;
-    }
-
-    arg_type := spv_kind_from_ir_type_kind(it.type.kind);
-    if arg_type == .UNKNOWN arg_type = expr_type_from_decl(it.type_name);
-    if arg_type != .UNKNOWN && arg_type != .STRUCT {
-      arg_value, value_type, value_ok, value_diag := emit_expr(s, call_args[it_index]);
-      if !value_ok {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        return false, value_diag;
-      }
-
-      final_value := arg_value;
-      final_type := value_type;
-      if arg_type == .FLOAT || is_integral_kind(arg_type) || arg_type == .BOOL {
-        coerced, coerced_ok, coerced_diag := coerce_to_kind(s, arg_value, value_type, arg_type);
-        if !coerced_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return false, coerced_diag;
-        }
-        final_value = coerced;
-        final_type = arg_type;
-      } else if arg_type == .FLOAT2 && value_type != .FLOAT2 {
-        coerced, coerced_ok, coerced_diag := coerce_to_float2(s, arg_value, value_type);
-        if !coerced_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return false, coerced_diag;
-        }
-        final_value = coerced;
-        final_type = .FLOAT2;
-      } else if arg_type == .FLOAT3 && value_type != .FLOAT3 {
-        coerced, coerced_ok, coerced_diag := coerce_to_float3(s, arg_value, value_type);
-        if !coerced_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return false, coerced_diag;
-        }
-        final_value = coerced;
-        final_type = .FLOAT3;
-      } else if arg_type == .FLOAT4 && value_type != .FLOAT4 {
-        coerced, coerced_ok, coerced_diag := coerce_to_float4(s, arg_value, value_type);
-        if !coerced_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return false, coerced_diag;
-        }
-        final_value = coerced;
-        final_type = .FLOAT4;
-      }
-
-      if final_type != arg_type {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' arg '%' type mismatch (expected %, got %).", helper.name, it.name, arg_type, final_type);
-        return false, diag;
-      }
-
-      arg_ptr_type := func_ptr_type_id_from_kind(s, arg_type);
-      if arg_ptr_type == 0 {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' arg '%' type '%' has no function pointer representation.", helper.name, it.name, arg_type);
-        return false, diag;
-      }
-      arg_ptr := new_id(s);
-      add_local_decl(s, tprint("         % = OpVariable % Function",
-                               id_text(arg_ptr),
-                               id_text(arg_ptr_type)));
-      add_debug_name(s, arg_ptr, it.name);
-      add_op(s, tprint("               OpStore % %", id_text(arg_ptr), id_text(final_value)));
-      array_add(*s.locals, .{name=it.name, ptr_id=arg_ptr, type=arg_type});
-      continue;
-    }
-
-    arg_struct_name := it.type.struct_name;
-    if arg_struct_name.count == 0 arg_struct_name = it.type_name;
-    arg_struct, arg_struct_ok, arg_struct_diag := alloc_local_struct(s, it.name, arg_struct_name);
-    if !arg_struct_ok {
-      s.locals.count = local_count_before;
-      s.local_structs.count = local_struct_count_before;
-      return false, arg_struct_diag;
-    }
-
-    arg_expr := call_args[it_index];
-    if arg_expr && arg_expr.kind == .IDENT {
-      src_struct := find_local_struct(s, arg_expr.text);
-      if !src_struct {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' expects local struct value '%'.", helper.name, it.name, arg_expr.text);
-        return false, diag;
-      }
-      copy_ok, copy_diag := copy_local_struct_fields(s, arg_struct, src_struct);
-      if !copy_ok {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        return false, copy_diag;
-      }
-      continue;
-    }
-
-    if arg_expr && arg_expr.kind == .SUBSCRIPT && arg_expr.left && arg_expr.left.kind == .IDENT {
-      src_buffer := find_buffer(s, arg_expr.left.text);
-      if src_buffer && src_buffer.element_kind == .STRUCT && src_buffer.element_type_name == arg_struct_name {
-        for arg_struct.fields {
-          src_ptr, src_type, src_ok, src_diag := emit_buffer_struct_field_ptr(s, arg_expr, it.name);
-          if !src_ok {
-            s.locals.count = local_count_before;
-            s.local_structs.count = local_struct_count_before;
-            return false, src_diag;
-          }
-          if src_type != it.type {
-            s.locals.count = local_count_before;
-            s.local_structs.count = local_struct_count_before;
-            diag.message = tprint("SPIR-V backend: helper '%' struct arg field '%' type mismatch.", helper.name, it.name);
-            return false, diag;
-          }
-          value_id := new_id(s);
-          type_id := type_id_from_kind(s, src_type);
-          emit_load(s, value_id, type_id, src_ptr, src_type, needs_physical_align=true);
-          add_op(s, tprint("               OpStore % %",
-                           id_text(it.ptr_id),
-                           id_text(value_id)));
-        }
-        continue;
-      }
-    }
-
-    if arg_expr && arg_expr.kind == .CONSTRUCTOR && arg_expr.text == arg_struct_name {
-      if arg_expr.args.count != arg_struct.fields.count {
-        s.locals.count = local_count_before;
-        s.local_structs.count = local_struct_count_before;
-        diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' constructor field count mismatch.", helper.name, it.name);
-        return false, diag;
-      }
-      for arg_struct.fields {
-        value_id, value_type, value_ok, value_diag := emit_expr(s, arg_expr.args[it_index]);
-        if !value_ok {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          return false, value_diag;
-        }
-        if value_type != it.type {
-          s.locals.count = local_count_before;
-          s.local_structs.count = local_struct_count_before;
-          diag.message = tprint("SPIR-V backend: helper '%' struct arg field '%' constructor type mismatch.", helper.name, it.name);
-          return false, diag;
-        }
-        add_op(s, tprint("               OpStore % %",
-                         id_text(it.ptr_id),
-                         id_text(value_id)));
-      }
-      continue;
-    }
-
-    s.locals.count = local_count_before;
-    s.local_structs.count = local_struct_count_before;
-    diag.message = tprint("SPIR-V backend: helper '%' struct arg '%' has unsupported expression kind %.", helper.name, it.name, ifx arg_expr then arg_expr.kind else .IDENT);
-    return false, diag;
-  }
+  bind_ok, bind_diag := bind_inline_function_args(s, helper, call_args);
+  if !bind_ok return false, bind_diag;
 
   apply_return_expr_to_out :: (s: *IR_SPV_Gen_State, helper_name: string, out_struct: *IR_SPV_Gen_Local_Struct, out_struct_type: string, dst_name: string, expr: *IR_Expr) -> (ok: bool, handled: bool, diag: IR_Diagnostic) {
     diag: IR_Diagnostic;
@@ -4072,12 +3862,33 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if !ret_ok return false, false, ret_diag;
         return true, true, diag;
       }
-      if stmt.return_expr.kind != .IDENT {
-        return_err("SPIR-V backend: graphics return value must be a local struct identifier.");
+      if stmt.return_expr.kind == .IDENT {
+        out_struct := find_local_struct(s, stmt.return_expr.text);
+        if out_struct {
+          ret_ok, ret_diag := emit_output_return_from_struct(s, out_struct);
+          if !ret_ok return false, false, ret_diag;
+          return true, true, diag;
+        }
       }
-      out_struct := find_local_struct(s, stmt.return_expr.text);
-      ret_ok, ret_diag := emit_output_return_from_struct(s, out_struct);
-      if !ret_ok return false, false, ret_diag;
+
+      if s.output_vars.count != 1 {
+        return_err("SPIR-V backend: non-struct graphics return values require exactly one output.");
+      }
+      output_var := s.output_vars[0];
+      raw_id, raw_type, raw_ok, raw_diag := emit_expr(s, stmt.return_expr);
+      if !raw_ok return false, false, raw_diag;
+      coerced_id, coerced_type, coerced_ok, coerced_diag := coerce_to_exact_kind(s, raw_id, raw_type, output_var.type);
+      if !coerced_ok {
+        if coerced_diag.message.count == 0 {
+          coerced_diag.message = "SPIR-V backend: could not coerce return expression to fragment output type.";
+        }
+        return false, false, coerced_diag;
+      }
+      if coerced_type != output_var.type {
+        return_err("SPIR-V backend: return expression type does not match output type.");
+      }
+      add_op(s, tprint("               OpStore % %", id_text(output_var.var_id), id_text(coerced_id)));
+      add_op(s, "               OpReturn");
       return true, true, diag;
     }
   }

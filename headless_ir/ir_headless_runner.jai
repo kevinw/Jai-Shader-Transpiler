@@ -16,8 +16,8 @@ check_contains :: (source: string, pattern: string, where: string) {
   if !ok fail("Expected '%' in %", pattern, where);
 }
 
-check_slang_file_if_present :: (path: string, pattern: string, where: string) {
-  if !file_exists(path) return;
+check_generated_file_contains :: (path: string, pattern: string, where: string) {
+  if !file_exists(path) fail("Expected generated file missing: %", path);
   source, ok := read_entire_file(path);
   if !ok fail("Could not read %", path);
   check_contains(source, pattern, where);
@@ -151,6 +151,11 @@ ir_headless_fragment_helpers_main :: (using input: IR_Headless_Vertex_Out) -> IR
   return out;
 } @fragment_shader
 
+ir_headless_fragment_return_note_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
+  _ = input;
+  return Vector4.{1.0, 0.0, 0.0, 1.0};
+} @fragment_shader
+
 ir_headless_fragment_anonymous_main :: (using input: IR_Headless_Vertex_Out) -> struct { out_color: Vector4; } {
   return .{
     out_color = Vector4.{input.color.x, input.color.y, input.color.z, input.color.w},
@@ -202,9 +207,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
   }
 
   metal_vertex := get_transpiled(.METAL, ir_headless_vertex_main);
-
-  ir_slang_path := ".build/ir_slang/ir_headless_vertex_main_vert.slang";
-  check_slang_file_if_present(ir_slang_path, "generated_by_ir_pipeline", "generated slang output");
+  check_generated_file_contains(".build/ir_slang/ir_headless_vertex_main_vert.spvasm", "OpEntryPoint Vertex", "generated vertex SPIR-V text output");
 
   vertex_path := tprint("%/ir_vertex_only.metal", HEADLESS_IR_DIR);
   if !write_entire_file(vertex_path, metal_vertex) fail("Could not write %", vertex_path);
@@ -247,12 +250,21 @@ ir_headless_fragment_boost :: (x: float) -> float {
 
   metal_fragment := get_transpiled(.METAL, ir_headless_fragment_main);
   check_contains(metal_fragment, "fragment", "fragment metal output");
-  ir_frag_slang_path := ".build/ir_slang/ir_headless_fragment_main_frag.slang";
-  check_slang_file_if_present(ir_frag_slang_path, "generated_by_ir_pipeline", "generated fragment slang output");
+  check_generated_file_contains(".build/ir_slang/ir_headless_fragment_main_frag.spvasm", "OpEntryPoint Fragment", "generated fragment SPIR-V text output");
   frag_path := tprint("%/ir_fragment_only.metal", HEADLESS_IR_DIR);
   if !write_entire_file(frag_path, metal_fragment) fail("Could not write %", frag_path);
   #if OS == .MACOS {
     compile_metal(frag_path);
+  }
+
+  metal_fragment_return_note := get_transpiled(.METAL, ir_headless_fragment_return_note_main);
+  check_contains(metal_fragment_return_note, "fragment", "fragment return-note metal output");
+  check_contains(metal_fragment_return_note, "[[color(0)]]", "fragment return-note metal output");
+  check_generated_file_contains(".build/ir_slang/ir_headless_fragment_return_note_main_frag.spvasm", "Location 0", "fragment return-note SPIR-V text output");
+  frag_return_note_path := tprint("%/ir_fragment_return_note.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(frag_return_note_path, metal_fragment_return_note) fail("Could not write %", frag_return_note_path);
+  #if OS == .MACOS {
+    compile_metal(frag_return_note_path);
   }
 
   metal_fragment_helpers := get_transpiled(.METAL, ir_headless_fragment_helpers_main);
@@ -270,9 +282,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
 
   metal_fragment_anonymous := get_transpiled(.METAL, ir_headless_fragment_anonymous_main);
   check_contains(metal_fragment_anonymous, "fragment", "anonymous fragment metal output");
-  anon_frag_ir_slang_path := ".build/ir_slang/ir_headless_fragment_anonymous_main_frag.slang";
-  check_slang_file_if_present(anon_frag_ir_slang_path, "generated_by_ir_pipeline", "anonymous fragment IR slang output");
-  check_slang_file_if_present(anon_frag_ir_slang_path, "out_color", "anonymous fragment IR slang output");
+  check_contains(metal_fragment_anonymous, "[[color(0)]]", "anonymous fragment metal output");
   anon_frag_path := tprint("%/ir_fragment_anonymous.metal", HEADLESS_IR_DIR);
   if !write_entire_file(anon_frag_path, metal_fragment_anonymous) fail("Could not write %", anon_frag_path);
   #if OS == .MACOS {
@@ -301,8 +311,8 @@ ir_headless_fragment_boost :: (x: float) -> float {
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
   check_contains(metal_pair, "vertex", "pair metal output");
   check_contains(metal_pair, "fragment", "pair metal output");
-  ir_pair_slang_path := ".build/ir_slang/__get_transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.slang";
-  check_slang_file_if_present(ir_pair_slang_path, "generated_by_ir_pipeline", "generated pair slang output");
+  check_generated_file_contains(".build/ir_slang/__get_transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", "OpEntryPoint Vertex", "generated pair SPIR-V text output");
+  check_generated_file_contains(".build/ir_slang/__get_transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", "OpEntryPoint Fragment", "generated pair SPIR-V text output");
   pair_path := tprint("%/ir_pair.metal", HEADLESS_IR_DIR);
   if !write_entire_file(pair_path, metal_pair) fail("Could not write %", pair_path);
   #if OS == .MACOS {
@@ -330,9 +340,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
   anon_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_anonymous_main);
   check_contains(anon_pair, "vertex", "anonymous pair metal output");
   check_contains(anon_pair, "fragment", "anonymous pair metal output");
-  anon_pair_ir_slang_path := ".build/ir_slang/__get_transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_anonymous_main_pair.slang";
-  check_slang_file_if_present(anon_pair_ir_slang_path, "generated_by_ir_pipeline", "anonymous pair IR slang output");
-  check_slang_file_if_present(anon_pair_ir_slang_path, "out_color", "anonymous pair IR slang output");
+  check_contains(anon_pair, "[[color(0)]]", "anonymous pair metal output");
   anon_pair_path := tprint("%/ir_pair_anonymous_fragment.metal", HEADLESS_IR_DIR);
   if !write_entire_file(anon_pair_path, anon_pair) fail("Could not write %", anon_pair_path);
   #if OS == .MACOS {
@@ -344,10 +352,6 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(boids_pair, "fragment", "boids-like pair metal output");
   check_contains(boids_pair, "[[vertex_id]]", "boids-like pair metal output");
   check_contains(boids_pair, "[[instance_id]]", "boids-like pair metal output");
-  boids_pair_ir_slang_path := ".build/ir_slang/__get_transpiled_pair__metal_ir_headless_boids_vertex_main_ir_headless_boids_fragment_main_pair.slang";
-  check_slang_file_if_present(boids_pair_ir_slang_path, "ParameterBlock<IR_Boids_Params> params", "boids-like pair IR slang output");
-  check_slang_file_if_present(boids_pair_ir_slang_path, "params.vertex_data.instances[", "boids-like pair IR slang output");
-  check_slang_file_if_present(boids_pair_ir_slang_path, "params.fragment_data.color[", "boids-like pair IR slang output");
   boids_pair_path := tprint("%/ir_boids_like_pair.metal", HEADLESS_IR_DIR);
   if !write_entire_file(boids_pair_path, boids_pair) fail("Could not write %", boids_pair_path);
   #if OS == .MACOS {

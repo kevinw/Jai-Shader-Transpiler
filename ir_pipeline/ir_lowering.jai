@@ -424,6 +424,24 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
   return out, true;
 }
 
+declaration_get_semantic :: (decl: *Code_Declaration) -> (string, bool) {
+  if !decl return "", false;
+  for decl.notes {
+    note_text := it.text;
+    if begins_with(note_text, "semantic_") {
+      ret: string;
+      ret.data = note_text.data + 9;
+      ret.count = note_text.count - 9;
+      return ret, true;
+    }
+
+    note_upper := to_upper_copy(note_text);
+    if begins_with(note_upper, "SV_") return note_text, true;
+    if begins_with(note_upper, "GL_") return note_text, true;
+  }
+  return "", false;
+}
+
 ir_lower_struct_member_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> (string, bool) {
   if !type return "", false;
 
@@ -1521,6 +1539,8 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
 
   in_type := ifx arg0.type_inst then arg0.type_inst.result else ifx arg0.expression then arg0.expression.type else null;
   out_type := ifx ret0.type_inst then ret0.type_inst.result else ifx ret0.expression then ret0.expression.type else null;
+  out_type_name_for_classify, out_type_name_ok := ir_type_to_slang_name(out_type);
+  out_type_is_builtin_value := out_type_name_ok && ir_is_builtin_slang_type_name(out_type_name_for_classify);
 
   in_struct, in_ok := ir_lower_struct_from_type(tprint("%_In", ctx.name), in_type);
   if !in_ok {
@@ -1535,10 +1555,54 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
     }
   }
 
-  out_struct, out_ok := ir_lower_struct_from_type(tprint("%_Out", ctx.name), out_type);
-  if !out_ok {
-    ir_set_diagnostic(*state, "IR lowering(fragment): could not lower output struct type", cast(*Code_Node) ctx.header);
-    return out, false, ir_get_diagnostic(*state);
+  ret_semantic, has_ret_semantic := declaration_get_semantic(ret0);
+  out_type_is_struct := out_type && out_type.type == .STRUCT && !out_type_is_builtin_value;
+  out_struct: IR_Struct;
+  if out_type_is_struct {
+    lowered_out_struct, out_ok := ir_lower_struct_from_type(tprint("%_Out", ctx.name), out_type);
+    if !out_ok {
+      ir_set_diagnostic(*state, "IR lowering(fragment): could not lower output struct type", cast(*Code_Node) ctx.header);
+      return out, false, ir_get_diagnostic(*state);
+    }
+    out_struct = lowered_out_struct;
+    if has_ret_semantic {
+      if out_struct.fields.count != 1 {
+        ir_set_diagnostic(*state, "IR lowering(fragment): return semantic notes require exactly one output field.", cast(*Code_Node) ret0);
+        return out, false, ir_get_diagnostic(*state);
+      }
+      out_struct.fields[0].semantic = ret_semantic;
+    }
+  } else {
+    if !has_ret_semantic {
+      ir_set_diagnostic(*state, "IR lowering(fragment): non-struct return type requires a return semantic note (for example, @SV_Target).", cast(*Code_Node) ret0);
+      return out, false, ir_get_diagnostic(*state);
+    }
+    ret_ir_type, ret_ir_ok := ir_type_from_type_info(out_type);
+    if !ret_ir_ok {
+      ir_set_diagnostic(*state, "IR lowering(fragment): unsupported non-struct return type.", cast(*Code_Node) ret0);
+      return out, false, ir_get_diagnostic(*state);
+    }
+    ret_type_name := out_type_name_for_classify;
+    if !out_type_name_ok {
+      ret_type_name, out_type_name_ok = ir_type_to_slang_name(out_type);
+    }
+    if !out_type_name_ok {
+      ir_set_diagnostic(*state, "IR lowering(fragment): unsupported non-struct return type name.", cast(*Code_Node) ret0);
+      return out, false, ir_get_diagnostic(*state);
+    }
+    original_type_name, original_ok := ir_type_to_original_name(out_type);
+    if !original_ok {
+      ir_set_diagnostic(*state, "IR lowering(fragment): unsupported original non-struct return type.", cast(*Code_Node) ret0);
+      return out, false, ir_get_diagnostic(*state);
+    }
+    out_struct.name = tprint("%_Out", ctx.name);
+    array_add(*out_struct.fields, .{
+      name = "out_color",
+      type = ret_ir_type,
+      type_name = ret_type_name,
+      semantic = ret_semantic,
+      original_type_name = original_type_name,
+    });
   }
 
   out.source_name = ctx.name;
@@ -1598,7 +1662,9 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
   parameter_usings: [..] IR_Using_Source;
   ir_collect_parameter_using_sources(ctx.header, *parameter_usings);
   for out.input.fields array_add(*input_field_names, it.name);
-  for out.output.fields array_add(*output_field_names, it.name);
+  if out_type_is_struct {
+    for out.output.fields array_add(*output_field_names, it.name);
+  }
   if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
     ir_set_diagnostic(*state, "IR lowering(fragment): failed while lowering function body", cast(*Code_Node) ctx.header.body_or_null.block);
     return out, false, ir_get_diagnostic(*state);
@@ -2024,11 +2090,16 @@ emit_ir_compute_to_slang :: (shader: IR_Compute_Shader) -> (string, bool) {
 #scope_file
 
 member_get_semantic :: (member: *Type_Info_Struct_Member) -> string {
-  for member.notes if begins_with(it, "semantic_") {
-    ret: string;
-    ret.data = it.data + 9;
-    ret.count = it.count - 9;
-    return ret;
+  for member.notes {
+    if begins_with(it, "semantic_") {
+      ret: string;
+      ret.data = it.data + 9;
+      ret.count = it.count - 9;
+      return ret;
+    }
+    sem_upper := to_upper_copy(it);
+    if begins_with(sem_upper, "SV_") return it;
+    if begins_with(sem_upper, "GL_") return it;
   }
   return to_upper_copy(member.name);
 }
