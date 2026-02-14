@@ -1761,6 +1761,64 @@ eval_inline_helper_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Fun
   return 0, .UNKNOWN, false, true, diag;
 }
 
+spv_kind_from_ir_type_kind :: (kind: IR_Type_Kind) -> IR_SPV_Gen_Type {
+  if kind == .BOOL return .BOOL;
+  if kind == .I32 return .INT;
+  if kind == .U32 return .UINT;
+  if kind == .I64 return .INT64;
+  if kind == .U64 return .UINT64;
+  if kind == .F32 return .FLOAT;
+  if kind == .F32x2 return .FLOAT2;
+  if kind == .F32x3 return .FLOAT3;
+  if kind == .F32x4 return .FLOAT4;
+  if kind == .F32x2x2 return .FLOAT2X2;
+  if kind == .STRUCT return .STRUCT;
+  return .UNKNOWN;
+}
+
+bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (handled: bool, ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if arg.type.kind != .POINTER return false, true, diag;
+
+  if !arg_expr || arg_expr.kind != .IDENT {
+    diag.message = tprint("SPIR-V backend: helper '%' pointer arg '%' must be a buffer identifier.", helper_name, arg.name);
+    return true, false, diag;
+  }
+  source_buffer := find_buffer(s, arg_expr.text);
+  if !source_buffer {
+    diag.message = tprint("SPIR-V backend: helper '%' pointer arg '%' expected storage buffer identifier, got '%'.", helper_name, arg.name, arg_expr.text);
+    return true, false, diag;
+  }
+
+  expected_kind := spv_kind_from_ir_type_kind(arg.type.pointee_kind);
+  if arg.type.pointee_kind == .STRUCT || expected_kind == .STRUCT {
+    if source_buffer.element_kind != .STRUCT {
+      diag.message = tprint("SPIR-V backend: helper '%' pointer arg '%' expected struct buffer pointee '%'.", helper_name, arg.name, arg.type.pointee_struct_name);
+      return true, false, diag;
+    }
+    if arg.type.pointee_struct_name.count != 0 && source_buffer.element_type_name != arg.type.pointee_struct_name {
+      diag.message = tprint("SPIR-V backend: helper '%' pointer arg '%' pointee mismatch (expected '%', got '%').", helper_name, arg.name, arg.type.pointee_struct_name, source_buffer.element_type_name);
+      return true, false, diag;
+    }
+  } else {
+    if expected_kind == .UNKNOWN {
+      diag.message = tprint("SPIR-V backend: helper '%' pointer arg '%' has unsupported pointee kind %.", helper_name, arg.name, arg.type.pointee_kind);
+      return true, false, diag;
+    }
+    if source_buffer.element_kind != expected_kind {
+      diag.message = tprint("SPIR-V backend: helper '%' pointer arg '%' pointee mismatch (expected %, got %).", helper_name, arg.name, expected_kind, source_buffer.element_kind);
+      return true, false, diag;
+    }
+  }
+
+  if arg.name != arg_expr.text {
+    alias := source_buffer.*;
+    alias.name = arg.name;
+    array_add(*s.buffers, alias);
+  }
+  return true, true, diag;
+}
+
 eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
@@ -1780,7 +1838,19 @@ eval_inline_helper :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Function, call_a
 
   local_count_before := s.locals.count;
   local_struct_count_before := s.local_structs.count;
+  buffer_count_before := s.buffers.count;
+  defer {
+    s.locals.count = local_count_before;
+    s.local_structs.count = local_struct_count_before;
+    s.buffers.count = buffer_count_before;
+  }
   for helper.args {
+    pointer_handled, pointer_ok, pointer_diag := bind_inline_helper_pointer_arg(s, helper.name, it, call_args[it_index]);
+    if pointer_handled {
+      if !pointer_ok return 0, .UNKNOWN, false, pointer_diag;
+      continue;
+    }
+
     arg_kind := expr_type_from_decl(it.type_name);
     if arg_kind != .UNKNOWN && arg_kind != .STRUCT {
       arg_value, arg_type, arg_ok, arg_diag := emit_expr(s, call_args[it_index]);
@@ -1964,8 +2034,20 @@ eval_inline_helper_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Helper_Functi
 
   local_count_before := s.locals.count;
   local_struct_count_before := s.local_structs.count;
+  buffer_count_before := s.buffers.count;
+  defer {
+    s.locals.count = local_count_before;
+    s.local_structs.count = local_struct_count_before;
+    s.buffers.count = buffer_count_before;
+  }
 
   for helper.args {
+    pointer_handled, pointer_ok, pointer_diag := bind_inline_helper_pointer_arg(s, helper.name, it, call_args[it_index]);
+    if pointer_handled {
+      if !pointer_ok return false, pointer_diag;
+      continue;
+    }
+
     arg_type := expr_type_from_decl(it.type_name);
     if arg_type != .UNKNOWN && arg_type != .STRUCT {
       arg_value, value_type, value_ok, value_diag := emit_expr(s, call_args[it_index]);

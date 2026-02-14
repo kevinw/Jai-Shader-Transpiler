@@ -1,5 +1,32 @@
 #scope_export
 
+IR_Type_Kind :: enum {
+  UNKNOWN;
+  BOOL;
+  I32;
+  U32;
+  I64;
+  U64;
+  F32;
+  F32x2;
+  F32x3;
+  F32x4;
+  F32x2x2;
+  STRUCT;
+  POINTER;
+  FIXED_ARRAY;
+}
+
+IR_Type :: struct {
+  kind: IR_Type_Kind;
+  display_name: string;
+  struct_name: string;
+  pointee_kind: IR_Type_Kind;
+  pointee_display_name: string;
+  pointee_struct_name: string;
+  pointee_is_struct: bool;
+}
+
 IR_Field :: struct {
   name: string;
   type_name: string;
@@ -51,6 +78,7 @@ IR_Compute_Buffer :: struct {
 
 IR_Function_Arg :: struct {
   name: string;
+  type: IR_Type;
   type_name: string;
   is_readonly: bool;
   original_type_name: string;
@@ -264,6 +292,64 @@ ir_type_to_original_name :: (type: *Type_Info) -> (string, bool) {
 
   type_name, type_ok := ir_type_to_slang_name(type);
   return type_name, type_ok;
+}
+
+ir_type_kind_from_slang_name :: (name: string) -> IR_Type_Kind {
+  if name == "bool" return .BOOL;
+  if name == "int" || name == "int32_t" return .I32;
+  if name == "uint" || name == "u32" return .U32;
+  if name == "int64_t" return .I64;
+  if name == "uint64_t" return .U64;
+  if name == "float" return .F32;
+  if name == "float2" return .F32x2;
+  if name == "float3" return .F32x3;
+  if name == "float4" return .F32x4;
+  if name == "float2x2" return .F32x2x2;
+  return .UNKNOWN;
+}
+
+ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
+  out: IR_Type;
+  if !type return out, false;
+
+  display_name, display_ok := ir_type_to_slang_name(type);
+  if !display_ok return out, false;
+  out.display_name = display_name;
+
+  if type.type == .POINTER {
+    ptr := cast(*Type_Info_Pointer) type;
+    if !ptr.pointer_to return out, false;
+    pointee, pointee_ok := ir_type_from_type_info(ptr.pointer_to);
+    if !pointee_ok return out, false;
+    out.kind = .POINTER;
+    out.pointee_kind = pointee.kind;
+    out.pointee_display_name = pointee.display_name;
+    out.pointee_struct_name = pointee.struct_name;
+    out.pointee_is_struct = pointee.kind == .STRUCT;
+    return out, true;
+  }
+
+  if type.type == .ARRAY {
+    out.kind = .FIXED_ARRAY;
+    return out, true;
+  }
+
+  if type.type == .STRUCT {
+    st := cast(*Type_Info_Struct) type;
+    lowered_name := jai_to_hlsl_type_name(get_struct_type_name(st));
+    builtin_kind := ir_type_kind_from_slang_name(lowered_name);
+    if builtin_kind != .UNKNOWN {
+      out.kind = builtin_kind;
+      return out, true;
+    }
+    out.kind = .STRUCT;
+    out.struct_name = lowered_name;
+    return out, true;
+  }
+
+  out.kind = ir_type_kind_from_slang_name(display_name);
+  if out.kind == .UNKNOWN return out, false;
+  return out, true;
 }
 
 ir_pointer_pointee_lowered_name :: (pointer_type: *Type_Info) -> (string, bool, bool) {
@@ -741,6 +827,19 @@ ir_lower_expr :: (node: *Code_Node,
       lit := cast(*Code_Literal) node;
 
       if lit.value_type == .STRUCT {
+        struct_type_info: *Type_Info_Struct = null;
+        if lit.type && lit.type.type == .STRUCT {
+          struct_type_info = cast(*Type_Info_Struct) lit.type;
+        } else if expected_type && expected_type.type == .STRUCT {
+          struct_type_info = cast(*Type_Info_Struct) expected_type;
+        }
+
+        field_expected_type :: (st: *Type_Info_Struct, field_name: string) -> *Type_Info {
+          if !st return null;
+          for *st.members if it.name == field_name return it.type;
+          return null;
+        }
+
         constructor_name := "";
         if lit.struct_literal_info.type_expression && lit.struct_literal_info.type_expression.type_valued_expression && lit.struct_literal_info.type_expression.type_valued_expression.kind == .IDENT {
           type_ident := cast(*Code_Ident) lit.struct_literal_info.type_expression.type_valued_expression;
@@ -764,10 +863,44 @@ ir_lower_expr :: (node: *Code_Node,
 
         out := ir_expr_new(.CONSTRUCTOR);
         out.text = constructor_name;
+        positional_index: s64 = 0;
         for lit.struct_literal_info.arguments {
-          arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings, active_aliases, state);
+          source_arg := it;
+          arg_expected_type: *Type_Info = null;
+
+          if source_arg && source_arg.kind == .BINARY_OPERATOR {
+            named := cast(*Code_Binary_Operator) source_arg;
+            if named.operator_type == cast(Operator_Type) #char "=" &&
+               named.left && named.left.kind == .IDENT {
+              field_name := (cast(*Code_Ident) named.left).name;
+              arg_expected_type = field_expected_type(struct_type_info, field_name);
+
+              lowered_right, right_ok := ir_lower_expr(named.right, input_fields, output_fields, active_usings, active_aliases, state, arg_expected_type);
+              if !right_ok return null, false;
+              if ir_is_builtin_slang_type_name(constructor_name) {
+                // Builtin vector/matrix constructors expect positional args only.
+                array_add(*out.args, lowered_right);
+                continue;
+              }
+
+              lowered_left, left_ok := ir_lower_expr(named.left, input_fields, output_fields, active_usings, active_aliases, state);
+              if !left_ok return null, false;
+              arg := ir_expr_new(.BINARY);
+              arg.text = "=";
+              arg.left = lowered_left;
+              arg.right = lowered_right;
+              array_add(*out.args, arg);
+              continue;
+            }
+          }
+
+          if struct_type_info && positional_index < struct_type_info.members.count {
+            arg_expected_type = struct_type_info.members[positional_index].type;
+          }
+          arg, ok := ir_lower_expr(source_arg, input_fields, output_fields, active_usings, active_aliases, state, arg_expected_type);
           if !ok return null, false;
           array_add(*out.args, arg);
+          positional_index += 1;
         }
         return out, true;
       }
@@ -1286,6 +1419,11 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Ve
       ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported original type for argument '%'", arg.name), cast(*Code_Node) ctx.header);
       return out, false, ir_get_diagnostic(*state);
     }
+    arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
+    if !arg_ir_type_ok {
+      ir_set_diagnostic(*state, tprint("IR lowering(vertex): unsupported typed IR argument '%'", arg.name), cast(*Code_Node) ctx.header);
+      return out, false, ir_get_diagnostic(*state);
+    }
     pointee_name := "";
     pointee_ok := false;
     pointee_is_struct := false;
@@ -1298,6 +1436,7 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Ve
     }
     array_add(*out.args, .{
       name = arg.name,
+      type = arg_ir_type,
       type_name = arg_type_name,
       is_readonly = true,
       original_type_name = original_type_name,
@@ -1384,6 +1523,11 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
       ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported original type for argument '%'", arg.name), cast(*Code_Node) ctx.header);
       return out, false, ir_get_diagnostic(*state);
     }
+    arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
+    if !arg_ir_type_ok {
+      ir_set_diagnostic(*state, tprint("IR lowering(fragment): unsupported typed IR argument '%'", arg.name), cast(*Code_Node) ctx.header);
+      return out, false, ir_get_diagnostic(*state);
+    }
     pointee_name := "";
     pointee_ok := false;
     pointee_is_struct := false;
@@ -1396,6 +1540,7 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
     }
     array_add(*out.args, .{
       name = arg.name,
+      type = arg_ir_type,
       type_name = arg_type_name,
       is_readonly = true,
       original_type_name = original_type_name,
