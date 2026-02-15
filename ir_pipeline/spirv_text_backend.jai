@@ -2968,6 +2968,18 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
                          id_text(out), id_text(s.id_float), id_text(af), id_text(k)));
         return out, .FLOAT, true, diag;
       }
+      if callee == "degrees" {
+        if expr.args.count != 1 return_err("SPIR-V backend: degrees expects 1 arg.");
+        a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
+        if !a_ok return 0, .UNKNOWN, false, a_diag;
+        af, af_ok, af_diag := coerce_to_float(s, a_id, a_type);
+        if !af_ok return 0, .UNKNOWN, false, af_diag;
+        k := get_f32_const(s, "57.29577951308232");
+        out := new_id(s);
+        add_op(s, tprint("         % = OpFMul % % %",
+                         id_text(out), id_text(s.id_float), id_text(af), id_text(k)));
+        return out, .FLOAT, true, diag;
+      }
       if callee == "mod" || callee == "fmod_cycling" {
         if expr.args.count != 2 return_err("SPIR-V backend: mod expects 2 args.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
@@ -2999,6 +3011,65 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
                          id_text(vf),
                          id_text(zero),
                          id_text(one)));
+        return out, .FLOAT, true, diag;
+      }
+      if callee == "clamp" {
+        if expr.args.count != 3 return_err("SPIR-V backend: clamp expects 3 args.");
+        x_id, x_type, x_ok, x_diag := emit_expr(s, expr.args[0]);
+        if !x_ok return 0, .UNKNOWN, false, x_diag;
+        lo_id, lo_type, lo_ok, lo_diag := emit_expr(s, expr.args[1]);
+        if !lo_ok return 0, .UNKNOWN, false, lo_diag;
+        hi_id, hi_type, hi_ok, hi_diag := emit_expr(s, expr.args[2]);
+        if !hi_ok return 0, .UNKNOWN, false, hi_diag;
+
+        if x_type == .FLOAT2 {
+          x2, x2_ok, x2_diag := coerce_to_float2(s, x_id, x_type);
+          if !x2_ok return 0, .UNKNOWN, false, x2_diag;
+          lo2, lo2_ok, lo2_diag := coerce_to_float2(s, lo_id, lo_type);
+          if !lo2_ok return 0, .UNKNOWN, false, lo2_diag;
+          hi2, hi2_ok, hi2_diag := coerce_to_float2(s, hi_id, hi_type);
+          if !hi2_ok return 0, .UNKNOWN, false, hi2_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %",
+                           id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "FClamp",
+                           id_text(x2), id_text(lo2), id_text(hi2)));
+          return out, .FLOAT2, true, diag;
+        }
+        if x_type == .FLOAT3 {
+          x3, x3_ok, x3_diag := coerce_to_float3(s, x_id, x_type);
+          if !x3_ok return 0, .UNKNOWN, false, x3_diag;
+          lo3, lo3_ok, lo3_diag := coerce_to_float3(s, lo_id, lo_type);
+          if !lo3_ok return 0, .UNKNOWN, false, lo3_diag;
+          hi3, hi3_ok, hi3_diag := coerce_to_float3(s, hi_id, hi_type);
+          if !hi3_ok return 0, .UNKNOWN, false, hi3_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %",
+                           id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "FClamp",
+                           id_text(x3), id_text(lo3), id_text(hi3)));
+          return out, .FLOAT3, true, diag;
+        }
+        if x_type == .FLOAT4 {
+          x4, x4_ok, x4_diag := coerce_to_float4(s, x_id, x_type);
+          if !x4_ok return 0, .UNKNOWN, false, x4_diag;
+          lo4, lo4_ok, lo4_diag := coerce_to_float4(s, lo_id, lo_type);
+          if !lo4_ok return 0, .UNKNOWN, false, lo4_diag;
+          hi4, hi4_ok, hi4_diag := coerce_to_float4(s, hi_id, hi_type);
+          if !hi4_ok return 0, .UNKNOWN, false, hi4_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %",
+                           id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "FClamp",
+                           id_text(x4), id_text(lo4), id_text(hi4)));
+          return out, .FLOAT4, true, diag;
+        }
+
+        xf, xf_ok, xf_diag := coerce_to_float(s, x_id, x_type);
+        if !xf_ok return 0, .UNKNOWN, false, xf_diag;
+        lof, lof_ok, lof_diag := coerce_to_float(s, lo_id, lo_type);
+        if !lof_ok return 0, .UNKNOWN, false, lof_diag;
+        hif, hif_ok, hif_diag := coerce_to_float(s, hi_id, hi_type);
+        if !hif_ok return 0, .UNKNOWN, false, hif_diag;
+        out := new_id(s);
+        add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float), id_text(s.id_extinst), "FClamp", id_text(xf), id_text(lof), id_text(hif)));
         return out, .FLOAT, true, diag;
       }
       if callee == "step" {
@@ -3120,7 +3191,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         return_err("SPIR-V backend: unsupported mul argument types (%, %).", a_type, b_type);
       }
       if callee == "floor" || callee == "min" || callee == "max" ||
-         callee == "abs" || callee == "sqrt" || callee == "sin" || callee == "cos" || callee == "fract" || callee == "length" {
+         callee == "abs" || callee == "sqrt" || callee == "sin" || callee == "cos" || callee == "fract" || callee == "length" || callee == "normalize" {
         if callee == "length" {
           if expr.args.count != 1 return_err("SPIR-V backend: length expects 1 arg.");
           v_id, v_type, v_ok, v_diag := emit_expr(s, expr.args[0]);
@@ -3130,6 +3201,34 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           out := new_id(s);
           add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float), id_text(s.id_extinst), "Length", id_text(v2)));
           return out, .FLOAT, true, diag;
+        }
+        if callee == "normalize" {
+          if expr.args.count != 1 return_err("SPIR-V backend: normalize expects 1 arg.");
+          v_id, v_type, v_ok, v_diag := emit_expr(s, expr.args[0]);
+          if !v_ok return 0, .UNKNOWN, false, v_diag;
+
+          if v_type == .FLOAT2 {
+            v2, v2_ok, v2_diag := coerce_to_float2(s, v_id, v_type);
+            if !v2_ok return 0, .UNKNOWN, false, v2_diag;
+            out := new_id(s);
+            add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "Normalize", id_text(v2)));
+            return out, .FLOAT2, true, diag;
+          }
+          if v_type == .FLOAT3 {
+            v3, v3_ok, v3_diag := coerce_to_float3(s, v_id, v_type);
+            if !v3_ok return 0, .UNKNOWN, false, v3_diag;
+            out := new_id(s);
+            add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "Normalize", id_text(v3)));
+            return out, .FLOAT3, true, diag;
+          }
+          if v_type == .FLOAT4 {
+            v4, v4_ok, v4_diag := coerce_to_float4(s, v_id, v_type);
+            if !v4_ok return 0, .UNKNOWN, false, v4_diag;
+            out := new_id(s);
+            add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "Normalize", id_text(v4)));
+            return out, .FLOAT4, true, diag;
+          }
+          return_err("SPIR-V backend: normalize requires float2/float3/float4, got %.", v_type);
         }
         builtin_id, builtin_type, builtin_ok, builtin_diag := emit_float_builtin_call(s, callee, expr.args);
         if !builtin_ok return 0, .UNKNOWN, false, builtin_diag;

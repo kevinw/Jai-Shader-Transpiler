@@ -124,6 +124,9 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"edge_case_106_nested_struct_helper_arg_copy", .Bare},
   {"edge_case_107_scalar_helper_if_return_chain", .Bare},
   {"edge_case_108_pointer_alias_from_member_expr", .Bare},
+  {"edge_case_109_shaderfuncs_normalize_mix_clamp", .Bare},
+  {"edge_case_110_shaderfuncs_step_smoothstep_mod_fract", .Bare},
+  {"edge_case_111_shaderfuncs_degrees_radians_chain", .Bare},
   {"edge_case_26_vector_negate", .Bare},
   {"edge_case_27_helper_nested_call", .Bare},
   {"edge_case_28_struct_constructor_from_member_expr", .Boids},
@@ -140,7 +143,6 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
 ];
 
 ELEMENT_COUNT :: 64;
-UVector3 :: struct { x, y, z: u32; }
 
 Compute_Boid_State :: struct {
   pos: Vector2;
@@ -1803,6 +1805,39 @@ edge_case_108_pointer_alias_from_member_expr :: (using in: Compute_Semantics_In,
   alias[idx] = edge_case_75_alias_read(alias, idx) * 3 + 2;
 } @compute_shader
 
+edge_case_109_shaderfuncs_normalize_mix_clamp :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  base := cast(float) ((values[idx] % 97) + 1);
+  v := Vector2.{base * 0.03125 + 0.25, cast(float) (idx % 11) * 0.125 + 0.5};
+  n := normalize(v);
+  t_raw := cast(float) ((idx * 13) % 170) * 0.01 - 0.25;
+  t := clamp(t_raw, 0.0, 1.0);
+  m := mix(n.x, n.y + 0.125, t);
+  values[idx] = cast(u32) (m * 1000.0 + n.x * 173.0 + n.y * 211.0 + t * 37.0);
+} @compute_shader
+
+edge_case_110_shaderfuncs_step_smoothstep_mod_fract :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  x := cast(float) (values[idx] % 43) * 0.12 + cast(float) (idx % 7) * 0.07;
+  wrapped := mod(x + 2.75, 1.6);
+  frac_part := fract(x * 0.73);
+  s := step(0.65, wrapped);
+  sm := smoothstep(0.20, 1.15, wrapped + frac_part * 0.3);
+  values[idx] = cast(u32) (wrapped * 137.0 + frac_part * 71.0 + s * 23.0 + sm * 89.0);
+} @compute_shader
+
+edge_case_111_shaderfuncs_degrees_radians_chain :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  deg := 15.0 + cast(float) (idx % 12) * 7.5;
+  rad := radians(deg);
+  back_deg := degrees(rad);
+  sm := smoothstep(0.0, 180.0, back_deg);
+  values[idx] = cast(u32) (back_deg * 3.0 + sm * 101.0);
+} @compute_shader
+
 // Gap probes (not in ALL_TEST_FUNCTIONS yet):
 // - Edge helper struct constructor args with named-field form.
 // - Switch condition typing for signed integer values.
@@ -2132,4 +2167,5 @@ log_nserror :: (label: string, error: *NSError) -> bool {
 #import "Objective_C";
 #import "Compiler";
 
+#import,file "../modules/ShaderFuncs/module.jai";
 #import,file "../module.jai";
