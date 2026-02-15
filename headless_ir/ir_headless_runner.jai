@@ -357,8 +357,8 @@ ir_headless_fragment_boost :: (x: float) -> float {
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
   check_contains(metal_pair, "vertex", "pair metal output");
   check_contains(metal_pair, "fragment", "pair metal output");
-  check_generated_file_contains(".build/ir_slang/__get_transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", "OpEntryPoint Vertex", "generated pair SPIR-V text output");
-  check_generated_file_contains(".build/ir_slang/__get_transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", "OpEntryPoint Fragment", "generated pair SPIR-V text output");
+  check_generated_file_contains(".build/ir_slang/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", "OpEntryPoint Vertex", "generated pair SPIR-V text output");
+  check_generated_file_contains(".build/ir_slang/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", "OpEntryPoint Fragment", "generated pair SPIR-V text output");
   pair_path := tprint("%/ir_pair.metal", HEADLESS_IR_DIR);
   if !write_entire_file(pair_path, metal_pair) fail("Could not write %", pair_path);
   #if OS == .MACOS {

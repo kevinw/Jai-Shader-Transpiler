@@ -188,7 +188,9 @@ collect_generated_files :: (extension: string) -> [..] string {
 
     visitor :: (info: *File_Visit_Info, args: *Args) {
         if !ends_with(info.short_name, args.extension) return;
-        found_internal, _ := contains(info.short_name, "__get_transpiled_");
+        found_internal_single, _ := contains(info.short_name, "transpiled_single_");
+        found_internal_pair, _ := contains(info.short_name, "transpiled_pair_");
+        found_internal := found_internal_single || found_internal_pair;
         if found_internal return;
         array_add(args.files, copy_string(tprint("%/%", DEBUG_OUTDIR, info.short_name)));
     }
