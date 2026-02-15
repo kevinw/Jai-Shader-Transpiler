@@ -850,6 +850,7 @@ ir_lower_expr :: (node: *Code_Node,
           inlined, inlined_ok := ir_lower_expr(ident.resolved_declaration.expression, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
           if inlined_ok return inlined, true;
         }
+
       }
 
       if ident.name == "input" || ident.name == "o" || ident.name == "un" {
@@ -1122,6 +1123,12 @@ ir_lower_expr :: (node: *Code_Node,
       out.left = cond;
       out.right = then_expr;
       array_add(*out.args, else_expr);
+      result_type := expected_type;
+      if !result_type result_type = node.type;
+      if result_type {
+        result_type_name, result_type_ok := ir_type_to_slang_name(result_type);
+        if result_type_ok out.text = result_type_name;
+      }
       return out, true;
     }
 

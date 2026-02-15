@@ -1083,6 +1083,12 @@ find_buffer_field :: (buffer: *IR_SPV_Gen_Buffer, name: string) -> *IR_SPV_Gen_B
   return find_by_name(*buffer.fields, name);
 }
 
+make_unique_local_struct_name :: (s: *IR_SPV_Gen_State, requested: string) -> string {
+  assert(s != null);
+  if !find_local_struct(s, requested) return requested;
+  return tprint("%__%", requested, new_id(s));
+}
+
 alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) -> (local_struct: *IR_SPV_Gen_Local_Struct, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
@@ -1104,7 +1110,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
         diag.message = tprint("SPIR-V backend: local struct '%' field '%' has unsupported type '%'.", type_name, it.name, it.type_name);
         return null, false, diag;
       }
-      nested_name := tprint("%.%", name, it.name);
+      nested_name := make_unique_local_struct_name(s, tprint("%.%", name, it.name));
       _, nested_ok, nested_diag := alloc_local_struct(s, nested_name, it.type_name);
       if !nested_ok return null, false, nested_diag;
       array_add(*local_struct.fields, .{
@@ -1188,8 +1194,24 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
 
   if expr.kind == .IDENT {
     src := find_local_struct(s, expr.text);
+    if src == dst {
+      i := s.local_structs.count - 1;
+      while i >= 0 {
+        candidate := s.local_structs.data + i;
+        if candidate != dst && candidate.name == expr.text {
+          src = candidate;
+          break;
+        }
+        if i == 0 break;
+        i -= 1;
+      }
+    }
     if !src {
       diag.message = tprint("SPIR-V backend: struct init source '%' is not a local struct.", expr.text);
+      return false, diag;
+    }
+    if src == dst {
+      diag.message = tprint("SPIR-V backend: struct init source '%' resolves to destination itself.", expr.text);
       return false, diag;
     }
     if src.type_name != dst.type_name {
@@ -1529,6 +1551,15 @@ coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Typ
       return out, true, diag;
     }
     if is_integral_kind(src_type) {
+      src_bytes := byte_size_of_kind(src_type);
+      dst_bytes := byte_size_of_kind(dst_type);
+      if src_bytes != 0 && src_bytes == dst_bytes {
+        add_op(s, tprint("         % = OpBitcast % %",
+                         id_text(out),
+                         id_text(dst_type_id),
+                         id_text(value_id)));
+        return out, true, diag;
+      }
       if is_signed_integral_kind(dst_type) {
         add_op(s, tprint("         % = OpSConvert % %",
                          id_text(out),
@@ -2203,6 +2234,31 @@ eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, c
   return false, diag;
 }
 
+ensure_select_result_storage :: (s: *IR_SPV_Gen_State, result_type: IR_SPV_Gen_Type, result_ptr_id: *s64, result_ptr_type_id: *s64, result_type_id: *s64) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  assert(result_ptr_id != null);
+  assert(result_ptr_type_id != null);
+  assert(result_type_id != null);
+  diag: IR_Diagnostic;
+  if result_ptr_id.* != 0 return true, diag;
+
+  result_type_id.* = type_id_from_kind(s, result_type);
+  if result_type_id.* == 0 {
+    diag.message = tprint("SPIR-V backend: select expression type % is unsupported.", result_type);
+    return false, diag;
+  }
+  result_ptr_type_id.* = func_ptr_type_id_from_kind(s, result_type);
+  if result_ptr_type_id.* == 0 {
+    diag.message = tprint("SPIR-V backend: select expression pointer type % is unsupported.", result_type);
+    return false, diag;
+  }
+  result_ptr_id.* = new_id(s);
+  add_local_decl(s, tprint("         % = OpVariable % Function",
+                           id_text(result_ptr_id.*),
+                           id_text(result_ptr_type_id.*)));
+  return true, diag;
+}
+
 // -----------------------------------------------------------------------------
 // Expression Emission
 // -----------------------------------------------------------------------------
@@ -2520,10 +2576,57 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
     case .BINARY; {
       left_id, left_type, left_ok, left_diag := emit_expr(s, expr.left);
       if !left_ok return 0, .UNKNOWN, false, left_diag;
+
+      op := expr.text;
+      if op == "&&" || op == "||" {
+        left_bool, left_bool_ok, left_bool_diag := coerce_to_kind(s, left_id, left_type, .BOOL);
+        if !left_bool_ok return 0, .UNKNOWN, false, left_bool_diag;
+
+        result_ptr_id: s64 = 0;
+        result_ptr_type_id: s64 = 0;
+        result_type_id: s64 = 0;
+        storage_ok, storage_diag := ensure_select_result_storage(s, .BOOL, *result_ptr_id, *result_ptr_type_id, *result_type_id);
+        if !storage_ok return 0, .UNKNOWN, false, storage_diag;
+
+        rhs_label := new_id(s);
+        short_label := new_id(s);
+        merge_label := new_id(s);
+        add_op(s, tprint("               OpSelectionMerge % None", id_text(merge_label)));
+        if op == "&&" {
+          add_op(s, tprint("               OpBranchConditional % % %",
+                           id_text(left_bool),
+                           id_text(rhs_label),
+                           id_text(short_label)));
+        } else {
+          add_op(s, tprint("               OpBranchConditional % % %",
+                           id_text(left_bool),
+                           id_text(short_label),
+                           id_text(rhs_label)));
+        }
+
+        add_op(s, tprint("         % = OpLabel", id_text(short_label)));
+        short_value := s.id_bool_false;
+        if op == "||" short_value = s.id_bool_true;
+        emit_store(s, result_ptr_id, short_value, .BOOL);
+        add_op(s, tprint("               OpBranch %", id_text(merge_label)));
+
+        add_op(s, tprint("         % = OpLabel", id_text(rhs_label)));
+        right_id, right_type, right_ok, right_diag := emit_expr(s, expr.right);
+        if !right_ok return 0, .UNKNOWN, false, right_diag;
+        right_bool, right_bool_ok, right_bool_diag := coerce_to_kind(s, right_id, right_type, .BOOL);
+        if !right_bool_ok return 0, .UNKNOWN, false, right_bool_diag;
+        emit_store(s, result_ptr_id, right_bool, .BOOL);
+        add_op(s, tprint("               OpBranch %", id_text(merge_label)));
+
+        add_op(s, tprint("         % = OpLabel", id_text(merge_label)));
+        out := new_id(s);
+        emit_load(s, out, result_type_id, result_ptr_id, .BOOL);
+        return out, .BOOL, true, diag;
+      }
+
       right_id, right_type, right_ok, right_diag := emit_expr(s, expr.right);
       if !right_ok return 0, .UNKNOWN, false, right_diag;
 
-      op := expr.text;
       if is_integral_kind(left_type) && is_integral_kind(right_type) {
         promoted := promote_integral_kind(left_type, right_type);
         left_id, left_ok, left_diag = coerce_to_kind(s, left_id, left_type, promoted);
@@ -2534,22 +2637,8 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         return result_id, result_type, result_ok, result_diag;
       }
       if left_type == .BOOL && right_type == .BOOL {
-        result_id := new_id(s);
-        if op == "&&" {
-          add_op(s, tprint("         % = OpLogicalAnd % % %",
-                           id_text(result_id),
-                           id_text(s.id_bool),
-                           id_text(left_id),
-                           id_text(right_id)));
-          return result_id, .BOOL, true, diag;
-        }
-        if op == "||" {
-          add_op(s, tprint("         % = OpLogicalOr % % %",
-                           id_text(result_id),
-                           id_text(s.id_bool),
-                           id_text(left_id),
-                           id_text(right_id)));
-          return result_id, .BOOL, true, diag;
+        if op == "&&" || op == "||" {
+          return_err("SPIR-V backend: internal error lowering short-circuit operator '%'.", op);
         }
       }
       if left_type == .FLOAT2 && right_type == .FLOAT2 {
@@ -2667,38 +2756,44 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .BOOL);
       if !cond_ok return 0, .UNKNOWN, false, cond_diag;
 
+      result_type := expr_type_from_decl(expr.text);
+      result_ptr_id: s64 = 0;
+      result_ptr_type_id: s64 = 0;
+      result_type_id: s64 = 0;
+
+      then_label := new_id(s);
+      else_label := new_id(s);
+      merge_label := new_id(s);
+      add_op(s, tprint("               OpSelectionMerge % None", id_text(merge_label)));
+      add_op(s, tprint("               OpBranchConditional % % %",
+                       id_text(cond_id),
+                       id_text(then_label),
+                       id_text(else_label)));
+
+      add_op(s, tprint("         % = OpLabel", id_text(then_label)));
       then_id, then_type, then_ok, then_diag := emit_expr(s, expr.right);
       if !then_ok return 0, .UNKNOWN, false, then_diag;
+      if result_type == .UNKNOWN result_type = then_type;
+      storage_ok, storage_diag := ensure_select_result_storage(s, result_type, *result_ptr_id, *result_ptr_type_id, *result_type_id);
+      if !storage_ok return 0, .UNKNOWN, false, storage_diag;
+      then_id, then_type, then_ok, then_diag = coerce_to_exact_kind(s, then_id, then_type, result_type);
+      if !then_ok return 0, .UNKNOWN, false, then_diag;
+      emit_store(s, result_ptr_id, then_id, result_type);
+      add_op(s, tprint("               OpBranch %", id_text(merge_label)));
+
+      add_op(s, tprint("         % = OpLabel", id_text(else_label)));
       else_id, else_type, else_ok, else_diag := emit_expr(s, expr.args[0]);
       if !else_ok return 0, .UNKNOWN, false, else_diag;
-
-      result_type := then_type;
-      if then_type != else_type {
-        else_coerced, else_coerced_type, else_coerced_ok, _ := coerce_to_exact_kind(s, else_id, else_type, then_type);
-        if else_coerced_ok {
-          else_id = else_coerced;
-          else_type = else_coerced_type;
-          result_type = then_type;
-        } else {
-          then_coerced, then_coerced_type, then_coerced_ok, then_coerced_diag := coerce_to_exact_kind(s, then_id, then_type, else_type);
-          if !then_coerced_ok return 0, .UNKNOWN, false, then_coerced_diag;
-          then_id = then_coerced;
-          then_type = then_coerced_type;
-          result_type = else_type;
-        }
+      else_id, else_type, else_ok, else_diag = coerce_to_exact_kind(s, else_id, else_type, result_type);
+      if !else_ok {
+        return_err("SPIR-V backend: select branches must resolve to a common type (then=% else=% target=%).", then_type, else_type, result_type);
       }
+      emit_store(s, result_ptr_id, else_id, result_type);
+      add_op(s, tprint("               OpBranch %", id_text(merge_label)));
 
-      type_id := type_id_from_kind(s, result_type);
-      if type_id == 0 {
-        return_err("SPIR-V backend: select expression type % is unsupported.", result_type);
-      }
+      add_op(s, tprint("         % = OpLabel", id_text(merge_label)));
       out := new_id(s);
-      add_op(s, tprint("         % = OpSelect % % % %",
-                       id_text(out),
-                       id_text(type_id),
-                       id_text(cond_id),
-                       id_text(then_id),
-                       id_text(else_id)));
+      emit_load(s, out, result_type_id, result_ptr_id, result_type);
       return out, result_type, true, diag;
     }
 
