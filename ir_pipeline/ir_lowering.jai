@@ -120,6 +120,7 @@ IR_Using_Source :: struct {
 
 IR_Decl_Alias :: struct {
   declaration: *Code_Declaration;
+  member_name: string;
   replacement_text: string;
 }
 
@@ -622,7 +623,15 @@ ir_collect_parameter_using_sources :: (header: *Code_Procedure_Header, out_sourc
 ir_lookup_decl_alias :: (active_aliases: [] IR_Decl_Alias, declaration: *Code_Declaration) -> (string, bool) {
   if !declaration return "", false;
   for active_aliases {
-    if it.declaration == declaration return it.replacement_text, true;
+    if it.declaration == declaration && it.member_name.count == 0 return it.replacement_text, true;
+  }
+  return "", false;
+}
+
+ir_lookup_decl_member_alias :: (active_aliases: [] IR_Decl_Alias, declaration: *Code_Declaration, member_name: string) -> (string, bool) {
+  if !declaration || member_name.count == 0 return "", false;
+  for active_aliases {
+    if it.declaration == declaration && it.member_name == member_name return it.replacement_text, true;
   }
   return "", false;
 }
@@ -1025,6 +1034,21 @@ ir_lower_expr :: (node: *Code_Node,
 
     case .BINARY_OPERATOR; {
       bn := cast(*Code_Binary_Operator) node;
+      if bn.operator_type == cast(Operator_Type) #char "." &&
+         bn.left && bn.left.kind == .IDENT &&
+         bn.right && bn.right.kind == .IDENT {
+        left_ident := cast(*Code_Ident) bn.left;
+        right_ident := cast(*Code_Ident) bn.right;
+        if left_ident.resolved_declaration {
+          member_alias, member_aliased := ir_lookup_decl_member_alias(active_aliases, left_ident.resolved_declaration, right_ident.name);
+          if member_aliased {
+            out := ir_expr_new(.IDENT);
+            out.text = member_alias;
+            return out, true;
+          }
+        }
+      }
+
       left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings, active_aliases, state);
       if !left_ok return null, false;
 

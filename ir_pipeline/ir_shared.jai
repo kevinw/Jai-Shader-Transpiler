@@ -230,9 +230,90 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       }
       out_stmt.decl_type = decl_ir_type;
       out_stmt.decl_name = decl.name;
+      should_alias_pointer_local := false;
+      should_alias_struct_resource_local := false;
+      if decl_type && decl.expression {
+        if decl_type.type == .POINTER {
+          should_alias_pointer_local = true;
+        } else if decl_type.type == .STRUCT && ir_struct_has_pointer_members(decl_type) {
+          should_alias_struct_resource_local = true;
+        }
+      }
       if decl.expression {
         init_expr, init_ok := ir_lower_expr(decl.expression, input_fields, output_fields, active_usings.*, active_aliases.*, state, decl_type);
         if !init_ok return false;
+
+        if should_alias_struct_resource_local {
+          if decl.expression.kind != .LITERAL {
+            ir_set_diagnostic(state, tprint("IR lowering: resource-backed local struct '%' requires a struct literal initializer", decl.name), stmt);
+            return false;
+          }
+          lit := cast(*Code_Literal) decl.expression;
+          if lit.value_type != .STRUCT {
+            ir_set_diagnostic(state, tprint("IR lowering: resource-backed local struct '%' requires a struct literal initializer", decl.name), stmt);
+            return false;
+          }
+
+          positional_index: s64 = 0;
+          for lit.struct_literal_info.arguments {
+            source_arg := it;
+            field_name := "";
+            value_node := source_arg;
+
+            if source_arg && source_arg.kind == .BINARY_OPERATOR {
+              named := cast(*Code_Binary_Operator) source_arg;
+              if named.operator_type == cast(Operator_Type) #char "=" &&
+                 named.left && named.left.kind == .IDENT {
+                field_name = (cast(*Code_Ident) named.left).name;
+                value_node = named.right;
+              }
+            }
+
+            if field_name.count == 0 {
+              if decl_type.type != .STRUCT {
+                ir_set_diagnostic(state, tprint("IR lowering: malformed positional struct initializer for '%'", decl.name), stmt);
+                return false;
+              }
+              decl_struct := cast(*Type_Info_Struct) decl_type;
+              if positional_index >= decl_struct.members.count {
+                ir_set_diagnostic(state, tprint("IR lowering: malformed positional struct initializer for '%'", decl.name), stmt);
+                return false;
+              }
+              field_name = decl_struct.members[positional_index].name;
+              positional_index += 1;
+            }
+
+            expected_rhs_type := ir_shared_find_struct_member_type_by_name(decl_type, field_name);
+            lowered_value, lowered_ok := ir_lower_expr(value_node, input_fields, output_fields, active_usings.*, active_aliases.*, state, expected_rhs_type);
+            if !lowered_ok return false;
+
+            replacement_text, replacement_ok := ir_expr_to_slang_from_ir(lowered_value);
+            if !replacement_ok || replacement_text.count == 0 {
+              ir_set_diagnostic(state, tprint("IR lowering: failed to lower struct field alias '%.%'", decl.name, field_name), stmt);
+              return false;
+            }
+
+            array_add(active_aliases, .{
+              declaration = decl,
+              member_name = field_name,
+              replacement_text = replacement_text,
+            });
+          }
+          return true;
+        }
+
+        if should_alias_pointer_local {
+          replacement_text, replacement_ok := ir_expr_to_slang_from_ir(init_expr);
+          if !replacement_ok || replacement_text.count == 0 {
+            ir_set_diagnostic(state, tprint("IR lowering: failed to lower alias initializer for '%'", decl.name), stmt);
+            return false;
+          }
+          array_add(active_aliases, .{
+            declaration = decl,
+            replacement_text = replacement_text,
+          });
+          return true;
+        }
         out_stmt.decl_init = init_expr;
       }
       array_add(*out_block.statements, out_stmt);

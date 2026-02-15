@@ -123,6 +123,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"edge_case_105_same_width_signed_casts", .Bare},
   {"edge_case_106_nested_struct_helper_arg_copy", .Bare},
   {"edge_case_107_scalar_helper_if_return_chain", .Bare},
+  {"edge_case_108_pointer_alias_from_member_expr", .Bare},
   {"edge_case_26_vector_negate", .Bare},
   {"edge_case_27_helper_nested_call", .Bare},
   {"edge_case_28_struct_constructor_from_member_expr", .Boids},
@@ -1787,6 +1788,19 @@ edge_case_107_scalar_helper_if_return_chain :: (using in: Compute_Semantics_In, 
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   values[idx] = edge_case_107_scalar_helper_if_return_chain_inner(values[idx] + idx);
+} @compute_shader
+
+Edge_Case_108_Params :: struct {
+  values: *u32;
+}
+
+edge_case_108_pointer_alias_from_member_expr :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  params := Edge_Case_108_Params.{values = values};
+  alias := params.values;
+  alias[idx] = alias[idx] + idx + 9;
+  alias[idx] = edge_case_75_alias_read(alias, idx) * 3 + 2;
 } @compute_shader
 
 // Gap probes (not in ALL_TEST_FUNCTIONS yet):
