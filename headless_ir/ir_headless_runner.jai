@@ -109,6 +109,8 @@ IR_Headless_Compute_Boid_State :: struct {
   vel: Vector2;
 }
 
+IR_Headless_Vector_Field_Count :: 65536;
+
 IR_Headless_Compute_Sim_Params :: struct {
   src: *IR_Headless_Compute_Boid_State;
   dst: *IR_Headless_Compute_Boid_State;
@@ -204,6 +206,14 @@ ir_headless_compute_member_subscript_struct_init_main :: (using input: IR_Headle
     sim.dst[thread_id.x].pos = b.pos;
     sim.dst[thread_id.x].vel = b.vel;
   }
+} @compute_shader
+
+ir_headless_compute_fixed_array_vector2_main :: (using input: IR_Headless_Compute_In, state: *[IR_Headless_Vector_Field_Count] Vector2) {
+  if thread_id.x < 1 {
+    probe := thread_id.x + 1;
+    _ = probe;
+  }
+  _ = state;
 } @compute_shader
 
 // Intentionally declared after the entry points above to validate order-independence.
@@ -334,6 +344,14 @@ ir_headless_fragment_boost :: (x: float) -> float {
   if !write_entire_file(compute_member_subscript_struct_init_path, metal_compute_member_subscript_struct_init) fail("Could not write %", compute_member_subscript_struct_init_path);
   #if OS == .MACOS {
     compile_metal(compute_member_subscript_struct_init_path);
+  }
+
+  metal_compute_fixed_array_vector2 := get_transpiled(.METAL, ir_headless_compute_fixed_array_vector2_main);
+  check_contains(metal_compute_fixed_array_vector2, "kernel", "compute fixed-array vector2 metal output");
+  compute_fixed_array_vector2_path := tprint("%/ir_compute_fixed_array_vector2.metal", HEADLESS_IR_DIR);
+  if !write_entire_file(compute_fixed_array_vector2_path, metal_compute_fixed_array_vector2) fail("Could not write %", compute_fixed_array_vector2_path);
+  #if OS == .MACOS {
+    compile_metal(compute_fixed_array_vector2_path);
   }
 
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);

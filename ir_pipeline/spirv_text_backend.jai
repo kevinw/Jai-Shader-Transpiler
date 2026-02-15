@@ -941,6 +941,8 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       if parsed_array_count > 0xFFFF_FFFF {
         return_err("SPIR-V generic backend: buffer '%' fixed array count % exceeds u32.", it.name, parsed_array_count);
       }
+      parsed_elem_type_name, _, parsed_elem_array := parse_fixed_array_type_name(element_type_name);
+      if parsed_elem_array element_type_name = parsed_elem_type_name;
       buffer_info.fixed_array_count = parsed_array_count;
       buffer_info.fixed_array_count_const_id = get_u32_const(s, cast(u32) parsed_array_count);
     }
@@ -1070,6 +1072,28 @@ emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, kind: IR_SPV_Ge
   suffix := "";
   if needs_physical_align suffix = physical_aligned_suffix(s, kind);
   add_op(s, tprint("               OpStore % %%", id_text(ptr_id), id_text(value_id), suffix));
+}
+
+spv_line_is_terminator :: (line: string) -> bool {
+  trimmed := compact_text(line);
+  if begins_with(trimmed, "OpReturn") return true;
+  if begins_with(trimmed, "OpKill") return true;
+  if begins_with(trimmed, "OpUnreachable") return true;
+  if begins_with(trimmed, "OpBranchConditional") return true;
+  if begins_with(trimmed, "OpBranch") return true;
+  if begins_with(trimmed, "OpSwitch") return true;
+  return false;
+}
+
+spv_last_op_is_terminator :: (op_lines: [] string) -> bool {
+  idx := op_lines.count;
+  while idx > 0 {
+    idx -= 1;
+    line := compact_text(op_lines[idx]);
+    if line.count == 0 continue;
+    return spv_line_is_terminator(line);
+  }
+  return false;
 }
 
 align_up :: (value: s64, alignment: s64) -> s64 {
@@ -4551,6 +4575,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   append(*sb, tprint("      % = OpLabel\n", id_text(entry_label)));
   for state.local_var_lines append(*sb, it, "\n");
   for state.op_lines append(*sb, it, "\n");
+  if !spv_last_op_is_terminator(state.op_lines) append(*sb, "               OpReturn\n");
   append(*sb, "               OpFunctionEnd\n");
   return builder_to_string(*sb), true, diag;
 }
@@ -4926,6 +4951,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   append(*sb, tprint("      % = OpLabel\n", id_text(entry_label)));
   for state.local_var_lines append(*sb, it, "\n");
   for state.op_lines append(*sb, it, "\n");
+  if !spv_last_op_is_terminator(state.op_lines) append(*sb, "               OpReturn\n");
   append(*sb, "               OpFunctionEnd\n");
   return builder_to_string(*sb), true, diag;
 }
@@ -5008,6 +5034,8 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   }
 
   spv_append_common_type_decls(*sb, *state, "StorageBuffer");
+  // OpTypeArray length operands must be declared constants beforehand.
+  spv_append_numeric_constants(*sb, *state);
   append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_global_invocation_id), id_text(state.id_ptr_input_v3uint)));
   for state.buffers {
     buffer := it;
@@ -5028,8 +5056,6 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
     append(*sb, tprint("% = OpTypePointer StorageBuffer %\n", id_text(buffer.ptr_storage_element_type_id), id_text(buffer.element_type_id)));
   }
   for state.buffers append(*sb, tprint("% = OpVariable % StorageBuffer\n", id_text(it.var_id), id_text(it.ptr_wrapper_type_id)));
-  // Constants are emitted after types and before function body.
-  spv_append_numeric_constants(*sb, *state);
   for state.local_array_types {
     append(*sb, tprint("% = OpTypeArray % %\n",
                        id_text(it.array_type_id),
@@ -5047,7 +5073,8 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   append(*sb, tprint("          % = OpLabel\n", id_text(entry_label)));
   for state.local_var_lines append(*sb, it, "\n");
   for state.op_lines append(*sb, it, "\n");
-  if !body_terminated append(*sb, "               OpReturn\n");
+  _ = body_terminated;
+  if !spv_last_op_is_terminator(state.op_lines) append(*sb, "               OpReturn\n");
   append(*sb, "               OpFunctionEnd\n");
 
   out := builder_to_string(*sb);
