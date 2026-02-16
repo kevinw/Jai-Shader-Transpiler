@@ -37,8 +37,12 @@ set_build_timings_enabled :: (enabled: bool) {
 timed :: (seconds_value: *float64, code: Code) #expand {
   start: Apollo_Time;
   if build_timings_enabled start = current_time_monotonic();
+  
   #insert,scope(code) code;
-  if build_timings_enabled seconds_value.* += to_float64_seconds(current_time_monotonic() - start);
+  
+  if build_timings_enabled && seconds_value != null {
+    seconds_value.* += to_float64_seconds(current_time_monotonic() - start);
+  }
 }
 
 log_timings :: (using totals: Build_Timing_Totals) {

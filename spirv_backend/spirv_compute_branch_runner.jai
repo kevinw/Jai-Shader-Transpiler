@@ -55,7 +55,7 @@ check_contains :: (source: string, pattern: string, where: string) {
 }
 
 check_spvasm_is_generic :: (shader_name: string) {
-  spvasm_path := tprint(".build/ir_slang/%_comp.spvasm", shader_name);
+  spvasm_path := tprint(".build/ir_intermediate/%_comp.spvasm", shader_name);
   source, ok := read_entire_file(spvasm_path);
   if !ok fail("Could not read generated SPIR-V text at %", spvasm_path);
   check_contains(source, "Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1", spvasm_path);

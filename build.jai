@@ -39,8 +39,10 @@ time_scope :: (enabled: bool, label: string) #expand {
   {
     start_time := current_time_monotonic();
     defer {
-      elapsed_time := to_float64_seconds(current_time_monotonic() - start_time);
-      log("All examples built in %s", elapsed_time);
+      if timings {
+        elapsed_time := to_float64_seconds(current_time_monotonic() - start_time);
+        log("All examples built in %s", elapsed_time);
+      }
     }
     
     build("example/cpu_example.jai", "cpu_example", verbose_build_progress, timings);
@@ -68,16 +70,21 @@ time_scope :: (enabled: bool, label: string) #expand {
   if run_tests {
     TEST_RUNNER :: "test_runner.jai";
     log("Running %...", TEST_RUNNER);
-    targs: [..]string;
-    array_add(*targs, "jai", TEST_RUNNER, "+Autorun");
-    if use_slang_backend array_add(*targs, "-slang_backend");
-    if timings array_add(*targs, "-timings");
+    {
+      time_scope(timings, "Compile test_runner.jai");
+      build(TEST_RUNNER, "test_runner", verbose_build_progress, timings=false);
+    }
+
+    run_args: [..] string;
+    array_add(*run_args, "./test_runner");
     result: Process_Result;
     output, error: string;
     timeout_reached: bool;
+    if use_slang_backend array_add(*run_args, "-slang_backend");
+    if timings array_add(*run_args, "-timings");
     {
       time_scope(timings, "Run test_runner.jai");
-      result, output, error, timeout_reached = run_command(..targs);
+      result, output, error, timeout_reached = run_command(..run_args);
     }
     if timeout_reached {
       compiler_report(tprint("% timed out.", TEST_RUNNER));
@@ -95,15 +102,14 @@ build :: (build_file: string, output_exe_name: string, verbose_build_progress: b
   set_build_options_dc(.{do_output=false, write_added_strings=false});
 
   command_line_opts := get_build_options();
-  text_output_flags := command_line_opts.text_output_flags;
 
   w := compiler_create_workspace(output_exe_name);
 
   options := get_build_options(w);
   options.output_executable_name = output_exe_name;
-  options.text_output_flags = text_output_flags;
+  options.text_output_flags = 0; // command_line_opts.text_output_flags;
   set_optimization(*options, .VERY_DEBUG);
-  if text_output_flags == 0 log("Building '%'...", output_exe_name);
+  if options.text_output_flags == 0 log("Building '%'...", output_exe_name);
   step_start_time := current_time_monotonic();
   if verbose_build_progress log("[build] start % (%).", output_exe_name, build_file);
   defer {

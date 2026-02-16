@@ -1,8 +1,9 @@
 #import "Basic";
-#import "String";
+String :: #import "String";
 #import "File";
 #import "File_Utilities";
 Process :: #import "Process";
+using,only(getenv) POSIX :: #import "POSIX";
 
 DEBUG_OUTDIR :: ".generated_shaders";
 TIMINGS_ENABLED := false;
@@ -31,7 +32,7 @@ run_all_tests :: () {
     {
       time_scope(TIMINGS_ENABLED, "Cleanup generated outputs");
       run_command_checked("Clean legacy GLSL SPIR-V outputs", .["rm", "-f", "frag.spv", "vert.spv", "comp.spv"]);
-      run_command_checked("Clean IR Slang output dirs", .["rm", "-rf", ".build/ir_slang", "headless_ir/.build/ir_slang"]);
+      run_command_checked("Clean IR intermediate output dirs", .["rm", "-rf", ".build/ir_intermediate", "headless_ir/.build/ir_intermediate"]);
     }
 
     {
@@ -103,10 +104,6 @@ run_all_tests :: () {
       time_scope(TIMINGS_ENABLED, "Compile generated GLSL shaders");
       compile_generated_glsl_shaders();
     }
-    {
-      time_scope(TIMINGS_ENABLED, "Syntax-check generated Metal (post-check)");
-      syntax_check_generated_metal_shaders();
-    }
   
     // run example programs with the generated shaders to check they work at runtime (not just compile time).
     {
@@ -146,11 +143,63 @@ run_command_checked :: (description: string, args: [] string, timeout_ms := -1) 
     if result.type != .EXITED || result.exit_code != 0  fail("% failed with exit code %. Command: %", description, result.exit_code, command);
 }
 
+default_parallel_jobs :: (file_count: s64) -> s64 {
+    jobs := 4;
+    if file_count <= 1 jobs = 1;
+    if jobs > file_count jobs = file_count;
+    return max(1, jobs);
+}
+
+env_var_is_truthy :: (name: string) -> bool {
+    value_c := getenv(temp_c_string(name));
+    if !value_c return false;
+    value := to_string(value_c, c_style_strlen(value_c));
+    if value.count == 0 return false;
+
+    parsed, ok, _ := String.string_to_int(value);
+    if ok return cast(s64) parsed != 0;
+
+    if value == "false" return false;
+    if value == "FALSE" return false;
+    if value == "off" return false;
+    if value == "OFF" return false;
+    if value == "no" return false;
+    if value == "NO" return false;
+    return true;
+}
+
+run_parallel_script_over_files :: (description: string, files: [] string, jobs: s64, per_file_script: string) {
+    if files.count == 0 return;
+    if env_var_is_truthy("JST_SERIAL_TOOL_CHECKS") jobs = 1;
+    jobs = max(1, jobs);
+    if jobs > files.count jobs = files.count;
+
+    if jobs == 1 {
+        for files {
+            run_command_checked(tprint("% %", description, it),
+                .["bash", "-lc", per_file_script, "--", it]);
+        }
+        return;
+    }
+
+    xargs_script :: #string END
+jobs="$1"
+script="$2"
+shift 2
+printf '%s\0' "$@" | xargs -0 -P "$jobs" -I{} bash -lc "$script" -- "{}"
+END;
+
+    args: [..] string;
+    array_add(*args, "bash", "-lc", xargs_script, "--", tprint("%", jobs), per_file_script);
+    for files array_add(*args, it);
+    run_command_checked(tprint("% (% files, jobs=%)", description, files.count, jobs), args);
+}
+
 check_file_contains :: (name: string, pattern: string) {
     data, ok := read_entire_file(name);
     if !ok  fail("Could not read '%'.", name);
 
-    found, _ := contains(data, pattern);
+    found, _ := String.contains(data, pattern);
     if !found  fail("Expected pattern not found in %: %", name, pattern);
 }
 
@@ -158,7 +207,7 @@ check_file_not_contains :: (name: string, pattern: string) {
     data, ok := read_entire_file(name);
     if !ok  fail("Could not read '%'.", name);
 
-    found, _ := contains(data, pattern);
+    found, _ := String.contains(data, pattern);
     if found  fail("Unexpected pattern found in %: %", name, pattern);
 }
 
@@ -168,7 +217,7 @@ check_file_contains_any :: (name: string, patterns: [] string) {
     if !ok  fail("Could not read '%'.", name);
 
     for patterns {
-        found, _ := contains(data, it);
+        found, _ := String.contains(data, it);
         if found return;
     }
 
@@ -187,9 +236,9 @@ collect_generated_files :: (extension: string) -> [..] string {
     args.files = *files;
 
     visitor :: (info: *File_Visit_Info, args: *Args) {
-        if !ends_with(info.short_name, args.extension) return;
-        found_internal_single, _ := contains(info.short_name, "transpiled_single_");
-        found_internal_pair, _ := contains(info.short_name, "transpiled_pair_");
+        if !String.ends_with(info.short_name, args.extension) return;
+        found_internal_single, _ := String.contains(info.short_name, "transpiled_single_");
+        found_internal_pair, _ := String.contains(info.short_name, "transpiled_pair_");
         found_internal := found_internal_single || found_internal_pair;
         if found_internal return;
         array_add(args.files, copy_string(tprint("%/%", DEBUG_OUTDIR, info.short_name)));
@@ -217,7 +266,7 @@ collect_files_with_extension_in_dir :: (directory: string, extension: string) ->
     args.files = *files;
 
     visitor :: (info: *File_Visit_Info, args: *Args) {
-        if !ends_with(info.short_name, args.extension) return;
+        if !String.ends_with(info.short_name, args.extension) return;
         array_add(args.files, copy_string(tprint("%/%", args.directory, info.short_name)));
     }
 
@@ -229,11 +278,11 @@ collect_files_with_extension_in_dir :: (directory: string, extension: string) ->
 }
 
 glsl_stage_from_filename :: (name: string) -> string {
-    found, _ := contains(name, "vertex");
+    found, _ := String.contains(name, "vertex");
     if found return "vert";
-    found, _ = contains(name, "fragment");
+    found, _ = String.contains(name, "fragment");
     if found return "frag";
-    found, _ = contains(name, "compute");
+    found, _ = String.contains(name, "compute");
     if found return "comp";
 
     fail("Unable to infer GLSL stage from filename: %", name);
@@ -245,28 +294,29 @@ compile_generated_glsl_shaders :: () {
     if glsl_files.count == 0 {
         fail("No generated GLSL shader files found (expected output_*.glsl).");
     }
-
-    for glsl_files {
-        stage := glsl_stage_from_filename(it);
-        is_vulkan_glsl := false;
-        found, _ := contains(it, "_vk.glsl");
-        if found is_vulkan_glsl = true;
-        stem := path_filename(it);
-        if ends_with(stem, ".glsl") {
-            stem.count -= ".glsl".count;
-        }
-        spv_path := tprint("%/%.spv", DEBUG_OUTDIR, stem);
-
-        if is_vulkan_glsl {
-            run_command_checked(tprint("Compile Vulkan GLSL %", it),
-                .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", stage, it, "-o", spv_path]);
-        } else {
-            run_command_checked(tprint("Compile GLSL %", it),
-                .["glslangValidator", "-S", stage, it, "-o", spv_path]);
-        }
-        assert(spv_path[0] != #char "/");
-        run_command_checked(tprint("Delete GLSL SPIR-V output %", spv_path), .["rm", "-f", spv_path]);
-    }
+    jobs := default_parallel_jobs(glsl_files.count);
+    glsl_compile_script :: #string END
+file="$1"
+stage=""
+case "$file" in
+  *vertex*) stage="vert" ;;
+  *fragment*) stage="frag" ;;
+  *compute*) stage="comp" ;;
+  *)
+    echo "Unable to infer GLSL stage from filename: $file" >&2
+    exit 2
+    ;;
+esac
+stem="$(basename "$file" .glsl)"
+spv_path=".generated_shaders/${stem}.spv"
+if [[ "$file" == *_vk.glsl ]]; then
+  glslangValidator -V --target-env vulkan1.2 -S "$stage" "$file" -o "$spv_path"
+else
+  glslangValidator -S "$stage" "$file" -o "$spv_path"
+fi
+rm -f "$spv_path"
+END;
+    run_parallel_script_over_files("Compile generated GLSL shaders", glsl_files, jobs, glsl_compile_script);
 }
 
 compile_generated_metal_shaders :: () {
@@ -285,18 +335,16 @@ compile_generated_metal_shaders :: () {
     }
 
     #if OS == .MACOS {
-      for metal_files {
-          stem := path_filename(it);
-          stem.count -= ".metal".count;
-  
-          air := tprint(".build/tests/%.air", stem);
-          metallib := tprint(".build/tests/%.metallib", stem);
-  
-          run_command_checked(tprint("Compile Metal %", it),
-              .["xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-c", it, "-o", air]);
-          run_command_checked(tprint("Link Metal library %", it),
-              .["xcrun", "-sdk", "macosx", "metallib", air, "-o", metallib]);
-      }
+      jobs := default_parallel_jobs(metal_files.count);
+      metal_compile_script :: #string END
+file="$1"
+stem="$(basename "$file" .metal)"
+air=".build/tests/${stem}.air"
+metallib=".build/tests/${stem}.metallib"
+xcrun -sdk macosx metal -std=metal3.0 -c "$file" -o "$air"
+xcrun -sdk macosx metallib "$air" -o "$metallib"
+END;
+      run_parallel_script_over_files("Compile generated Metal shaders", metal_files, jobs, metal_compile_script);
     }
 }
 
@@ -307,21 +355,30 @@ syntax_check_generated_metal_shaders :: () {
     }
 
     #if OS == .MACOS {
-      roots: [2] string = .[".build/ir_slang", "headless_ir/.build/ir_slang"];
-      found_any := false;
+      roots: [2] string = .[".build/ir_intermediate", "headless_ir/.build/ir_intermediate"];
+      all_metal_files: [..] string;
       for roots {
           if !file_exists(it) continue;
           metal_files := collect_files_with_extension_in_dir(it, ".metal");
-          for metal_files {
-              found_any = true;
-              run_command_checked(tprint("Syntax-check generated Metal %", it),
-                  .["xcrun", "-sdk", "macosx", "metal", "-fsyntax-only", "-c", it]);
-          }
+          for metal_files array_add(*all_metal_files, it);
       }
-      if !found_any {
-          fail("No generated Metal files found in .build/ir_slang roots.");
+      if all_metal_files.count == 0 {
+          fail("No generated Metal files found in .build/ir_intermediate roots.");
       }
+
+      syntax_jobs := 4;
+      if all_metal_files.count <= 1 syntax_jobs = 1;
+      syntax_check_generated_metal_shaders_parallel(all_metal_files, syntax_jobs);
     }
+}
+
+syntax_check_generated_metal_shaders_parallel :: (metal_files: []string, jobs: s64) {
+    if metal_files.count == 0 return;
+    script :: #string END
+file="$1"
+xcrun -sdk macosx metal -fsyntax-only -c "$file"
+END;
+    run_parallel_script_over_files("Syntax-check generated Metal", metal_files, jobs, script);
 }
 
 main :: () {

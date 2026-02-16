@@ -21,121 +21,121 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"defer_switch_through", .Bare},
   {"matrix_math", .Bare},
   {"intrinsics", .Bare},
-  {"edge_case_10_float4_component_lvalue", .Bare},
-  {"edge_case_07_local_array_literal_read", .Bare},
-  {"edge_case_08_local_array_write_then_read", .Bare},
-  {"edge_case_01_bool_and_or", .Bare},
-  {"edge_case_22_bool_temp_chain", .Bare},
-  {"edge_case_04_switch_sparse", .Bare},
-  {"edge_case_23_nested_switch_in_loop", .Bare},
-  {"edge_case_05_switch_through_chain", .Bare},
-  {"edge_case_06_nested_while_continue_break", .Bare},
-  {"edge_case_14_intrinsic_mod_float", .Bare},
-  {"edge_case_15_intrinsic_smoothstep", .Bare},
-  {"edge_case_16_intrinsic_pow", .Bare},
-  {"edge_case_25_vector_scalar_mix", .Bare},
-  {"edge_case_17_helper_return_member_on_call", .Bare},
-  {"edge_case_18_helper_return_assign_local", .Bare},
-  {"edge_case_29_buffer_struct_copy_temp", .Boids},
-  {"edge_case_02_unary_not_bool", .Bare},
-  {"edge_case_03_unary_bit_not", .Bare},
-  {"edge_case_11_float4_swizzle_xy", .Bare},
-  {"edge_case_12_matrix_ctor_mul", .Bare},
-  {"edge_case_20_using_inside_nested_block", .Bare},
-  {"edge_case_30_while_false_initially", .Bare},
-  {"edge_case_13_matrix_mul_builtin", .Bare},
-  {"edge_case_21_for_descending", .Bare},
-  {"edge_case_24_cast_chain", .Bare},
-  {"edge_case_31_int64_arithmetic", .Bare},
-  {"edge_case_32_subscript_compound_assign", .Bare},
-  {"edge_case_33_member_chain_compound_assign", .Boids},
-  {"edge_case_34_switch_default_only", .Bare},
-  {"edge_case_35_switch_without_default", .Bare},
-  {"edge_case_36_helper_multiple_returns", .Bare},
-  {"edge_case_37_early_return_in_nested_if", .Bare},
-  {"edge_case_38_int64_bitwise_mix", .Bare},
-  {"edge_case_39_local_struct_using_update", .Bare},
-  {"edge_case_40_vector_component_swap", .Boids},
-  {"edge_case_41_matrix_reassign_chain", .Bare},
-  {"edge_case_42_thread_id_y_component", .Bare},
-  {"edge_case_43_global_constants_subscript", .Bare},
-  {"edge_case_44_local_float3_components", .Bare},
-  {"edge_case_45_wrap_helper_constants", .Bare},
-  {"edge_case_46_wrap_xy_cell_index", .Bare},
-  {"edge_case_47_float_constant_division", .Bare},
-  {"edge_case_48_local_array_index_expression", .Bare},
-  {"edge_case_49_for_continue_break_mix", .Bare},
-  {"edge_case_50_switch_through_default", .Bare},
-  {"edge_case_51_bool_int_chain", .Bare},
-  {"edge_case_52_inner_shadow_reassign", .Bare},
-  {"edge_case_53_helper_bool_select", .Bare},
-  {"edge_case_54_struct_constructor_named_out_of_order", .Bare},
-  {"edge_case_55_struct_copy_then_mutate", .Bare},
-  {"edge_case_56_nested_struct_constructor_named", .Bare},
-  {"edge_case_57_nested_loop_continue_break", .Bare},
-  {"edge_case_58_table_local_array_mix", .Table},
-  {"edge_case_59_table_switch_bit_mix", .Table},
-  {"edge_case_60_table_subscript_index_expr", .Table},
-  {"edge_case_61_table_helper_index_chain", .Table},
-  {"edge_case_62_boid_copy_modify_writeback", .Boids},
-  {"edge_case_63_boid_component_compound_chain", .Boids},
-  {"edge_case_64_boid_constructor_from_members", .Boids},
-  {"edge_case_65_boid_struct_temp_roundtrip", .Boids},
-  {"edge_case_66_matrix_vector_reassign", .Bare},
-  {"edge_case_67_vector3_scalar_mix_floor", .Bare},
-  {"edge_case_68_helper_pointer_table_arg", .Table},
-  {"edge_case_69_boid_nested_shorthand_constructor", .Boids},
-  {"edge_case_70_helper_if_prelude", .Bare},
-  {"edge_case_71_helper_nested_if_prelude", .Bare},
-  {"edge_case_72_struct_helper_if_prelude", .Bare},
-  {"edge_case_73_ifx_select_expr", .Bare},
-  {"edge_case_74_ifx_lazy_branch_side_effects", .Bare},
-  {"edge_case_75_pointer_alias_same_buffer", .Bare},
-  {"edge_case_76_vector_component_write_order", .Boids},
-  {"edge_case_77_nested_array_struct_chain", .Boids},
-  {"edge_case_78_using_shadow_member_write", .Bare},
-  {"edge_case_79_signed_unsigned_shift_compare", .Bare},
-  {"edge_case_80_int64_loop_cast_mod", .Bare},
-  {"edge_case_81_matrix_ctor_scalar_chain", .Bare},
-  {"edge_case_82_helper_vector_return_swizzle", .Bare},
-  {"edge_case_83_defer_continue_return_nested", .Bare},
-  {"edge_case_84_switch_dense_sparse_through_default", .Bare},
-  {"edge_case_85_local_fixed_array_complex_index", .Bare},
-  {"edge_case_86_short_circuit_helper_side_effects", .Bare},
-  {"edge_case_87_global_constant_index_fold", .Bare},
-  {"edge_case_88_nested_struct_copy_partial_mutate", .Bare},
-  {"edge_case_89_thread_id_all_components", .Bare},
-  {"edge_case_90_boid_component_write_hazard", .Boids},
-  {"edge_case_91_table_dynamic_index_chain", .Table},
-  {"edge_case_92_helper_matrix_vector_chain", .Bare},
-  {"edge_case_93_for_switch_break_continue_mix", .Bare},
-  {"edge_case_94_struct_of_array_roundtrip", .Bare},
-  {"edge_case_95_table_rotate_sum", .Table},
-  {"edge_case_96_boid_pairwise_mix", .Boids},
-  {"edge_case_97_nested_defer_loop", .Bare},
-  {"edge_case_98_helper_matrix_rebuild", .Bare},
-  {"edge_case_99_subscript_compound_mix", .Table},
-  {"edge_case_100_switch_table_dynamic", .Table},
-  {"edge_case_101_using_helper_nested_struct", .Bare},
-  {"edge_case_102_short_circuit_nested_calls", .Bare},
-  {"edge_case_103_ifx_nested_chain", .Bare},
-  {"edge_case_104_boid_ifx_component_choose", .Boids},
-  {"edge_case_105_same_width_signed_casts", .Bare},
-  {"edge_case_106_nested_struct_helper_arg_copy", .Bare},
-  {"edge_case_107_scalar_helper_if_return_chain", .Bare},
-  {"edge_case_108_pointer_alias_from_member_expr", .Bare},
-  {"edge_case_109_shaderfuncs_normalize_mix_clamp", .Bare},
-  {"edge_case_110_shaderfuncs_step_smoothstep_mod_fract", .Bare},
-  {"edge_case_111_shaderfuncs_degrees_radians_chain", .Bare},
-  {"edge_case_112_tuple_destructure_compound_decl", .Bare},
-  {"edge_case_113_tuple_destructure_helper_calls", .Bare},
-  {"edge_case_114_call_arg_implicit_cast_to_s64", .Bare},
-  {"edge_case_115_shaderfuncs_vector_mix_clamp", .Bare},
-  {"edge_case_116_shaderfuncs_vector_step_smoothstep_mod", .Bare},
-  {"edge_case_26_vector_negate", .Bare},
-  {"edge_case_27_helper_nested_call", .Bare},
-  {"edge_case_28_struct_constructor_from_member_expr", .Boids},
-  {"edge_case_19_nested_local_struct_field_access", .Bare},
+  {"float4_component_lvalue", .Bare},
+  {"local_array_literal_read", .Bare},
+  {"local_array_write_then_read", .Bare},
+  {"bool_and_or", .Bare},
+  {"bool_temp_chain", .Bare},
+  {"switch_sparse", .Bare},
+  {"nested_switch_in_loop", .Bare},
+  {"switch_through_chain", .Bare},
+  {"nested_while_continue_break", .Bare},
+  {"intrinsic_mod_float", .Bare},
+  {"intrinsic_smoothstep", .Bare},
+  {"intrinsic_pow", .Bare},
+  {"vector_scalar_mix", .Bare},
+  {"helper_return_member_on_call", .Bare},
+  {"helper_return_assign_local", .Bare},
+  {"buffer_struct_copy_temp", .Boids},
+  {"unary_not_bool", .Bare},
+  {"unary_bit_not", .Bare},
+  {"float4_swizzle_xy", .Bare},
+  {"matrix_ctor_mul", .Bare},
+  {"using_inside_nested_block", .Bare},
+  {"while_false_initially", .Bare},
+  {"matrix_mul_builtin", .Bare},
+  {"for_descending", .Bare},
+  {"cast_chain", .Bare},
+  {"int64_arithmetic", .Bare},
+  {"subscript_compound_assign", .Bare},
+  {"member_chain_compound_assign", .Boids},
+  {"switch_default_only", .Bare},
+  {"switch_without_default", .Bare},
+  {"helper_multiple_returns", .Bare},
+  {"early_return_in_nested_if", .Bare},
+  {"int64_bitwise_mix", .Bare},
+  {"local_struct_using_update", .Bare},
+  {"vector_component_swap", .Boids},
+  {"matrix_reassign_chain", .Bare},
+  {"thread_id_y_component", .Bare},
+  {"global_constants_subscript", .Bare},
+  {"local_float3_components", .Bare},
+  {"wrap_helper_constants", .Bare},
+  {"wrap_xy_cell_index", .Bare},
+  {"float_constant_division", .Bare},
+  {"local_array_index_expression", .Bare},
+  {"for_continue_break_mix", .Bare},
+  {"switch_through_default", .Bare},
+  {"bool_int_chain", .Bare},
+  {"inner_shadow_reassign", .Bare},
+  {"helper_bool_select", .Bare},
+  {"struct_constructor_named_out_of_order", .Bare},
+  {"struct_copy_then_mutate", .Bare},
+  {"nested_struct_constructor_named", .Bare},
+  {"nested_loop_continue_break", .Bare},
+  {"table_local_array_mix", .Table},
+  {"table_switch_bit_mix", .Table},
+  {"table_subscript_index_expr", .Table},
+  {"table_helper_index_chain", .Table},
+  {"boid_copy_modify_writeback", .Boids},
+  {"boid_component_compound_chain", .Boids},
+  {"boid_constructor_from_members", .Boids},
+  {"boid_struct_temp_roundtrip", .Boids},
+  {"matrix_vector_reassign", .Bare},
+  {"vector3_scalar_mix_floor", .Bare},
+  {"helper_pointer_table_arg", .Table},
+  {"boid_nested_shorthand_constructor", .Boids},
+  {"helper_if_prelude", .Bare},
+  {"helper_nested_if_prelude", .Bare},
+  {"struct_helper_if_prelude", .Bare},
+  {"ifx_select_expr", .Bare},
+  {"ifx_lazy_branch_side_effects", .Bare},
+  {"pointer_alias_same_buffer", .Bare},
+  {"vector_component_write_order", .Boids},
+  {"nested_array_struct_chain", .Boids},
+  {"using_shadow_member_write", .Bare},
+  {"signed_unsigned_shift_compare", .Bare},
+  {"int64_loop_cast_mod", .Bare},
+  {"matrix_ctor_scalar_chain", .Bare},
+  {"helper_vector_return_swizzle", .Bare},
+  {"defer_continue_return_nested", .Bare},
+  {"switch_dense_sparse_through_default", .Bare},
+  {"local_fixed_array_complex_index", .Bare},
+  {"short_circuit_helper_side_effects", .Bare},
+  {"global_constant_index_fold", .Bare},
+  {"nested_struct_copy_partial_mutate", .Bare},
+  {"thread_id_all_components", .Bare},
+  {"boid_component_write_hazard", .Boids},
+  {"table_dynamic_index_chain", .Table},
+  {"helper_matrix_vector_chain", .Bare},
+  {"for_switch_break_continue_mix", .Bare},
+  {"struct_of_array_roundtrip", .Bare},
+  {"table_rotate_sum", .Table},
+  {"boid_pairwise_mix", .Boids},
+  {"nested_defer_loop", .Bare},
+  {"helper_matrix_rebuild", .Bare},
+  {"subscript_compound_mix", .Table},
+  {"switch_table_dynamic", .Table},
+  {"using_helper_nested_struct", .Bare},
+  {"short_circuit_nested_calls", .Bare},
+  {"ifx_nested_chain", .Bare},
+  {"boid_ifx_component_choose", .Boids},
+  {"same_width_signed_casts", .Bare},
+  {"nested_struct_helper_arg_copy", .Bare},
+  {"scalar_helper_if_return_chain", .Bare},
+  {"pointer_alias_from_member_expr", .Bare},
+  {"shaderfuncs_normalize_mix_clamp", .Bare},
+  {"shaderfuncs_step_smoothstep_mod_fract", .Bare},
+  {"shaderfuncs_degrees_radians_chain", .Bare},
+  {"tuple_destructure_compound_decl", .Bare},
+  {"tuple_destructure_helper_calls", .Bare},
+  {"call_arg_implicit_cast_to_s64", .Bare},
+  {"shaderfuncs_vector_mix_clamp", .Bare},
+  {"shaderfuncs_vector_step_smoothstep_mod", .Bare},
+  {"vector_negate", .Bare},
+  {"helper_nested_call", .Bare},
+  {"struct_constructor_from_member_expr", .Boids},
+  {"nested_local_struct_field_access", .Bare},
   
   {"nested", .Table},
   {"bitwise", .Table},
@@ -544,7 +544,7 @@ edge_make_pair :: (x: u32, y: u32) -> Edge_U32_Pair {
   return Edge_U32_Pair.{x, y};
 }
 
-edge_case_01_bool_and_or :: (using in: Compute_Semantics_In, values: *u32) {
+bool_and_or :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := (idx % 2) == 0;
@@ -554,19 +554,19 @@ edge_case_01_bool_and_or :: (using in: Compute_Semantics_In, values: *u32) {
   else values[idx] += 1;
 } @compute_shader
 
-edge_case_02_unary_not_bool :: (using in: Compute_Semantics_In, values: *u32) {
+unary_not_bool :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   if !(idx == 7) values[idx] += 2;
 } @compute_shader
 
-edge_case_03_unary_bit_not :: (using in: Compute_Semantics_In, values: *u32) {
+unary_bit_not :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   values[idx] = ~values[idx];
 } @compute_shader
 
-edge_case_04_switch_sparse :: (using in: Compute_Semantics_In, values: *u32) {
+switch_sparse :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -579,7 +579,7 @@ edge_case_04_switch_sparse :: (using in: Compute_Semantics_In, values: *u32) {
   values[idx] = v;
 } @compute_shader
 
-edge_case_05_switch_through_chain :: (using in: Compute_Semantics_In, values: *u32) {
+switch_through_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -598,7 +598,7 @@ edge_case_05_switch_through_chain :: (using in: Compute_Semantics_In, values: *u
   values[idx] = v;
 } @compute_shader
 
-edge_case_06_nested_while_continue_break :: (using in: Compute_Semantics_In, values: *u32) {
+nested_while_continue_break :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   j: u32 = 0;
@@ -615,14 +615,14 @@ edge_case_06_nested_while_continue_break :: (using in: Compute_Semantics_In, val
   values[idx] += acc;
 } @compute_shader
 
-edge_case_07_local_array_literal_read :: (using in: Compute_Semantics_In, values: *u32) {
+local_array_literal_read :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   lut: [4]u32 = .[2, 4, 8, 16];
   values[idx] += lut[idx % 4];
 } @compute_shader
 
-edge_case_08_local_array_write_then_read :: (using in: Compute_Semantics_In, values: *u32) {
+local_array_write_then_read :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   lut: [4]u32;
@@ -633,7 +633,7 @@ edge_case_08_local_array_write_then_read :: (using in: Compute_Semantics_In, val
   values[idx] = lut[(idx + 1) % 4];
 } @compute_shader
 
-edge_case_09_float2_component_compound :: (using in: Compute_Semantics_In, values: *u32) {
+float2_component_compound :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := Vector2.{cast(float) idx, 1.0};
@@ -642,7 +642,7 @@ edge_case_09_float2_component_compound :: (using in: Compute_Semantics_In, value
   values[idx] = cast(u32) (v.x + v.y);
 } @compute_shader
 
-edge_case_10_float4_component_lvalue :: (using in: Compute_Semantics_In, values: *u32) {
+float4_component_lvalue :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := Vector4.{1.0, 2.0, 3.0, 4.0};
@@ -650,7 +650,7 @@ edge_case_10_float4_component_lvalue :: (using in: Compute_Semantics_In, values:
   values[idx] = cast(u32) (v.x + v.y);
 } @compute_shader
 
-edge_case_11_float4_swizzle_xy :: (using in: Compute_Semantics_In, values: *u32) {
+float4_swizzle_xy :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := Vector4.{cast(float) idx, cast(float) (idx + 1), 9.0, 10.0};
@@ -658,7 +658,7 @@ edge_case_11_float4_swizzle_xy :: (using in: Compute_Semantics_In, values: *u32)
   values[idx] = cast(u32) (xy.x + xy.y);
 } @compute_shader
 
-edge_case_12_matrix_ctor_mul :: (using in: Compute_Semantics_In, values: *u32) {
+matrix_ctor_mul :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   m := Matrix2.{1.0, 2.0, 3.0, 4.0};
@@ -666,7 +666,7 @@ edge_case_12_matrix_ctor_mul :: (using in: Compute_Semantics_In, values: *u32) {
   values[idx] = cast(u32) (p.x + p.y);
 } @compute_shader
 
-edge_case_13_matrix_mul_builtin :: (using in: Compute_Semantics_In, values: *u32) {
+matrix_mul_builtin :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   m := Matrix2.{2.0, 0.0, 0.0, 2.0};
@@ -674,14 +674,14 @@ edge_case_13_matrix_mul_builtin :: (using in: Compute_Semantics_In, values: *u32
   values[idx] = cast(u32) p.x;
 } @compute_shader
 
-edge_case_14_intrinsic_mod_float :: (using in: Compute_Semantics_In, values: *u32) {
+intrinsic_mod_float :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   x := cast(float) (idx + 5);
   values[idx] = cast(u32) fmod_cycling(x, 3.5);
 } @compute_shader
 
-edge_case_15_intrinsic_smoothstep :: (using in: Compute_Semantics_In, values: *u32) {
+intrinsic_smoothstep :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   x := cast(float) (idx % 10) / 9.0;
@@ -689,34 +689,34 @@ edge_case_15_intrinsic_smoothstep :: (using in: Compute_Semantics_In, values: *u
   values[idx] = cast(u32) floor(y * 255.0);
 } @compute_shader
 
-edge_case_16_intrinsic_pow :: (using in: Compute_Semantics_In, values: *u32) {
+intrinsic_pow :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   y := pow(2.0, cast(float) (idx % 6));
   values[idx] = cast(u32) y;
 } @compute_shader
 
-edge_case_17_helper_return_member_on_call :: (using in: Compute_Semantics_In, values: *u32) {
+helper_return_member_on_call :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   values[idx] = edge_make_pair(idx, idx + 9).b;
 } @compute_shader
 
-edge_case_18_helper_return_assign_local :: (using in: Compute_Semantics_In, values: *u32) {
+helper_return_assign_local :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   p := edge_make_pair(idx + 1, idx + 2);
   values[idx] = p.a + p.b;
 } @compute_shader
 
-edge_case_19_nested_local_struct_field_access :: (using in: Compute_Semantics_In, values: *u32) {
+nested_local_struct_field_access :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   n := Edge_Nested_Local.{pair = Edge_U32_Pair.{idx + 3, idx + 4}, z = 5};
   values[idx] = n.pair.a + n.pair.b + n.z;
 } @compute_shader
 
-edge_case_20_using_inside_nested_block :: (using in: Compute_Semantics_In, values: *u32) {
+using_inside_nested_block :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   {
     using thread_id;
@@ -724,7 +724,7 @@ edge_case_20_using_inside_nested_block :: (using in: Compute_Semantics_In, value
   }
 } @compute_shader
 
-edge_case_21_for_descending :: (using in: Compute_Semantics_In, values: *u32) {
+for_descending :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   acc: u32 = 0;
@@ -737,7 +737,7 @@ edge_case_21_for_descending :: (using in: Compute_Semantics_In, values: *u32) {
   values[idx] += acc;
 } @compute_shader
 
-edge_case_22_bool_temp_chain :: (using in: Compute_Semantics_In, values: *u32) {
+bool_temp_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := (idx % 2) == 0;
@@ -747,7 +747,7 @@ edge_case_22_bool_temp_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if pass values[idx] += 9;
 } @compute_shader
 
-edge_case_23_nested_switch_in_loop :: (using in: Compute_Semantics_In, values: *u32) {
+nested_switch_in_loop :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -761,7 +761,7 @@ edge_case_23_nested_switch_in_loop :: (using in: Compute_Semantics_In, values: *
   values[idx] = v;
 } @compute_shader
 
-edge_case_24_cast_chain :: (using in: Compute_Semantics_In, values: *u32) {
+cast_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := cast(float) idx;
@@ -769,7 +769,7 @@ edge_case_24_cast_chain :: (using in: Compute_Semantics_In, values: *u32) {
   values[idx] = b + 3;
 } @compute_shader
 
-edge_case_25_vector_scalar_mix :: (using in: Compute_Semantics_In, values: *u32) {
+vector_scalar_mix :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := Vector2.{cast(float) idx, 2.0};
@@ -777,27 +777,27 @@ edge_case_25_vector_scalar_mix :: (using in: Compute_Semantics_In, values: *u32)
   values[idx] = cast(u32) (v.x + v.y);
 } @compute_shader
 
-edge_case_26_vector_negate :: (using in: Compute_Semantics_In, values: *u32) {
+vector_negate :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := -Vector2.{cast(float) idx, 3.0};
   values[idx] = cast(u32) abs(v.x) + cast(u32) abs(v.y);
 } @compute_shader
 
-edge_case_27_helper_nested_call :: (using in: Compute_Semantics_In, values: *u32) {
+helper_nested_call :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   values[idx] = edge_make_pair(edge_make_pair(idx, idx + 1).a, idx + 2).b;
 } @compute_shader
 
-edge_case_28_struct_constructor_from_member_expr :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+struct_constructor_from_member_expr :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   p := Edge_U32_Pair.{cast(u32) boids[idx].pos.x, cast(u32) boids[idx].vel.y};
   values[idx] = p.a + p.b;
 } @compute_shader
 
-edge_case_29_buffer_struct_copy_temp :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+buffer_struct_copy_temp :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   b := boids[idx];
@@ -805,7 +805,7 @@ edge_case_29_buffer_struct_copy_temp :: (using in: Compute_Semantics_In, values:
   values[idx] = cast(u32) (c.pos.x + c.pos.y + c.vel.x + c.vel.y);
 } @compute_shader
 
-edge_case_30_while_false_initially :: (using in: Compute_Semantics_In, values: *u32) {
+while_false_initially :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   j: u32 = 5;
@@ -816,7 +816,7 @@ edge_case_30_while_false_initially :: (using in: Compute_Semantics_In, values: *
   values[idx] += 1;
 } @compute_shader
 
-edge_case_31_int64_arithmetic :: (using in: Compute_Semantics_In, values: *u32) {
+int64_arithmetic :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx_u := thread_id.x;
   idx := cast(int) idx_u;
@@ -825,7 +825,7 @@ edge_case_31_int64_arithmetic :: (using in: Compute_Semantics_In, values: *u32) 
   values[idx_u] = cast(u32) (v + cast(int) 17);
 } @compute_shader
 
-edge_case_32_subscript_compound_assign :: (using in: Compute_Semantics_In, values: *u32) {
+subscript_compound_assign :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   values[idx] += idx;
@@ -833,7 +833,7 @@ edge_case_32_subscript_compound_assign :: (using in: Compute_Semantics_In, value
   values[idx] &= 1023;
 } @compute_shader
 
-edge_case_33_member_chain_compound_assign :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+member_chain_compound_assign :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   boids[idx].vel.x += 0.5;
@@ -843,7 +843,7 @@ edge_case_33_member_chain_compound_assign :: (using in: Compute_Semantics_In, va
   values[idx] = cast(u32) (boids[idx].pos.x * 8.0 + boids[idx].pos.y * 4.0);
 } @compute_shader
 
-edge_case_34_switch_default_only :: (using in: Compute_Semantics_In, values: *u32) {
+switch_default_only :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -854,7 +854,7 @@ edge_case_34_switch_default_only :: (using in: Compute_Semantics_In, values: *u3
   values[idx] = v;
 } @compute_shader
 
-edge_case_35_switch_without_default :: (using in: Compute_Semantics_In, values: *u32) {
+switch_without_default :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -865,19 +865,19 @@ edge_case_35_switch_without_default :: (using in: Compute_Semantics_In, values: 
   values[idx] = v;
 } @compute_shader
 
-edge_case_36_helper_pick_value :: (x: u32) -> u32 {
+helper_pick_value :: (x: u32) -> u32 {
   if x < 10 return x + 100;
   if x < 20 return x + 200;
   return x + 300;
 }
 
-edge_case_36_helper_multiple_returns :: (using in: Compute_Semantics_In, values: *u32) {
+helper_multiple_returns :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  values[idx] = edge_case_36_helper_pick_value(idx % 30);
+  values[idx] = helper_pick_value(idx % 30);
 } @compute_shader
 
-edge_case_37_early_return_in_nested_if :: (using in: Compute_Semantics_In, values: *u32) {
+early_return_in_nested_if :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   if (idx % 3) == 0 {
@@ -888,7 +888,7 @@ edge_case_37_early_return_in_nested_if :: (using in: Compute_Semantics_In, value
   values[idx] += 4;
 } @compute_shader
 
-edge_case_38_int64_bitwise_mix :: (using in: Compute_Semantics_In, values: *u32) {
+int64_bitwise_mix :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx_u := thread_id.x;
   x := cast(int) idx_u;
@@ -903,7 +903,7 @@ Edge_Local_Params :: struct {
   b: u32;
 }
 
-edge_case_39_local_struct_using_update :: (using in: Compute_Semantics_In, values: *u32) {
+local_struct_using_update :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   p := Edge_Local_Params.{a = values[idx], b = idx + 3};
@@ -913,7 +913,7 @@ edge_case_39_local_struct_using_update :: (using in: Compute_Semantics_In, value
   values[idx] = a + b;
 } @compute_shader
 
-edge_case_40_vector_component_swap :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+vector_component_swap :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   b := boids[idx];
@@ -924,7 +924,7 @@ edge_case_40_vector_component_swap :: (using in: Compute_Semantics_In, values: *
   values[idx] = cast(u32) (b.pos.x * 10.0 + b.pos.y * 2.0);
 } @compute_shader
 
-edge_case_41_matrix_reassign_chain :: (using in: Compute_Semantics_In, values: *u32) {
+matrix_reassign_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   m := Matrix2.{1.0, 0.0, 0.0, 1.0};
@@ -934,7 +934,7 @@ edge_case_41_matrix_reassign_chain :: (using in: Compute_Semantics_In, values: *
   values[idx] = cast(u32) (r1.x + r1.y);
 } @compute_shader
 
-edge_case_42_thread_id_y_component :: (using in: Compute_Semantics_In, values: *u32) {
+thread_id_y_component :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   values[thread_id.x] = values[thread_id.x] + thread_id.y + 1;
 } @compute_shader
@@ -942,12 +942,12 @@ edge_case_42_thread_id_y_component :: (using in: Compute_Semantics_In, values: *
 EDGE_CONST_MUL :: 5;
 EDGE_CONST_ADD :: 11;
 
-edge_case_43_global_constants_subscript :: (using in: Compute_Semantics_In, values: *u32) {
+global_constants_subscript :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   values[thread_id.x] = values[thread_id.x] * EDGE_CONST_MUL + EDGE_CONST_ADD;
 } @compute_shader
 
-edge_case_44_local_float3_components :: (using in: Compute_Semantics_In, values: *u32) {
+local_float3_components :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   t := cast(float) (idx % 5);
@@ -970,7 +970,7 @@ edge_wrap_right_const :: (x: u32) -> u32 {
   return n;
 }
 
-edge_case_45_wrap_helper_constants :: (using in: Compute_Semantics_In, values: *u32) {
+wrap_helper_constants :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   x := thread_id.x % EDGE_WRAP_WIDTH;
   l := edge_wrap_left_const(x);
@@ -993,7 +993,7 @@ edge_cell_index_const :: (x: u32, y: u32) -> u32 {
   return y * EDGE_WRAP_WIDTH + x;
 }
 
-edge_case_46_wrap_xy_cell_index :: (using in: Compute_Semantics_In, values: *u32) {
+wrap_xy_cell_index :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   x := idx % EDGE_WRAP_WIDTH;
@@ -1014,14 +1014,14 @@ edge_case_46_wrap_xy_cell_index :: (using in: Compute_Semantics_In, values: *u32
 
 EDGE_FLOAT_DT :: 1.0 / 60.0;
 
-edge_case_47_float_constant_division :: (using in: Compute_Semantics_In, values: *u32) {
+float_constant_division :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := cast(float) (idx + 1) * EDGE_FLOAT_DT * 120.0;
   values[idx] = cast(u32) (v * 1000.0);
 } @compute_shader
 
-edge_case_48_local_array_index_expression :: (using in: Compute_Semantics_In, values: *u32) {
+local_array_index_expression :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   lut: [8]u32;
@@ -1033,7 +1033,7 @@ edge_case_48_local_array_index_expression :: (using in: Compute_Semantics_In, va
   values[idx] = lut[j];
 } @compute_shader
 
-edge_case_49_for_continue_break_mix :: (using in: Compute_Semantics_In, values: *u32) {
+for_continue_break_mix :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   acc: u32 = 0;
@@ -1046,7 +1046,7 @@ edge_case_49_for_continue_break_mix :: (using in: Compute_Semantics_In, values: 
   values[idx] += acc;
 } @compute_shader
 
-edge_case_50_switch_through_default :: (using in: Compute_Semantics_In, values: *u32) {
+switch_through_default :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -1063,7 +1063,7 @@ edge_case_50_switch_through_default :: (using in: Compute_Semantics_In, values: 
   values[idx] = v;
 } @compute_shader
 
-edge_case_51_bool_int_chain :: (using in: Compute_Semantics_In, values: *u32) {
+bool_int_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := ((idx & 1) == 0);
@@ -1074,7 +1074,7 @@ edge_case_51_bool_int_chain :: (using in: Compute_Semantics_In, values: *u32) {
   else values[idx] += 4;
 } @compute_shader
 
-edge_case_52_inner_shadow_reassign :: (using in: Compute_Semantics_In, values: *u32) {
+inner_shadow_reassign :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   x := values[idx];
@@ -1085,26 +1085,26 @@ edge_case_52_inner_shadow_reassign :: (using in: Compute_Semantics_In, values: *
   values[idx] += x & 7;
 } @compute_shader
 
-edge_case_53_helper_select :: (a: u32, b: u32, take_a: bool) -> u32 {
+helper_select :: (a: u32, b: u32, take_a: bool) -> u32 {
   if take_a return a;
   return b;
 }
 
-edge_case_53_helper_bool_select :: (using in: Compute_Semantics_In, values: *u32) {
+helper_bool_select :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   choose_left := (idx % 3) == 0;
-  values[idx] = edge_case_53_helper_select(values[idx], idx * 9 + 1, choose_left);
+  values[idx] = helper_select(values[idx], idx * 9 + 1, choose_left);
 } @compute_shader
 
-edge_case_54_struct_constructor_named_out_of_order :: (using in: Compute_Semantics_In, values: *u32) {
+struct_constructor_named_out_of_order :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   p := Edge_U32_Pair.{b = idx + 30, a = idx + 5};
   values[idx] = p.a * 2 + p.b;
 } @compute_shader
 
-edge_case_55_struct_copy_then_mutate :: (using in: Compute_Semantics_In, values: *u32) {
+struct_copy_then_mutate :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := Edge_U32_Pair.{idx + 1, idx + 2};
@@ -1114,14 +1114,14 @@ edge_case_55_struct_copy_then_mutate :: (using in: Compute_Semantics_In, values:
   values[idx] = a.a + a.b + b.a + b.b;
 } @compute_shader
 
-edge_case_56_nested_struct_constructor_named :: (using in: Compute_Semantics_In, values: *u32) {
+nested_struct_constructor_named :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   n := Edge_Nested_Local.{z = 13, pair = Edge_U32_Pair.{b = idx + 4, a = idx + 3}};
   values[idx] = n.pair.a + n.pair.b + n.z;
 } @compute_shader
 
-edge_case_57_nested_loop_continue_break :: (using in: Compute_Semantics_In, values: *u32) {
+nested_loop_continue_break :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   acc: u32 = 0;
@@ -1142,7 +1142,7 @@ edge_case_57_nested_loop_continue_break :: (using in: Compute_Semantics_In, valu
   values[idx] += acc;
 } @compute_shader
 
-edge_case_58_table_local_array_mix :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+table_local_array_mix :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   local: [4]u32;
@@ -1153,7 +1153,7 @@ edge_case_58_table_local_array_mix :: (using in: Compute_Semantics_In, values: *
   values[idx] = values[idx] + local[idx % 4] + local[(idx + 2) % 4];
 } @compute_shader
 
-edge_case_59_table_switch_bit_mix :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+table_switch_bit_mix :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   base := values[idx];
@@ -1167,7 +1167,7 @@ edge_case_59_table_switch_bit_mix :: (using in: Compute_Semantics_In, values: *u
   values[idx] = base;
 } @compute_shader
 
-edge_case_60_table_subscript_index_expr :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+table_subscript_index_expr :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   i0 := (idx * 3 + 1) % 8;
@@ -1175,19 +1175,19 @@ edge_case_60_table_subscript_index_expr :: (using in: Compute_Semantics_In, valu
   values[idx] = values[idx] + table[i0] * 2 + table[i1];
 } @compute_shader
 
-edge_case_61_table_helper_index :: (i: u32, add: u32) -> u32 {
+table_helper_index :: (i: u32, add: u32) -> u32 {
   return (i * 3 + add) % 8;
 }
 
-edge_case_61_table_helper_index_chain :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+table_helper_index_chain :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  i0 := edge_case_61_table_helper_index(idx, 1);
-  i1 := edge_case_61_table_helper_index(idx + 1, 2);
+  i0 := table_helper_index(idx, 1);
+  i1 := table_helper_index(idx + 1, 2);
   values[idx] = values[idx] + table[i0] + table[i1] * 2;
 } @compute_shader
 
-edge_case_62_boid_copy_modify_writeback :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+boid_copy_modify_writeback :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   b := boids[idx];
@@ -1197,7 +1197,7 @@ edge_case_62_boid_copy_modify_writeback :: (using in: Compute_Semantics_In, valu
   values[idx] = cast(u32) (b.pos.x * 4.0 + b.pos.y * 6.0);
 } @compute_shader
 
-edge_case_63_boid_component_compound_chain :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+boid_component_compound_chain :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   boids[idx].vel.x *= 1.5;
@@ -1207,7 +1207,7 @@ edge_case_63_boid_component_compound_chain :: (using in: Compute_Semantics_In, v
   values[idx] = cast(u32) (boids[idx].pos.x * 5.0 + boids[idx].pos.y * 3.0);
 } @compute_shader
 
-edge_case_64_boid_constructor_from_members :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+boid_constructor_from_members :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   src := boids[idx];
@@ -1219,7 +1219,7 @@ edge_case_64_boid_constructor_from_members :: (using in: Compute_Semantics_In, v
   values[idx] = cast(u32) (next.pos.x * 2.0 + next.pos.y * 2.0 + next.vel.x * 10.0);
 } @compute_shader
 
-edge_case_65_boid_struct_temp_roundtrip :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+boid_struct_temp_roundtrip :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := boids[idx];
@@ -1230,7 +1230,7 @@ edge_case_65_boid_struct_temp_roundtrip :: (using in: Compute_Semantics_In, valu
   values[idx] = cast(u32) (b.pos.x * 7.0 + b.pos.y * 2.0);
 } @compute_shader
 
-edge_case_66_matrix_vector_reassign :: (using in: Compute_Semantics_In, values: *u32) {
+matrix_vector_reassign :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   m := Matrix2.{1.0, 2.0, 3.0, 4.0};
@@ -1241,7 +1241,7 @@ edge_case_66_matrix_vector_reassign :: (using in: Compute_Semantics_In, values: 
   values[idx] = cast(u32) (r1.x * 3.0 + r1.y);
 } @compute_shader
 
-edge_case_67_vector3_scalar_mix_floor :: (using in: Compute_Semantics_In, values: *u32) {
+vector3_scalar_mix_floor :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   t := cast(float) (idx % 9);
@@ -1250,19 +1250,19 @@ edge_case_67_vector3_scalar_mix_floor :: (using in: Compute_Semantics_In, values
   values[idx] = cast(u32) floor(v.x + v.y + v.z);
 } @compute_shader
 
-edge_case_68_pointer_table_mix_helper :: (table: *u32, idx: u32) -> u32 {
+pointer_table_mix_helper :: (table: *u32, idx: u32) -> u32 {
   a := table[idx % 8];
   b := table[(idx + 3) % 8];
   return a + b * 2;
 }
 
-edge_case_68_helper_pointer_table_arg :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+helper_pointer_table_arg :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  values[idx] = values[idx] + edge_case_68_pointer_table_mix_helper(table, idx);
+  values[idx] = values[idx] + pointer_table_mix_helper(table, idx);
 } @compute_shader
 
-edge_case_69_boid_nested_shorthand_constructor :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+boid_nested_shorthand_constructor :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   src := boids[idx];
@@ -1274,7 +1274,7 @@ edge_case_69_boid_nested_shorthand_constructor :: (using in: Compute_Semantics_I
   values[idx] = cast(u32) (next.pos.x * 2.0 + next.pos.y * 2.0 + next.vel.x * 10.0);
 } @compute_shader
 
-edge_case_70_helper_if_prelude_return :: (x: u32) -> u32 {
+helper_if_prelude_return :: (x: u32) -> u32 {
   if (x & 1) == 0 {
     t := x * 3 + 2;
     return t + 5;
@@ -1282,13 +1282,13 @@ edge_case_70_helper_if_prelude_return :: (x: u32) -> u32 {
   return x + 11;
 }
 
-edge_case_70_helper_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
+helper_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  values[idx] = edge_case_70_helper_if_prelude_return(values[idx] + idx);
+  values[idx] = helper_if_prelude_return(values[idx] + idx);
 } @compute_shader
 
-edge_case_71_helper_nested_if_prelude_return :: (x: u32) -> u32 {
+helper_nested_if_prelude_return :: (x: u32) -> u32 {
   if (x % 5) < 3 {
     base := x * 2 + 1;
     if (base & 1) == 0 {
@@ -1300,10 +1300,10 @@ edge_case_71_helper_nested_if_prelude_return :: (x: u32) -> u32 {
   return x + 13;
 }
 
-edge_case_71_helper_nested_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
+helper_nested_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  values[idx] = edge_case_71_helper_nested_if_prelude_return(values[idx] + idx * 2);
+  values[idx] = helper_nested_if_prelude_return(values[idx] + idx * 2);
 } @compute_shader
 
 Edge_Case_72_Pair :: struct {
@@ -1311,7 +1311,7 @@ Edge_Case_72_Pair :: struct {
   b: u32;
 }
 
-edge_case_72_helper_struct_if_prelude_return :: (x: u32) -> Edge_Case_72_Pair {
+helper_struct_if_prelude_return :: (x: u32) -> Edge_Case_72_Pair {
   if (x % 2) == 0 {
     base := x + 2;
     return Edge_Case_72_Pair.{a = base * 2, b = base + 3};
@@ -1319,18 +1319,18 @@ edge_case_72_helper_struct_if_prelude_return :: (x: u32) -> Edge_Case_72_Pair {
   return Edge_Case_72_Pair.{a = x + 5, b = x + 7};
 }
 
-edge_case_72_struct_helper_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
+struct_helper_if_prelude :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  p := edge_case_72_helper_struct_if_prelude_return(values[idx] + idx);
+  p := helper_struct_if_prelude_return(values[idx] + idx);
   values[idx] = p.a + p.b * 2;
 } @compute_shader
 
-edge_case_73_ifx_select_helper :: (cond: bool, a: u32, b: u32) -> u32 {
+ifx_select_helper :: (cond: bool, a: u32, b: u32) -> u32 {
   return ifx cond then a else b;
 }
 
-edge_case_73_ifx_select_expr :: (using in: Compute_Semantics_In, values: *u32) {
+ifx_select_expr :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
 
   idx := thread_id.x;
@@ -1339,39 +1339,39 @@ edge_case_73_ifx_select_expr :: (using in: Compute_Semantics_In, values: *u32) {
   picked := ifx (idx % 2) == 0 then base + idx else base + 7;
   out: u32 = 0;
   out = ifx (base % 3) == 0 then picked * 2 else picked + 5;
-  values[idx] = ifx (idx % 5) == 0 then edge_case_73_ifx_select_helper(true, out, base) else edge_case_73_ifx_select_helper(false, out, base);
+  values[idx] = ifx (idx % 5) == 0 then ifx_select_helper(true, out, base) else ifx_select_helper(false, out, base);
 } @compute_shader
 
-edge_case_74_ifx_then_side_effect :: (values: *u32, idx: u32) -> u32 {
+ifx_then_side_effect :: (values: *u32, idx: u32) -> u32 {
   values[idx] += 100;
   return values[idx];
 }
 
-edge_case_74_ifx_else_side_effect :: (values: *u32, idx: u32) -> u32 {
+ifx_else_side_effect :: (values: *u32, idx: u32) -> u32 {
   values[idx] += 7;
   return values[idx];
 }
 
-edge_case_74_ifx_lazy_branch_side_effects :: (using in: Compute_Semantics_In, values: *u32) {
+ifx_lazy_branch_side_effects :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  selected := ifx (idx & 1) == 0 then edge_case_74_ifx_then_side_effect(values, idx) else edge_case_74_ifx_else_side_effect(values, idx);
+  selected := ifx (idx & 1) == 0 then ifx_then_side_effect(values, idx) else ifx_else_side_effect(values, idx);
   suffix := ifx (idx & 1) == 0 then cast(u32) 1 else cast(u32) 2;
   values[idx] = selected + suffix;
 } @compute_shader
 
-edge_case_75_alias_read :: (values: *u32, idx: u32) -> u32 {
+alias_read :: (values: *u32, idx: u32) -> u32 {
   return values[idx];
 }
 
-edge_case_75_pointer_alias_same_buffer :: (using in: Compute_Semantics_In, values: *u32) {
+pointer_alias_same_buffer :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   values[idx] = values[idx] + idx + 3;
-  values[idx] = edge_case_75_alias_read(values, idx) * 2 + 1;
+  values[idx] = alias_read(values, idx) * 2 + 1;
 } @compute_shader
 
-edge_case_76_vector_component_write_order :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+vector_component_write_order :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   boids[idx].pos.x = boids[idx].pos.x + boids[idx].vel.x;
@@ -1379,7 +1379,7 @@ edge_case_76_vector_component_write_order :: (using in: Compute_Semantics_In, va
   values[idx] = cast(u32) (boids[idx].pos.x * 3.0 + boids[idx].pos.y * 5.0);
 } @compute_shader
 
-edge_case_77_nested_array_struct_chain :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+nested_array_struct_chain :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   i0 := (idx + 1) % 64;
@@ -1388,7 +1388,7 @@ edge_case_77_nested_array_struct_chain :: (using in: Compute_Semantics_In, value
   values[idx] = cast(u32) (boids[i0].pos.x * 2.0 + boids[i1].vel.y * 8.0 + boids[i2].vel.x * 4.0);
 } @compute_shader
 
-edge_case_78_using_shadow_member_write :: (using in: Compute_Semantics_In, values: *u32) {
+using_shadow_member_write :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   p := Edge_U32_Pair.{a = idx + 2, b = idx + 7};
@@ -1401,7 +1401,7 @@ edge_case_78_using_shadow_member_write :: (using in: Compute_Semantics_In, value
   values[idx] += a;
 } @compute_shader
 
-edge_case_79_signed_unsigned_shift_compare :: (using in: Compute_Semantics_In, values: *u32) {
+signed_unsigned_shift_compare :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   si := cast(s64) (values[idx] & 255);
@@ -1414,7 +1414,7 @@ edge_case_79_signed_unsigned_shift_compare :: (using in: Compute_Semantics_In, v
   }
 } @compute_shader
 
-edge_case_80_int64_loop_cast_mod :: (using in: Compute_Semantics_In, values: *u32) {
+int64_loop_cast_mod :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := cast(s64) thread_id.x;
   acc: s64 = 0;
@@ -1425,7 +1425,7 @@ edge_case_80_int64_loop_cast_mod :: (using in: Compute_Semantics_In, values: *u3
   values[thread_id.x] = cast(u32) (acc & 255);
 } @compute_shader
 
-edge_case_81_matrix_ctor_scalar_chain :: (using in: Compute_Semantics_In, values: *u32) {
+matrix_ctor_scalar_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := 1.0 + cast(float) (idx % 3);
@@ -1438,19 +1438,19 @@ edge_case_81_matrix_ctor_scalar_chain :: (using in: Compute_Semantics_In, values
   values[idx] = cast(u32) floor(r.x + r.y + 0.5);
 } @compute_shader
 
-edge_case_82_helper_make_vec4 :: (x: float) -> Vector4 {
+helper_make_vec4 :: (x: float) -> Vector4 {
   return Vector4.{x + 1.0, x * 0.5 + 2.0, x * 0.25 + 3.0, 1.0};
 }
 
-edge_case_82_helper_vector_return_swizzle :: (using in: Compute_Semantics_In, values: *u32) {
+helper_vector_return_swizzle :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  v := edge_case_82_helper_make_vec4(cast(float) (idx % 9));
+  v := helper_make_vec4(cast(float) (idx % 9));
   xy := v.xy;
   values[idx] = cast(u32) floor(xy.x * 2.0 + xy.y + v.z);
 } @compute_shader
 
-edge_case_83_defer_continue_return_nested :: (using in: Compute_Semantics_In, values: *u32) {
+defer_continue_return_nested :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   acc: u32 = 0;
@@ -1471,7 +1471,7 @@ edge_case_83_defer_continue_return_nested :: (using in: Compute_Semantics_In, va
   values[idx] += acc;
 } @compute_shader
 
-edge_case_84_switch_dense_sparse_through_default :: (using in: Compute_Semantics_In, values: *u32) {
+switch_dense_sparse_through_default :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -1490,7 +1490,7 @@ edge_case_84_switch_dense_sparse_through_default :: (using in: Compute_Semantics
   values[idx] = v;
 } @compute_shader
 
-edge_case_85_local_fixed_array_complex_index :: (using in: Compute_Semantics_In, values: *u32) {
+local_fixed_array_complex_index :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a: [8]u32;
@@ -1500,27 +1500,27 @@ edge_case_85_local_fixed_array_complex_index :: (using in: Compute_Semantics_In,
   values[idx] = values[idx] + a[i0] * 2 + a[i1];
 } @compute_shader
 
-edge_case_86_mark_true :: (values: *u32, idx: u32) -> bool {
+mark_true :: (values: *u32, idx: u32) -> bool {
   values[idx] += 100;
   return true;
 }
 
-edge_case_86_mark_false :: (values: *u32, idx: u32) -> bool {
+mark_false :: (values: *u32, idx: u32) -> bool {
   values[idx] += 7;
   return false;
 }
 
-edge_case_86_short_circuit_helper_side_effects :: (using in: Compute_Semantics_In, values: *u32) {
+short_circuit_helper_side_effects :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   even := (idx & 1) == 0;
-  first := even && edge_case_86_mark_true(values, idx);
-  second := !even || edge_case_86_mark_false(values, idx);
+  first := even && mark_true(values, idx);
+  second := !even || mark_false(values, idx);
   if first values[idx] += 1;
   if second values[idx] += 2;
 } @compute_shader
 
-edge_case_87_global_constant_index_fold :: (using in: Compute_Semantics_In, values: *u32) {
+global_constant_index_fold :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   i0 := (idx * 3 + EDGE_GLOBAL_BIAS) % 8;
@@ -1528,7 +1528,7 @@ edge_case_87_global_constant_index_fold :: (using in: Compute_Semantics_In, valu
   values[idx] = values[idx] + edge_global_lut_value(i0) * 2 + edge_global_lut_value(i1);
 } @compute_shader
 
-edge_case_88_nested_struct_copy_partial_mutate :: (using in: Compute_Semantics_In, values: *u32) {
+nested_struct_copy_partial_mutate :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   base := Edge_Nested_Local.{pair = Edge_U32_Pair.{a = idx + 1, b = idx + 2}, z = idx + 3};
@@ -1537,14 +1537,14 @@ edge_case_88_nested_struct_copy_partial_mutate :: (using in: Compute_Semantics_I
   values[idx] = base.pair.a + base.pair.b + next.pair.b + next.z;
 } @compute_shader
 
-edge_case_89_thread_id_all_components :: (using in: Compute_Semantics_In, values: *u32) {
+thread_id_all_components :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   mixed_id := thread_id.x + thread_id.y * 7 + thread_id.z * 13;
   values[idx] = values[idx] + mixed_id + 1;
 } @compute_shader
 
-edge_case_90_boid_component_write_hazard :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+boid_component_write_hazard :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   boids[idx].pos.y = boids[idx].pos.x + boids[idx].vel.y;
@@ -1552,7 +1552,7 @@ edge_case_90_boid_component_write_hazard :: (using in: Compute_Semantics_In, val
   values[idx] = cast(u32) (boids[idx].pos.x * 4.0 + boids[idx].pos.y * 3.0);
 } @compute_shader
 
-edge_case_91_table_dynamic_index_chain :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+table_dynamic_index_chain :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   i0 := table[idx % 8] % 8;
@@ -1561,20 +1561,20 @@ edge_case_91_table_dynamic_index_chain :: (using in: Compute_Semantics_In, value
   values[idx] = values[idx] + table[i0] + table[i1] * 2 + table[i2];
 } @compute_shader
 
-edge_case_92_make_matrix :: (s: float, b: float) -> Matrix2 {
+make_matrix :: (s: float, b: float) -> Matrix2 {
   return Matrix2.{s, b, 0.0, s + 1.0};
 }
 
-edge_case_92_helper_matrix_vector_chain :: (using in: Compute_Semantics_In, values: *u32) {
+helper_matrix_vector_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  m := edge_case_92_make_matrix(cast(float) (idx % 4) + 1.0, 0.25);
+  m := make_matrix(cast(float) (idx % 4) + 1.0, 0.25);
   v := Vector2.{cast(float) (idx % 5), cast(float) (idx % 3)};
   r := m * v;
   values[idx] = cast(u32) floor(r.x + r.y + 0.25);
 } @compute_shader
 
-edge_case_93_for_switch_break_continue_mix :: (using in: Compute_Semantics_In, values: *u32) {
+for_switch_break_continue_mix :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   acc: u32 = 0;
@@ -1592,7 +1592,7 @@ edge_case_93_for_switch_break_continue_mix :: (using in: Compute_Semantics_In, v
   values[idx] = values[idx] + acc;
 } @compute_shader
 
-edge_case_94_struct_of_array_roundtrip :: (using in: Compute_Semantics_In, values: *u32) {
+struct_of_array_roundtrip :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a: [4]u32;
@@ -1609,7 +1609,7 @@ edge_case_94_struct_of_array_roundtrip :: (using in: Compute_Semantics_In, value
   values[idx] = a[idx % 4] + b[(idx + 2) % 4];
 } @compute_shader
 
-edge_case_95_table_rotate_sum :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+table_rotate_sum :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   i0 := idx % 8;
@@ -1619,7 +1619,7 @@ edge_case_95_table_rotate_sum :: (using in: Compute_Semantics_In, values: *u32, 
   values[idx] = values[idx] + v;
 } @compute_shader
 
-edge_case_96_boid_pairwise_mix :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+boid_pairwise_mix :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := boids[idx];
@@ -1632,7 +1632,7 @@ edge_case_96_boid_pairwise_mix :: (using in: Compute_Semantics_In, values: *u32,
   values[idx] = cast(u32) (out.pos.x * 2.0 + out.pos.y * 3.0 + out.vel.x * 4.0 + out.vel.y * 5.0);
 } @compute_shader
 
-edge_case_97_nested_defer_loop :: (using in: Compute_Semantics_In, values: *u32) {
+nested_defer_loop :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   acc: u32 = 0;
@@ -1655,23 +1655,23 @@ edge_case_97_nested_defer_loop :: (using in: Compute_Semantics_In, values: *u32)
   values[idx] = values[idx] + acc;
 } @compute_shader
 
-edge_case_98_matrix_rebuild_helper :: (k: float) -> Matrix2 {
+matrix_rebuild_helper :: (k: float) -> Matrix2 {
   return Matrix2.{k, 1.0 - k * 0.25, k * 0.5, k + 1.0};
 }
 
-edge_case_98_helper_matrix_rebuild :: (using in: Compute_Semantics_In, values: *u32) {
+helper_matrix_rebuild :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   k := cast(float) (idx % 6) * 0.25 + 0.5;
-  m0 := edge_case_98_matrix_rebuild_helper(k);
-  m1 := edge_case_98_matrix_rebuild_helper(k + 0.25);
+  m0 := matrix_rebuild_helper(k);
+  m1 := matrix_rebuild_helper(k + 0.25);
   v := Vector2.{cast(float) (idx % 5), cast(float) (idx % 7)};
   r0 := m0 * v;
   r1 := m1 * r0;
   values[idx] = cast(u32) floor(r1.x + r1.y + 0.5);
 } @compute_shader
 
-edge_case_99_subscript_compound_mix :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+subscript_compound_mix :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   i0 := idx % 8;
@@ -1684,7 +1684,7 @@ edge_case_99_subscript_compound_mix :: (using in: Compute_Semantics_In, values: 
   values[idx] = values[idx] + tmp[0] + tmp[1];
 } @compute_shader
 
-edge_case_100_switch_table_dynamic :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
+switch_table_dynamic :: (using in: Compute_Semantics_In, values: *u32, table: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := values[idx];
@@ -1704,38 +1704,38 @@ Edge_Using_Box :: struct {
   bias: u32;
 }
 
-edge_case_101_using_helper_inner :: (box: Edge_Using_Box) -> u32 {
+using_helper_inner :: (box: Edge_Using_Box) -> u32 {
   using box;
   return a + b + bias;
 }
 
-edge_case_101_using_helper_nested_struct :: (using in: Compute_Semantics_In, values: *u32) {
+using_helper_nested_struct :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   b := Edge_Using_Box.{a = idx + 2, b = idx + 5, bias = idx % 7};
-  values[idx] = values[idx] + edge_case_101_using_helper_inner(b);
+  values[idx] = values[idx] + using_helper_inner(b);
 } @compute_shader
 
-edge_case_102_call_true :: (values: *u32, idx: u32) -> bool {
+call_true :: (values: *u32, idx: u32) -> bool {
   values[idx] += 9;
   return true;
 }
 
-edge_case_102_call_false :: (values: *u32, idx: u32) -> bool {
+call_false :: (values: *u32, idx: u32) -> bool {
   values[idx] += 4;
   return false;
 }
 
-edge_case_102_short_circuit_nested_calls :: (using in: Compute_Semantics_In, values: *u32) {
+short_circuit_nested_calls :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   even := (idx & 1) == 0;
-  pass := (even && edge_case_102_call_true(values, idx)) || (!even && edge_case_102_call_false(values, idx));
+  pass := (even && call_true(values, idx)) || (!even && call_false(values, idx));
   if pass values[idx] += 2;
   else values[idx] += 1;
 } @compute_shader
 
-edge_case_103_ifx_nested_chain :: (using in: Compute_Semantics_In, values: *u32) {
+ifx_nested_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   a := ifx (idx % 2) == 0 then values[idx] + 3 else values[idx] + 5;
@@ -1744,7 +1744,7 @@ edge_case_103_ifx_nested_chain :: (using in: Compute_Semantics_In, values: *u32)
   values[idx] = c;
 } @compute_shader
 
-edge_case_104_boid_ifx_component_choose :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+boid_ifx_component_choose :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   b := boids[idx];
@@ -1755,7 +1755,7 @@ edge_case_104_boid_ifx_component_choose :: (using in: Compute_Semantics_In, valu
   values[idx] = cast(u32) (px * 4.0 + py * 6.0);
 } @compute_shader
 
-edge_case_105_same_width_signed_casts :: (using in: Compute_Semantics_In, values: *u32) {
+same_width_signed_casts :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   raw := values[idx] & 0x7FFF_FFFF;
@@ -1771,19 +1771,19 @@ Edge_Using_Box_Nested :: struct {
   bias: u32;
 }
 
-edge_case_106_nested_struct_helper_arg_copy_inner :: (box: Edge_Using_Box_Nested) -> u32 {
+nested_struct_helper_arg_copy_inner :: (box: Edge_Using_Box_Nested) -> u32 {
   using box;
   return pair.a + pair.b + bias;
 }
 
-edge_case_106_nested_struct_helper_arg_copy :: (using in: Compute_Semantics_In, values: *u32) {
+nested_struct_helper_arg_copy :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   box := Edge_Using_Box_Nested.{pair = .{a = idx + 2, b = idx + 5}, bias = idx % 7};
-  values[idx] = values[idx] + edge_case_106_nested_struct_helper_arg_copy_inner(box);
+  values[idx] = values[idx] + nested_struct_helper_arg_copy_inner(box);
 } @compute_shader
 
-edge_case_107_scalar_helper_if_return_chain_inner :: (x: u32) -> u32 {
+scalar_helper_if_return_chain_inner :: (x: u32) -> u32 {
   base := x * 3 + 1;
   if (x & 1) == 0 {
     return base + 7;
@@ -1791,26 +1791,26 @@ edge_case_107_scalar_helper_if_return_chain_inner :: (x: u32) -> u32 {
   return base + 2;
 }
 
-edge_case_107_scalar_helper_if_return_chain :: (using in: Compute_Semantics_In, values: *u32) {
+scalar_helper_if_return_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  values[idx] = edge_case_107_scalar_helper_if_return_chain_inner(values[idx] + idx);
+  values[idx] = scalar_helper_if_return_chain_inner(values[idx] + idx);
 } @compute_shader
 
 Edge_Case_108_Params :: struct {
   values: *u32;
 }
 
-edge_case_108_pointer_alias_from_member_expr :: (using in: Compute_Semantics_In, values: *u32) {
+pointer_alias_from_member_expr :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   params := Edge_Case_108_Params.{values = values};
   alias := params.values;
   alias[idx] = alias[idx] + idx + 9;
-  alias[idx] = edge_case_75_alias_read(alias, idx) * 3 + 2;
+  alias[idx] = alias_read(alias, idx) * 3 + 2;
 } @compute_shader
 
-edge_case_109_shaderfuncs_normalize_mix_clamp :: (using in: Compute_Semantics_In, values: *u32) {
+shaderfuncs_normalize_mix_clamp :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   base := cast(float) ((values[idx] % 97) + 1);
@@ -1822,7 +1822,7 @@ edge_case_109_shaderfuncs_normalize_mix_clamp :: (using in: Compute_Semantics_In
   values[idx] = cast(u32) (m * 1000.0 + n.x * 173.0 + n.y * 211.0 + t * 37.0);
 } @compute_shader
 
-edge_case_110_shaderfuncs_step_smoothstep_mod_fract :: (using in: Compute_Semantics_In, values: *u32) {
+shaderfuncs_step_smoothstep_mod_fract :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   x := cast(float) (values[idx] % 43) * 0.12 + cast(float) (idx % 7) * 0.07;
@@ -1833,7 +1833,7 @@ edge_case_110_shaderfuncs_step_smoothstep_mod_fract :: (using in: Compute_Semant
   values[idx] = cast(u32) (wrapped * 137.0 + frac_part * 71.0 + s * 23.0 + sm * 89.0);
 } @compute_shader
 
-edge_case_111_shaderfuncs_degrees_radians_chain :: (using in: Compute_Semantics_In, values: *u32) {
+shaderfuncs_degrees_radians_chain :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   deg := 15.0 + cast(float) (idx % 12) * 7.5;
@@ -1843,7 +1843,7 @@ edge_case_111_shaderfuncs_degrees_radians_chain :: (using in: Compute_Semantics_
   values[idx] = cast(u32) (back_deg * 3.0 + sm * 101.0);
 } @compute_shader
 
-edge_case_112_tuple_destructure_compound_decl :: (using in: Compute_Semantics_In, values: *u32) {
+tuple_destructure_compound_decl :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   x := values[idx];
@@ -1851,38 +1851,38 @@ edge_case_112_tuple_destructure_compound_decl :: (using in: Compute_Semantics_In
   values[idx] = (a ^ b) + idx;
 } @compute_shader
 
-edge_case_113_tuple_helper_a :: (x: u32) -> u32 {
+tuple_helper_a :: (x: u32) -> u32 {
   return x * 3 + 7;
 }
 
-edge_case_113_tuple_helper_b :: (x: u32) -> u32 {
+tuple_helper_b :: (x: u32) -> u32 {
   return x ^ 19;
 }
 
-edge_case_113_tuple_destructure_helper_calls :: (using in: Compute_Semantics_In, values: *u32) {
+tuple_destructure_helper_calls :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  a, b := edge_case_113_tuple_helper_a(idx), edge_case_113_tuple_helper_b(values[idx]);
+  a, b := tuple_helper_a(idx), tuple_helper_b(values[idx]);
   values[idx] = a + b * 5 + idx;
 } @compute_shader
 
-edge_case_114_pair_mix :: (a: s64, b: s64) -> u32 {
+pair_mix :: (a: s64, b: s64) -> u32 {
   x := a * 13 + b * 29;
   if x < 0 x = -x;
   return cast(u32) x;
 }
 
-edge_case_114_call_arg_implicit_cast_to_s64 :: (using in: Compute_Semantics_In, values: *u32) {
+call_arg_implicit_cast_to_s64 :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   x := idx % 11;
   y := idx / 11;
-  a := edge_case_114_pair_mix(cast(s64) x - 1, y + 7);
-  b := edge_case_114_pair_mix(cast(s64) y + 2, x + 13);
+  a := pair_mix(cast(s64) x - 1, y + 7);
+  b := pair_mix(cast(s64) y + 2, x + 13);
   values[idx] = a * 17 + b * 31 + idx;
 } @compute_shader
 
-edge_case_115_shaderfuncs_vector_mix_clamp :: (using in: Compute_Semantics_In, values: *u32) {
+shaderfuncs_vector_mix_clamp :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   base := Vector3.{
@@ -1900,7 +1900,7 @@ edge_case_115_shaderfuncs_vector_mix_clamp :: (using in: Compute_Semantics_In, v
   values[idx] = cast(u32) (bounded.x * 173.0 + bounded.y * 257.0 + bounded.z * 311.0 + cast(float) idx * 1.5);
 } @compute_shader
 
-edge_case_116_shaderfuncs_vector_step_smoothstep_mod :: (using in: Compute_Semantics_In, values: *u32) {
+shaderfuncs_vector_step_smoothstep_mod :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   v := Vector3.{
@@ -1949,7 +1949,7 @@ edge_gap_72_helper_pointer_alias_arg :: (using in: Compute_Semantics_In, values:
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   t := table;
-  values[idx] = values[idx] + edge_case_68_pointer_table_mix_helper(t, idx);
+  values[idx] = values[idx] + pointer_table_mix_helper(t, idx);
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {
@@ -2089,14 +2089,15 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
   encoder := MTLCommandBuffer.computeCommandEncoder(command_buffer);
   if !encoder fail("Failed to create compute command encoder");
 
-  MTLComputeCommandEncoder.setComputePipelineState(encoder, xx pipeline_compute);
-  MTLComputeCommandEncoder.setBuffer_offset_atIndex(encoder, xx out_buffer, 0, 0);
-  #if WITH_TABLE {
-    MTLComputeCommandEncoder.setBuffer_offset_atIndex(encoder, xx table_buffer, 0, 1);
+  {
+    using MTLComputeCommandEncoder;
+    setComputePipelineState(encoder, xx pipeline_compute);
+    setBuffer_offset_atIndex(encoder, xx out_buffer, 0, 0);
+    #if WITH_TABLE setBuffer_offset_atIndex(encoder, xx table_buffer, 0, 1);
+    threads_per_grid := MTLSizeMake(ELEMENT_COUNT, 1, 1);
+    threads_per_group := MTLSizeMake(ELEMENT_COUNT, 1, 1);
+    dispatchThreads_threadsPerThreadgroup(encoder, threads_per_grid, threads_per_group);
   }
-  threads_per_grid := MTLSizeMake(ELEMENT_COUNT, 1, 1);
-  threads_per_group := MTLSizeMake(ELEMENT_COUNT, 1, 1);
-  MTLComputeCommandEncoder.dispatchThreads_threadsPerThreadgroup(encoder, threads_per_grid, threads_per_group);
   MTLCommandEncoder.endEncoding(cast(*MTLCommandEncoder) encoder);
 
   MTLCommandBuffer.commit(command_buffer);
@@ -2130,16 +2131,18 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
   if TIMINGS_ENABLED {
     log("[timing] runtime case %: total=%s compile=%s pipeline=%s setup=%s dispatch=%s cpu=%s compare=%s", case_name, timings.total_s, timings.compile_s, timings.pipeline_s, timings.gpu_setup_s, timings.dispatch_wait_s, timings.cpu_s, timings.compare_s);
   }
-  g_compute_timing_totals.case_count += 1;
-  g_compute_timing_totals.compile_s += timings.compile_s;
-  g_compute_timing_totals.pipeline_s += timings.pipeline_s;
-  g_compute_timing_totals.gpu_setup_s += timings.gpu_setup_s;
-  g_compute_timing_totals.dispatch_wait_s += timings.dispatch_wait_s;
-  g_compute_timing_totals.cpu_s += timings.cpu_s;
-  g_compute_timing_totals.compare_s += timings.compare_s;
-  g_compute_timing_totals.total_s += timings.total_s;
   
-  log("[OK] %", case_name);
+  using g_compute_timing_totals;
+  case_count += 1;
+  compile_s += timings.compile_s;
+  pipeline_s += timings.pipeline_s;
+  gpu_setup_s += timings.gpu_setup_s;
+  dispatch_wait_s += timings.dispatch_wait_s;
+  cpu_s += timings.cpu_s;
+  compare_s += timings.compare_s;
+  total_s += timings.total_s;
+  
+  if VERBOSE_TEST_LOGGING log("[OK] %", case_name);
 }
 
 proc_name_from_caller_arg_compile_time :: (call: Code, arg_index: s64) -> string {
@@ -2177,6 +2180,7 @@ n :: ($proc: $F, call := #caller_code) #compile_time {
 main :: () {
   for get_command_line_arguments() {
     if it == "-timings" TIMINGS_ENABLED = true;
+    if it == "-verbose" VERBOSE_TEST_LOGGING = true;
   }
   init_objective_c();
   init_metal();
@@ -2247,3 +2251,5 @@ log_nserror :: (label: string, error: *NSError) -> bool {
 
 #import,file "../modules/ShaderFuncs/module.jai";
 #import,file "../module.jai";
+
+VERBOSE_TEST_LOGGING := false;

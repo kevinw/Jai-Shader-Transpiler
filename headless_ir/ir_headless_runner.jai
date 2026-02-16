@@ -1,4 +1,5 @@
 HEADLESS_IR_DIR :: ".build/headless_ir";
+HEADLESS_IR_INTERMEDIATE_DIR :: ".build/ir_intermediate";
 
 fail :: (message: string, args: .. Any) {
   log_error(message, ..args);
@@ -21,6 +22,13 @@ compile_metal :: (path: string) {
   ok := ir_run_command_checked(tprint("xcrun metal %", path),
                                .["xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-c", path, "-o", tprint("%.air", path)]);
   if !ok fail("Failed to compile Metal output: %", path);
+}
+
+write_and_compile_metal_if_macos :: (path: string, source: string) {
+  #if OS == .MACOS {
+    if !write_entire_file(path, source) fail("Could not write %", path);
+    compile_metal(path);
+  }
 }
 
 Vector2 :: struct { x, y: float; }
@@ -248,41 +256,27 @@ ir_headless_fragment_boost :: (x: float) -> float {
   }
 
   metal_vertex := get_transpiled(.METAL, ir_headless_vertex_main);
-  check_generated_file_contains(".build/ir_slang/ir_headless_vertex_main_vert.spvasm", "OpEntryPoint Vertex", "generated vertex SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_vertex_main_vert.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Vertex", "generated vertex SPIR-V text output");
 
   vertex_path := tprint("%/ir_vertex_only.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(vertex_path, metal_vertex) fail("Could not write %", vertex_path);
-  #if OS == .MACOS {
-    compile_metal(vertex_path);
-  } else {
-    log("Skipping Metal compile checks on %.", OS);
-  }
+  write_and_compile_metal_if_macos(vertex_path, metal_vertex);
 
   metal_vertex_math := get_transpiled(.METAL, ir_headless_vertex_math_main);
   check_contains(metal_vertex_math, "+", "math vertex metal output");
   check_contains(metal_vertex_math, "*", "math vertex metal output");
   math_path := tprint("%/ir_vertex_math.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(math_path, metal_vertex_math) fail("Could not write %", math_path);
-  #if OS == .MACOS {
-    compile_metal(math_path);
-  }
+  write_and_compile_metal_if_macos(math_path, metal_vertex_math);
 
   metal_vertex_helpers := get_transpiled(.METAL, ir_headless_vertex_helpers_main);
   check_contains(metal_vertex_helpers, "0.25", "vertex helper metal output");
   check_contains(metal_vertex_helpers, "0.5", "vertex helper metal output");
   helper_vert_path := tprint("%/ir_vertex_helpers.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(helper_vert_path, metal_vertex_helpers) fail("Could not write %", helper_vert_path);
-  #if OS == .MACOS {
-    compile_metal(helper_vert_path);
-  }
+  write_and_compile_metal_if_macos(helper_vert_path, metal_vertex_helpers);
 
   metal_vertex_uint_div := get_transpiled(.METAL, ir_headless_vertex_uint_div_main);
   check_contains(metal_vertex_uint_div, "/", "uint division vertex metal output");
   uint_div_vert_path := tprint("%/ir_vertex_uint_div.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(uint_div_vert_path, metal_vertex_uint_div) fail("Could not write %", uint_div_vert_path);
-  #if OS == .MACOS {
-    compile_metal(uint_div_vert_path);
-  }
+  write_and_compile_metal_if_macos(uint_div_vert_path, metal_vertex_uint_div);
 
   vulkan_vertex_helpers := get_transpiled(.VULKAN_GLSL, ir_headless_vertex_helpers_main);
   check_contains(vulkan_vertex_helpers, "#version", "vertex helper Vulkan GLSL output");
@@ -291,30 +285,21 @@ ir_headless_fragment_boost :: (x: float) -> float {
 
   metal_fragment := get_transpiled(.METAL, ir_headless_fragment_main);
   check_contains(metal_fragment, "fragment", "fragment metal output");
-  check_generated_file_contains(".build/ir_slang/ir_headless_fragment_main_frag.spvasm", "OpEntryPoint Fragment", "generated fragment SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_fragment_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Fragment", "generated fragment SPIR-V text output");
   frag_path := tprint("%/ir_fragment_only.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(frag_path, metal_fragment) fail("Could not write %", frag_path);
-  #if OS == .MACOS {
-    compile_metal(frag_path);
-  }
+  write_and_compile_metal_if_macos(frag_path, metal_fragment);
 
   metal_fragment_return_note := get_transpiled(.METAL, ir_headless_fragment_return_note_main);
   check_contains(metal_fragment_return_note, "fragment", "fragment return-note metal output");
   check_contains(metal_fragment_return_note, "[[color(0)]]", "fragment return-note metal output");
-  check_generated_file_contains(".build/ir_slang/ir_headless_fragment_return_note_main_frag.spvasm", "Location 0", "fragment return-note SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_fragment_return_note_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "Location 0", "fragment return-note SPIR-V text output");
   frag_return_note_path := tprint("%/ir_fragment_return_note.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(frag_return_note_path, metal_fragment_return_note) fail("Could not write %", frag_return_note_path);
-  #if OS == .MACOS {
-    compile_metal(frag_return_note_path);
-  }
+  write_and_compile_metal_if_macos(frag_return_note_path, metal_fragment_return_note);
 
   metal_fragment_helpers := get_transpiled(.METAL, ir_headless_fragment_helpers_main);
   check_contains(metal_fragment_helpers, "0.1", "fragment helper metal output");
   helper_frag_path := tprint("%/ir_fragment_helpers.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(helper_frag_path, metal_fragment_helpers) fail("Could not write %", helper_frag_path);
-  #if OS == .MACOS {
-    compile_metal(helper_frag_path);
-  }
+  write_and_compile_metal_if_macos(helper_frag_path, metal_fragment_helpers);
 
   vulkan_fragment_helpers := get_transpiled(.VULKAN_GLSL, ir_headless_fragment_helpers_main);
   check_contains(vulkan_fragment_helpers, "#version", "fragment helper Vulkan GLSL output");
@@ -329,10 +314,10 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(vulkan_fragment_bindless, "sample_2d_textures[min(params.texture_index, 15u)]", "bindless fragment Vulkan GLSL output");
   check_contains(vulkan_fragment_bindless, "sample_2d_samplers[min(params.sampler_index, 15u)]", "bindless fragment Vulkan GLSL output");
   check_contains(vulkan_fragment_bindless, "texture(", "bindless fragment Vulkan GLSL output");
-  check_generated_file_contains(".build/ir_slang/ir_headless_fragment_bindless_main_frag.spvasm",
+  check_generated_file_contains(tprint("%/ir_headless_fragment_bindless_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
                                "OpImageSampleImplicitLod",
                                "bindless fragment SPIR-V text output");
-  check_generated_file_contains(".build/ir_slang/ir_headless_fragment_bindless_main_frag.spvasm",
+  check_generated_file_contains(tprint("%/ir_headless_fragment_bindless_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
                                " UMin ",
                                "bindless fragment SPIR-V text output");
 
@@ -346,86 +331,59 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(metal_fragment_anonymous, "fragment", "anonymous fragment metal output");
   check_contains(metal_fragment_anonymous, "[[color(0)]]", "anonymous fragment metal output");
   anon_frag_path := tprint("%/ir_fragment_anonymous.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(anon_frag_path, metal_fragment_anonymous) fail("Could not write %", anon_frag_path);
-  #if OS == .MACOS {
-    compile_metal(anon_frag_path);
-  }
+  write_and_compile_metal_if_macos(anon_frag_path, metal_fragment_anonymous);
 
   metal_compute_root := get_transpiled(.METAL, ir_headless_compute_root_struct_main);
   check_contains(metal_compute_root, "kernel", "compute root struct metal output");
   check_contains(metal_compute_root, "buffer(0)", "compute root struct metal output");
   compute_root_path := tprint("%/ir_compute_root_struct.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(compute_root_path, metal_compute_root) fail("Could not write %", compute_root_path);
-  #if OS == .MACOS {
-    compile_metal(compute_root_path);
-  }
+  write_and_compile_metal_if_macos(compute_root_path, metal_compute_root);
 
   metal_compute_pingpong := get_transpiled(.METAL, ir_headless_compute_pingpong_root_main);
   check_contains(metal_compute_pingpong, "kernel", "compute pingpong root struct metal output");
   check_contains(metal_compute_pingpong, "buffer(0)", "compute pingpong root struct metal output");
   check_contains(metal_compute_pingpong, "buffer(1)", "compute pingpong root struct metal output");
   compute_pingpong_path := tprint("%/ir_compute_pingpong_root_struct.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(compute_pingpong_path, metal_compute_pingpong) fail("Could not write %", compute_pingpong_path);
-  #if OS == .MACOS {
-    compile_metal(compute_pingpong_path);
-  }
+  write_and_compile_metal_if_macos(compute_pingpong_path, metal_compute_pingpong);
 
   metal_compute_member_subscript_struct_init := get_transpiled(.METAL, ir_headless_compute_member_subscript_struct_init_main);
   check_contains(metal_compute_member_subscript_struct_init, "kernel", "compute member-subscript struct-init metal output");
   check_contains(metal_compute_member_subscript_struct_init, "buffer(0)", "compute member-subscript struct-init metal output");
   check_contains(metal_compute_member_subscript_struct_init, "buffer(1)", "compute member-subscript struct-init metal output");
   compute_member_subscript_struct_init_path := tprint("%/ir_compute_member_subscript_struct_init.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(compute_member_subscript_struct_init_path, metal_compute_member_subscript_struct_init) fail("Could not write %", compute_member_subscript_struct_init_path);
-  #if OS == .MACOS {
-    compile_metal(compute_member_subscript_struct_init_path);
-  }
+  write_and_compile_metal_if_macos(compute_member_subscript_struct_init_path, metal_compute_member_subscript_struct_init);
 
   metal_compute_fixed_array_vector2 := get_transpiled(.METAL, ir_headless_compute_fixed_array_vector2_main);
   check_contains(metal_compute_fixed_array_vector2, "kernel", "compute fixed-array vector2 metal output");
   compute_fixed_array_vector2_path := tprint("%/ir_compute_fixed_array_vector2.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(compute_fixed_array_vector2_path, metal_compute_fixed_array_vector2) fail("Could not write %", compute_fixed_array_vector2_path);
-  #if OS == .MACOS {
-    compile_metal(compute_fixed_array_vector2_path);
-  }
+  write_and_compile_metal_if_macos(compute_fixed_array_vector2_path, metal_compute_fixed_array_vector2);
 
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
   check_contains(metal_pair, "vertex", "pair metal output");
   check_contains(metal_pair, "fragment", "pair metal output");
-  check_generated_file_contains(".build/ir_slang/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", "OpEntryPoint Vertex", "generated pair SPIR-V text output");
-  check_generated_file_contains(".build/ir_slang/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", "OpEntryPoint Fragment", "generated pair SPIR-V text output");
+  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Vertex", "generated pair SPIR-V text output");
+  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Fragment", "generated pair SPIR-V text output");
   pair_path := tprint("%/ir_pair.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(pair_path, metal_pair) fail("Could not write %", pair_path);
-  #if OS == .MACOS {
-    compile_metal(pair_path);
-  }
+  write_and_compile_metal_if_macos(pair_path, metal_pair);
 
   uint_div_pair := get_transpiled(.METAL, ir_headless_vertex_uint_div_main, ir_headless_fragment_main);
   check_contains(uint_div_pair, "vertex", "uint division pair metal output");
   check_contains(uint_div_pair, "fragment", "uint division pair metal output");
   uint_div_pair_path := tprint("%/ir_pair_uint_div.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(uint_div_pair_path, uint_div_pair) fail("Could not write %", uint_div_pair_path);
-  #if OS == .MACOS {
-    compile_metal(uint_div_pair_path);
-  }
+  write_and_compile_metal_if_macos(uint_div_pair_path, uint_div_pair);
 
   position_semantic_pair := get_transpiled(.METAL, ir_headless_vertex_position_semantic_main, ir_headless_fragment_position_semantic_main);
   check_contains(position_semantic_pair, "vertex", "position-semantic pair metal output");
   check_contains(position_semantic_pair, "fragment", "position-semantic pair metal output");
   position_semantic_pair_path := tprint("%/ir_pair_position_semantic.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(position_semantic_pair_path, position_semantic_pair) fail("Could not write %", position_semantic_pair_path);
-  #if OS == .MACOS {
-    compile_metal(position_semantic_pair_path);
-  }
+  write_and_compile_metal_if_macos(position_semantic_pair_path, position_semantic_pair);
 
   anon_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_anonymous_main);
   check_contains(anon_pair, "vertex", "anonymous pair metal output");
   check_contains(anon_pair, "fragment", "anonymous pair metal output");
   check_contains(anon_pair, "[[color(0)]]", "anonymous pair metal output");
   anon_pair_path := tprint("%/ir_pair_anonymous_fragment.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(anon_pair_path, anon_pair) fail("Could not write %", anon_pair_path);
-  #if OS == .MACOS {
-    compile_metal(anon_pair_path);
-  }
+  write_and_compile_metal_if_macos(anon_pair_path, anon_pair);
 
   boids_pair := get_transpiled(.METAL, ir_headless_boids_vertex_main, ir_headless_boids_fragment_main);
   check_contains(boids_pair, "vertex", "boids-like pair metal output");
@@ -433,10 +391,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(boids_pair, "[[vertex_id]]", "boids-like pair metal output");
   check_contains(boids_pair, "[[instance_id]]", "boids-like pair metal output");
   boids_pair_path := tprint("%/ir_boids_like_pair.metal", HEADLESS_IR_DIR);
-  if !write_entire_file(boids_pair_path, boids_pair) fail("Could not write %", boids_pair_path);
-  #if OS == .MACOS {
-    compile_metal(boids_pair_path);
-  }
+  write_and_compile_metal_if_macos(boids_pair_path, boids_pair);
 
   log("IR headless runner passed. Outputs in %", HEADLESS_IR_DIR);
 }
