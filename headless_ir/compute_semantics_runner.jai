@@ -127,6 +127,11 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"edge_case_109_shaderfuncs_normalize_mix_clamp", .Bare},
   {"edge_case_110_shaderfuncs_step_smoothstep_mod_fract", .Bare},
   {"edge_case_111_shaderfuncs_degrees_radians_chain", .Bare},
+  {"edge_case_112_tuple_destructure_compound_decl", .Bare},
+  {"edge_case_113_tuple_destructure_helper_calls", .Bare},
+  {"edge_case_114_call_arg_implicit_cast_to_s64", .Bare},
+  {"edge_case_115_shaderfuncs_vector_mix_clamp", .Bare},
+  {"edge_case_116_shaderfuncs_vector_step_smoothstep_mod", .Bare},
   {"edge_case_26_vector_negate", .Bare},
   {"edge_case_27_helper_nested_call", .Bare},
   {"edge_case_28_struct_constructor_from_member_expr", .Boids},
@@ -1836,6 +1841,79 @@ edge_case_111_shaderfuncs_degrees_radians_chain :: (using in: Compute_Semantics_
   back_deg := degrees(rad);
   sm := smoothstep(0.0, 180.0, back_deg);
   values[idx] = cast(u32) (back_deg * 3.0 + sm * 101.0);
+} @compute_shader
+
+edge_case_112_tuple_destructure_compound_decl :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  x := values[idx];
+  a, b := x + 3, x * 5 + 11;
+  values[idx] = (a ^ b) + idx;
+} @compute_shader
+
+edge_case_113_tuple_helper_a :: (x: u32) -> u32 {
+  return x * 3 + 7;
+}
+
+edge_case_113_tuple_helper_b :: (x: u32) -> u32 {
+  return x ^ 19;
+}
+
+edge_case_113_tuple_destructure_helper_calls :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  a, b := edge_case_113_tuple_helper_a(idx), edge_case_113_tuple_helper_b(values[idx]);
+  values[idx] = a + b * 5 + idx;
+} @compute_shader
+
+edge_case_114_pair_mix :: (a: s64, b: s64) -> u32 {
+  x := a * 13 + b * 29;
+  if x < 0 x = -x;
+  return cast(u32) x;
+}
+
+edge_case_114_call_arg_implicit_cast_to_s64 :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  x := idx % 11;
+  y := idx / 11;
+  a := edge_case_114_pair_mix(cast(s64) x - 1, y + 7);
+  b := edge_case_114_pair_mix(cast(s64) y + 2, x + 13);
+  values[idx] = a * 17 + b * 31 + idx;
+} @compute_shader
+
+edge_case_115_shaderfuncs_vector_mix_clamp :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  base := Vector3.{
+    cast(float) (values[idx] % 41) * 0.041 + 0.11,
+    cast(float) (idx % 29) * 0.033 + 0.07,
+    cast(float) ((values[idx] + idx) % 37) * 0.027 + 0.03,
+  };
+  hot := Vector3.{0.93, 0.62, 0.28};
+  t_scalar := cast(float) (idx % 17) * 0.05;
+  t_vec := Vector3.{0.2, 0.45, 0.8};
+  mixed_scalar := mix(base, hot, t_scalar);
+  mixed := mix(mixed_scalar, hot, t_vec);
+  bounded := clamp(mixed, 0.08, 0.91);
+  bounded = clamp(bounded, Vector3.{0.10, 0.12, 0.06}, Vector3.{0.88, 0.83, 0.79});
+  values[idx] = cast(u32) (bounded.x * 173.0 + bounded.y * 257.0 + bounded.z * 311.0 + cast(float) idx * 1.5);
+} @compute_shader
+
+edge_case_116_shaderfuncs_vector_step_smoothstep_mod :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v := Vector3.{
+    cast(float) (values[idx] % 53) * 0.041,
+    cast(float) (idx % 31) * 0.036,
+    cast(float) ((values[idx] + idx) % 47) * 0.029,
+  };
+  wrapped := mod(v * 1.37 + Vector3.{0.11, 0.53, 0.89}, 1.25);
+  st := step(0.45, wrapped);
+  sm := smoothstep(0.20, 0.95, wrapped);
+  values[idx] = cast(u32) (wrapped.x * 101.0 + wrapped.y * 113.0 + wrapped.z * 127.0 +
+                           st.x * 19.0 + st.y * 23.0 + st.z * 29.0 +
+                           sm.x * 31.0 + sm.y * 37.0 + sm.z * 41.0);
 } @compute_shader
 
 // Gap probes (not in ALL_TEST_FUNCTIONS yet):

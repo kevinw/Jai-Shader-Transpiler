@@ -24,6 +24,13 @@ Graphics_Test_Fragment_Out :: struct {
   out_color: Vector4; @semantic_SV_Target0
 }
 
+sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 {
+  _ = texture_index;
+  _ = sampler_index;
+  _ = uv;
+  return .{};
+}
+
 graphics_test_red_triangle_vertex :: (using input: Graphics_Test_Vertex_In) -> Graphics_Test_Vertex_Out {
   using out: Graphics_Test_Vertex_Out;
   position = Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
@@ -40,6 +47,29 @@ graphics_test_red_triangle_fragment :: (using input: Graphics_Test_Vertex_Out) -
 graphics_test_return_note_fragment :: (using input: Graphics_Test_Vertex_Out) -> Vector4 @SV_Target {
   _ = input;
   return Vector4.{1.0, 0.0, 0.0, 1.0};
+} @fragment_shader
+
+Graphics_Bindless_Vertex_Out :: struct {
+  position: Vector4; @semantic_SV_Position
+  uv: Vector2; @semantic_TEXCOORD0
+}
+
+Graphics_Bindless_Params :: struct {
+  texture_index: u32;
+  sampler_index: u32;
+}
+
+graphics_test_bindless_vertex :: (using input: Graphics_Test_Vertex_In) -> Graphics_Bindless_Vertex_Out {
+  using out: Graphics_Bindless_Vertex_Out;
+  position = Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
+  uv = Vector2.{(a_pos.x + 1.0) * 0.5, (a_pos.y + 1.0) * 0.5};
+  return out;
+} @vertex_shader
+
+graphics_test_bindless_fragment :: (using input: Graphics_Bindless_Vertex_Out, params: Graphics_Bindless_Params) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  out_color = sample_2d(params.texture_index, params.sampler_index, input.uv);
+  return out;
 } @fragment_shader
 
 Graphics_Instance_Vertex_In :: struct {
@@ -193,6 +223,16 @@ validate_sample_green :: (pixels: [] u8, x: s32, y: s32, width: s32) {
   b := pixels[idx + 2];
   if !(g >= 220 && r <= 40 && b <= 40) {
     fail("Expected green pixel at (%,%) but got rgb=(%,%,%)", x, y, r, g, b);
+  }
+}
+
+validate_sample_blue :: (pixels: [] u8, x: s32, y: s32, width: s32) {
+  idx := pixel_index(x, y, width);
+  r := pixels[idx + 0];
+  g := pixels[idx + 1];
+  b := pixels[idx + 2];
+  if !(b >= 220 && r <= 40 && g <= 40) {
+    fail("Expected blue pixel at (%,%) but got rgb=(%,%,%)", x, y, r, g, b);
   }
 }
 
@@ -577,6 +617,196 @@ run_instance_id_case_metal :: () {
   log("[OK] graphics_instance_id_pair (gpu_red=% cpu_red=% gpu_green=% cpu_green=%)", gpu_red_count, cpu_red_count, gpu_green_count, cpu_green_count);
 }
 
+run_bindless_sample_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_bindless_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_bindless_fragment);
+  check_contains(vertex_source, "vertex", "bindless vertex metal");
+  check_contains(fragment_source, "fragment", "bindless fragment metal");
+  check_contains(fragment_source, "sample(", "bindless fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  queue := MTLDevice.newCommandQueue(device);
+  if !queue fail("Failed to create Metal command queue");
+  defer release(queue);
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile bindless vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile bindless vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile bindless fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile bindless fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find bindless vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find bindless fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  vertex_desc := MTLVertexDescriptor.vertexDescriptor();
+  defer release(vertex_desc);
+  attr0 := MTLVertexAttributeDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.attributes(vertex_desc), 0);
+  MTLVertexAttributeDescriptor.setFormat(attr0, .MTLVertexFormatFloat2);
+  MTLVertexAttributeDescriptor.setOffset(attr0, 0);
+  MTLVertexAttributeDescriptor.setBufferIndex(attr0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLVertexBufferLayoutDescriptor.setStride(layout0, size_of(Vector2));
+  MTLVertexBufferLayoutDescriptor.setStepFunction(layout0, .MTLVertexStepFunctionPerVertex);
+  MTLVertexBufferLayoutDescriptor.setStepRate(layout0, 1);
+
+  pipeline_desc := objc_init(objc_alloc(MTLRenderPipelineDescriptor));
+  defer release(pipeline_desc);
+  MTLRenderPipelineDescriptor.setVertexFunction(pipeline_desc, xx fn_vertex);
+  MTLRenderPipelineDescriptor.setFragmentFunction(pipeline_desc, xx fn_fragment);
+  MTLRenderPipelineDescriptor.setVertexDescriptor(pipeline_desc, vertex_desc);
+  color_attachment_desc := MTLRenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPipelineDescriptor.colorAttachments(pipeline_desc), 0);
+  MTLRenderPipelineColorAttachmentDescriptor.setPixelFormat(color_attachment_desc, .MTLPixelFormatRGBA8Unorm);
+
+  error = null;
+  pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
+  if log_nserror("Failed to create bindless render pipeline", error) || !pipeline {
+    fail("Failed to create bindless render pipeline");
+  }
+  defer release(pipeline);
+
+  // Upload a 2x2 non-uniform texture (left=red, right=green) and sample through bindless descriptors.
+  sample_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm, 2, 2, NO);
+  defer release(sample_desc);
+  MTLTextureDescriptor.setUsage(sample_desc, .MTLTextureUsageShaderRead);
+  MTLTextureDescriptor.setStorageMode(sample_desc, .MTLStorageModeShared);
+  sample_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, sample_desc);
+  if !sample_tex fail("Failed to create bindless sample texture");
+  defer release(sample_tex);
+
+  sample_pixels := u8.[
+    255, 0,   0, 255,   0, 255, 0, 255,
+    255, 0,   0, 255,   0, 255, 0, 255,
+  ];
+  sample_region := MTLRegionMake2D(0, 0, 2, 2);
+  MTLTexture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(sample_tex, sample_region, 0, *sample_pixels, 8);
+
+  sampler_desc := objc_init(objc_alloc(MTLSamplerDescriptor));
+  defer release(sampler_desc);
+  MTLSamplerDescriptor.setMinFilter(sampler_desc, .MTLSamplerMinMagFilterNearest);
+  MTLSamplerDescriptor.setMagFilter(sampler_desc, .MTLSamplerMinMagFilterNearest);
+  MTLSamplerDescriptor.setMipFilter(sampler_desc, .MTLSamplerMipFilterNotMipmapped);
+  MTLSamplerDescriptor.setSAddressMode(sampler_desc, .MTLSamplerAddressModeClampToEdge);
+  MTLSamplerDescriptor.setTAddressMode(sampler_desc, .MTLSamplerAddressModeClampToEdge);
+  sampler_state := MTLDevice.newSamplerStateWithDescriptor(device, sampler_desc);
+  if !sampler_state fail("Failed to create bindless sampler state");
+  defer release(sampler_state);
+
+  bindless_params := Graphics_Bindless_Params.{texture_index = 0, sampler_index = 0};
+  bindless_params_buffer := MTLDevice.newBufferWithBytes_length_options(device, *bindless_params, size_of(Graphics_Bindless_Params), .MTLResourceStorageModeShared);
+  if !bindless_params_buffer fail("Failed to create bindless params buffer");
+  defer release(bindless_params_buffer);
+
+  texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm,
+                                                                                                  cast(NSUInteger) WINDOW_W,
+                                                                                                  cast(NSUInteger) WINDOW_H,
+                                                                                                  NO);
+  defer release(texture_desc);
+  MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
+  MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
+  color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
+  if !color_tex fail("Failed to create bindless render target texture");
+  defer release(color_tex);
+
+  verts := Vector2.[
+    Vector2.{-0.80, -0.75},
+    Vector2.{ 0.80, -0.75},
+    Vector2.{ 0.00,  0.80},
+  ];
+  vertex_buffer := MTLDevice.newBufferWithBytes_length_options(device, *verts, verts.count * size_of(Vector2), .MTLResourceStorageModeShared);
+  if !vertex_buffer fail("Failed to create bindless vertex buffer");
+  defer release(vertex_buffer);
+
+  pass := MTLRenderPassDescriptor.renderPassDescriptor();
+  color_attachment := MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPassDescriptor.colorAttachments(pass), 0);
+  MTLRenderPassColorAttachmentDescriptor.setTexture(color_attachment, xx color_tex);
+  MTLRenderPassColorAttachmentDescriptor.setLoadAction(color_attachment, .MTLLoadActionClear);
+  MTLRenderPassColorAttachmentDescriptor.setStoreAction(color_attachment, .MTLStoreActionStore);
+  MTLRenderPassColorAttachmentDescriptor.setClearColor(color_attachment, MTLClearColorMake(0.0, 0.0, 0.0, 1.0));
+
+  command_buffer := MTLCommandQueue.commandBuffer(queue);
+  if !command_buffer fail("Failed to create bindless command buffer");
+
+  encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+  if !encoder fail("Failed to create bindless render command encoder");
+  MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
+  MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLRenderCommandEncoder.setFragmentBuffer_offset_atIndex(encoder, xx bindless_params_buffer, 0, 0);
+  MTLRenderCommandEncoder.setFragmentTexture_atIndex(encoder, xx sample_tex, 1);
+  MTLRenderCommandEncoder.setFragmentSamplerState_atIndex(encoder, xx sampler_state, 0);
+
+  MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 3);
+  MTLRenderCommandEncoder.endEncoding(encoder);
+
+  MTLCommandBuffer.commit(command_buffer);
+  MTLCommandBuffer.waitUntilCompleted(command_buffer);
+
+  bytes_per_row := cast(NSUInteger) WINDOW_W * 4;
+  gpu_pixels := NewArray(cast(s64) (bytes_per_row * WINDOW_H), u8);
+  defer array_free(gpu_pixels);
+  region := MTLRegionMake2D(0, 0, cast(NSUInteger) WINDOW_W, cast(NSUInteger) WINDOW_H);
+  MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(color_tex, gpu_pixels.data, bytes_per_row, region, 0);
+
+  validate_sample(gpu_pixels, 56, 48, WINDOW_W, true);
+  validate_sample_green(gpu_pixels, 72, 48, WINDOW_W);
+  validate_sample(gpu_pixels, 10, 10, WINDOW_W, false);
+  validate_sample(gpu_pixels, 118, 10, WINDOW_W, false);
+  validate_sample(gpu_pixels, 64, 118, WINDOW_W, false);
+
+  // Verify out-of-range bindless indices are clamped in generated shader code.
+  bindless_params_oob := Graphics_Bindless_Params.{texture_index = 999, sampler_index = 999};
+  bindless_params_oob_buffer := MTLDevice.newBufferWithBytes_length_options(device, *bindless_params_oob, size_of(Graphics_Bindless_Params), .MTLResourceStorageModeShared);
+  if !bindless_params_oob_buffer fail("Failed to create bindless out-of-range params buffer");
+  defer release(bindless_params_oob_buffer);
+
+  command_buffer_oob := MTLCommandQueue.commandBuffer(queue);
+  if !command_buffer_oob fail("Failed to create bindless out-of-range command buffer");
+  encoder_oob := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer_oob, pass);
+  if !encoder_oob fail("Failed to create bindless out-of-range render command encoder");
+  MTLRenderCommandEncoder.setRenderPipelineState(encoder_oob, xx pipeline);
+  MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder_oob, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLRenderCommandEncoder.setFragmentBuffer_offset_atIndex(encoder_oob, xx bindless_params_oob_buffer, 0, 0);
+  MTLRenderCommandEncoder.setFragmentTexture_atIndex(encoder_oob, xx sample_tex, 1);
+  MTLRenderCommandEncoder.setFragmentSamplerState_atIndex(encoder_oob, xx sampler_state, 0);
+  // Index 15 in 16-wide arrays maps to explicit slots texture(16), sampler(15).
+  MTLRenderCommandEncoder.setFragmentTexture_atIndex(encoder_oob, xx sample_tex, 16);
+  MTLRenderCommandEncoder.setFragmentSamplerState_atIndex(encoder_oob, xx sampler_state, 15);
+  MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder_oob, .MTLPrimitiveTypeTriangle, 0, 3);
+  MTLRenderCommandEncoder.endEncoding(encoder_oob);
+  MTLCommandBuffer.commit(command_buffer_oob);
+  MTLCommandBuffer.waitUntilCompleted(command_buffer_oob);
+
+  gpu_pixels_oob := NewArray(cast(s64) (bytes_per_row * WINDOW_H), u8);
+  defer array_free(gpu_pixels_oob);
+  MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(color_tex, gpu_pixels_oob.data, bytes_per_row, region, 0);
+  validate_sample(gpu_pixels_oob, 56, 48, WINDOW_W, true);
+  validate_sample_green(gpu_pixels_oob, 72, 48, WINDOW_W);
+  validate_sample(gpu_pixels_oob, 10, 10, WINDOW_W, false);
+
+  log("[OK] graphics_bindless_sample");
+}
+
 main :: () {
   #if OS != .MACOS {
     log("Skipping graphics semantics runner on % (Metal-only test).", OS);
@@ -586,5 +816,6 @@ main :: () {
   run_red_triangle_case_metal();
   run_return_note_fragment_case_metal();
   run_instance_id_case_metal();
-  log("Passed 3 graphics semantics cases.");
+  run_bindless_sample_case_metal();
+  log("Passed 4 graphics semantics cases.");
 }

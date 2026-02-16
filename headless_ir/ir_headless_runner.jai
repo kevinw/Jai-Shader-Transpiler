@@ -32,6 +32,13 @@ compile_metal :: (path: string) {
 Vector2 :: struct { x, y: float; }
 Vector4 :: struct { x, y, z, w: float; }
 
+sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 {
+  _ = texture_index;
+  _ = sampler_index;
+  _ = uv;
+  return .{};
+}
+
 IR_Headless_Vertex_In :: struct {
   a_pos: Vector2; @semantic_ATTRIBUTE0
   vertex_id: u32; @semantic_SV_VertexID
@@ -79,6 +86,11 @@ ir_headless_vertex_uint_div_main :: (using input: IR_Headless_Vertex_In, using u
 
 IR_Headless_Fragment_Out :: struct {
   out_color: Vector4; @semantic_SV_Target0
+}
+
+IR_Headless_Bindless_Params :: struct {
+  texture_index: u32;
+  sampler_index: u32;
 }
 
 IR_Headless_Position_Semantic_Vertex_Out :: struct {
@@ -154,6 +166,13 @@ ir_headless_boids_fragment_main :: (using input: IR_Headless_Vertex_Out, params:
 ir_headless_fragment_main :: (using input: IR_Headless_Vertex_Out) -> IR_Headless_Fragment_Out {
   using out: IR_Headless_Fragment_Out;
   out_color = input.color;
+  return out;
+} @fragment_shader
+
+ir_headless_fragment_bindless_main :: (using input: IR_Headless_Vertex_Out, params: IR_Headless_Bindless_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  uv := Vector2.{input.position.x, input.position.y};
+  out_color = sample_2d(params.texture_index, params.sampler_index, uv);
   return out;
 } @fragment_shader
 
@@ -307,6 +326,27 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(vulkan_fragment_helpers, "#version", "fragment helper Vulkan GLSL output");
   check_contains(vulkan_fragment_helpers, "0.1", "fragment helper Vulkan GLSL output");
   check_contains(vulkan_fragment_helpers, "void main()", "fragment helper Vulkan GLSL output");
+
+  vulkan_fragment_bindless := get_transpiled(.VULKAN_GLSL, ir_headless_fragment_bindless_main);
+  check_contains(vulkan_fragment_bindless, "#version", "bindless fragment Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless, "sampler2D", "bindless fragment Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless, "sample_2d_textures[16]", "bindless fragment Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless, "sample_2d_samplers[16]", "bindless fragment Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless, "sample_2d_textures[min(params.texture_index, 15u)]", "bindless fragment Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless, "sample_2d_samplers[min(params.sampler_index, 15u)]", "bindless fragment Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless, "texture(", "bindless fragment Vulkan GLSL output");
+  check_generated_file_contains(".build/ir_slang/ir_headless_fragment_bindless_main_frag.spvasm",
+                               "OpImageSampleImplicitLod",
+                               "bindless fragment SPIR-V text output");
+  check_generated_file_contains(".build/ir_slang/ir_headless_fragment_bindless_main_frag.spvasm",
+                               " UMin ",
+                               "bindless fragment SPIR-V text output");
+
+  metal_fragment_bindless := get_transpiled(.METAL, ir_headless_fragment_bindless_main);
+  check_contains(metal_fragment_bindless, "array<texture2d<float>, 16>", "bindless fragment metal output");
+  check_contains(metal_fragment_bindless, "sample_2d_textures [[texture(1)]]", "bindless fragment metal output");
+  check_contains(metal_fragment_bindless, "array<sampler, 16>", "bindless fragment metal output");
+  check_contains(metal_fragment_bindless, "sample_2d_samplers [[sampler(0)]]", "bindless fragment metal output");
 
   metal_fragment_anonymous := get_transpiled(.METAL, ir_headless_fragment_anonymous_main);
   check_contains(metal_fragment_anonymous, "fragment", "anonymous fragment metal output");

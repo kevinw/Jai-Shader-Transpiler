@@ -1,5 +1,0 @@
-.out/top_level_struct_pointer.metal:36:62: error: invalid type 'device float *device *' for buffer declaration
-[[fragment]] FSOut_0 FragmentMain(float4 pos_1 [[position]], float device* device* entryPointParams_fragment_data_color_1)
-                                                             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-.out/top_level_struct_pointer.metal:36:62: note: type 'device float *' cannot be used in buffer pointee type
-1 error generated.

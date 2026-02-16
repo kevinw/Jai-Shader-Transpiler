@@ -320,6 +320,48 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       return true;
     }
 
+    case .COMPOUND_DECLARATION; {
+      op := cast(*Code_Compound_Declaration) stmt;
+      if !op.comma_separated_assignment || op.comma_separated_assignment.arguments.count == 0 {
+        return_err("IR lowering: malformed compound declaration (missing arguments)", stmt);
+      }
+
+      lowered_resolved_decls: [..] *Code_Declaration;
+      for op.comma_separated_assignment.arguments {
+        arg_node := it.node;
+        if !arg_node continue;
+
+        if arg_node.kind == .DECLARATION {
+          decl := cast(*Code_Declaration) arg_node;
+          already := false;
+          for lowered_resolved_decls if it == decl { already = true; break; }
+          if !already array_add(*lowered_resolved_decls, decl);
+          if !ir_shared_lower_stmt(arg_node, out_block, input_fields, output_fields, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth, state) return false;
+          continue;
+        }
+
+        if arg_node.kind == .IDENT {
+          ident := cast(*Code_Ident) arg_node;
+          if ident.resolved_declaration {
+            decl := ident.resolved_declaration;
+            already := false;
+            for lowered_resolved_decls if it == decl { already = true; break; }
+            if !already {
+              array_add(*lowered_resolved_decls, decl);
+              if !ir_shared_lower_stmt(cast(*Code_Node) decl, out_block, input_fields, output_fields, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth, state) return false;
+            }
+            continue;
+          }
+        }
+
+        if !ir_shared_lower_stmt(arg_node, out_block, input_fields, output_fields, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth, state) {
+          return_err(tprint("IR lowering: unsupported compound declaration argument kind (%)", arg_node.kind), arg_node);
+        }
+      }
+
+      return true;
+    }
+
     case .BINARY_OPERATOR; {
       bn := cast(*Code_Binary_Operator) stmt;
       if bn.operator_type == cast(Operator_Type) #char "=" && bn.left && bn.left.kind == .IDENT {
@@ -709,6 +751,7 @@ ir_shared_is_slang_builtin_name :: (name: string) -> bool {
   if name == "dot" return true;
   if name == "cross" return true;
   if name == "mix" return true;
+  if name == "sample_2d" return true;
   return false;
 }
 
@@ -718,8 +761,18 @@ ir_shared_collect_calls_in_node :: (node: *Code_Node, called_headers: *[..] *Cod
   if node.kind == {
     case .PROCEDURE_CALL; {
       pc := cast(*Code_Procedure_Call) node;
+      header: *Code_Procedure_Header;
       if pc.resolved_procedure_expression && pc.resolved_procedure_expression.kind == .PROCEDURE_HEADER {
-        header := cast(*Code_Procedure_Header) pc.resolved_procedure_expression;
+        header = cast(*Code_Procedure_Header) pc.resolved_procedure_expression;
+      } else if pc.procedure_expression && pc.procedure_expression.kind == .IDENT {
+        ident := cast(*Code_Ident) pc.procedure_expression;
+        if ident.resolved_declaration && ident.resolved_declaration.expression &&
+          ident.resolved_declaration.expression.kind == .PROCEDURE_HEADER {
+          header = cast(*Code_Procedure_Header) ident.resolved_declaration.expression;
+        }
+      }
+
+      if header {
         if ir_shared_is_slang_builtin_name(header.name) {
           // Keep as direct call in emitted Slang instead of lowering Jai stdlib bodies.
         } else if header.body_or_null && !ir_shared_header_in_list(called_headers, header) {
@@ -734,6 +787,24 @@ ir_shared_collect_calls_in_node :: (node: *Code_Node, called_headers: *[..] *Cod
     case .DECLARATION; {
       decl := cast(*Code_Declaration) node;
       if decl.expression ir_shared_collect_calls_in_node(decl.expression, called_headers);
+      return;
+    }
+
+    case .COMPOUND_DECLARATION; {
+      op := cast(*Code_Compound_Declaration) node;
+      if op.comma_separated_assignment {
+        for op.comma_separated_assignment.arguments {
+          arg_node := it.node;
+          if !arg_node continue;
+          ir_shared_collect_calls_in_node(arg_node, called_headers);
+          if arg_node.kind == .IDENT {
+            ident := cast(*Code_Ident) arg_node;
+            if ident.resolved_declaration {
+              ir_shared_collect_calls_in_node(cast(*Code_Node) ident.resolved_declaration, called_headers);
+            }
+          }
+        }
+      }
       return;
     }
 
@@ -776,6 +847,18 @@ ir_shared_collect_calls_in_node :: (node: *Code_Node, called_headers: *[..] *Cod
     case .RETURN; {
       op := cast(*Code_Return) node;
       for op.arguments_sorted ir_shared_collect_calls_in_node(it, called_headers);
+      return;
+    }
+
+    case .EXTRACT; {
+      op := cast(*Code_Extract) node;
+      if op.from ir_shared_collect_calls_in_node(op.from, called_headers);
+      return;
+    }
+
+    case .COMMA_SEPARATED_ARGUMENTS; {
+      op := cast(*Code_Comma_Separated_Arguments) node;
+      for op.arguments if it.node ir_shared_collect_calls_in_node(it.node, called_headers);
       return;
     }
 

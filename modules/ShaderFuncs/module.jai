@@ -1,7 +1,6 @@
 #import "Basic";
 #import "Math";
 
-#scope_export
 
 SamplerState :: #type,distinct s32;
 Texture1D :: struct { Sample: #type (sampler: SamplerState, tex_coord: float32) -> Vector4; };
@@ -22,90 +21,105 @@ Sampler1D :: #type,distinct s32;
 Sampler2D :: #type,distinct s32;
 Sampler3D :: #type,distinct s32;
 
-floor :: inline (v: Vector2) -> Vector2 { return Vector2.{ floor(v.x), floor(v.y) }; }
-floor :: inline (v: Vector3) -> Vector3 { return Vector3.{ floor(v.x), floor(v.y), floor(v.z) }; }
-floor :: inline (v: Vector4) -> Vector4 { return Vector4.{ floor(v.x), floor(v.y), floor(v.z), floor(v.w) }; }
+floor :: inline (v: Vector2) -> Vector2 { return { floor(v.x), floor(v.y) }; }
+floor :: inline (v: Vector3) -> Vector3 { return { floor(v.x), floor(v.y), floor(v.z) }; }
+floor :: inline (v: Vector4) -> Vector4 { return { floor(v.x), floor(v.y), floor(v.z), floor(v.w) }; }
 
 radians :: inline (degrees: $T) -> T {
   #assert T == float || T == float64;
   return degrees * xx (3.1415926535 / 180);
 }
-radians :: inline (v: Vector2) -> Vector2 { return Vector2.{ radians(v.x), radians(v.y) }; }
-radians :: inline (v: Vector3) -> Vector3 { return Vector3.{ radians(v.x), radians(v.y), radians(v.z) }; }
-radians :: inline (v: Vector4) -> Vector4 { return Vector4.{ radians(v.x), radians(v.y), radians(v.z), radians(v.w) }; }
+radians :: inline (v: Vector2) -> Vector2 { return { radians(v.x), radians(v.y) }; }
+radians :: inline (v: Vector3) -> Vector3 { return { radians(v.x), radians(v.y), radians(v.z) }; }
+radians :: inline (v: Vector4) -> Vector4 { return { radians(v.x), radians(v.y), radians(v.z), radians(v.w) }; }
 
 degrees :: inline (radians: $T) -> T {
   #assert T == float || T == float64;
   return radians * xx (180 / 3.1415926535);
 }
-degrees :: inline (v: Vector2) -> Vector2 { return Vector2.{ degrees(v.x), degrees(v.y) }; }
-degrees :: inline (v: Vector3) -> Vector3 { return Vector3.{ degrees(v.x), degrees(v.y), degrees(v.z) }; }
-degrees :: inline (v: Vector4) -> Vector4 { return Vector4.{ degrees(v.x), degrees(v.y), degrees(v.z), degrees(v.w) }; }
+degrees :: inline (v: Vector2) -> Vector2 { return { degrees(v.x), degrees(v.y) }; }
+degrees :: inline (v: Vector3) -> Vector3 { return { degrees(v.x), degrees(v.y), degrees(v.z) }; }
+degrees :: inline (v: Vector4) -> Vector4 { return { degrees(v.x), degrees(v.y), degrees(v.z), degrees(v.w) }; }
 
 exp2 :: inline (x: $T) -> T {
   #assert T == float || T == float64;
   return xx pow(2, x);
 }
-exp2 :: inline (v: Vector2) -> Vector2 { return Vector2.{ exp2(v.x), exp2(v.y) }; }
-exp2 :: inline (v: Vector3) -> Vector3 { return Vector3.{ exp2(v.x), exp2(v.y), exp2(v.z) }; }
-exp2 :: inline (v: Vector4) -> Vector4 { return Vector4.{ exp2(v.x), exp2(v.y), exp2(v.z), exp2(v.w) }; }
+exp2 :: inline (v: Vector2) -> Vector2 { return { exp2(v.x), exp2(v.y) }; }
+exp2 :: inline (v: Vector3) -> Vector3 { return { exp2(v.x), exp2(v.y), exp2(v.z) }; }
+exp2 :: inline (v: Vector4) -> Vector4 { return { exp2(v.x), exp2(v.y), exp2(v.z), exp2(v.w) }; }
 
 fma :: inline (a: $T, b: T, c: T) -> T {
   #assert T == float || T == float64;
   return a * b + c;
 }
-fma :: inline (a: Vector2, b: Vector2, c: Vector2) -> Vector2 { return Vector2.{ fma(a.x, b.x, c.x), fma(a.y, b.y, c.y) }; }
-fma :: inline (a: Vector3, b: Vector3, c: Vector3) -> Vector3 { return Vector3.{ fma(a.x, b.x, c.x), fma(a.y, b.y, c.y), fma(a.z, b.z, c.z) }; }
-fma :: inline (a: Vector4, b: Vector4, c: Vector4) -> Vector4 { return Vector4.{ fma(a.x, b.x, c.x), fma(a.y, b.y, c.y), fma(a.z, b.z, c.z), fma(a.w, b.w, c.w) }; }
+fma :: inline (a: Vector2, b: Vector2, c: Vector2) -> Vector2 { return { fma(a.x, b.x, c.x), fma(a.y, b.y, c.y) }; }
+fma :: inline (a: Vector3, b: Vector3, c: Vector3) -> Vector3 { return { fma(a.x, b.x, c.x), fma(a.y, b.y, c.y), fma(a.z, b.z, c.z) }; }
+fma :: inline (a: Vector4, b: Vector4, c: Vector4) -> Vector4 { return { fma(a.x, b.x, c.x), fma(a.y, b.y, c.y), fma(a.z, b.z, c.z), fma(a.w, b.w, c.w) }; }
 
 fract :: inline (x: $T) -> T {
   #assert T == float || T == float64;
   return x - floor(x);
 }
-fract :: inline (v: Vector2) -> Vector2 { return Vector2.{ fract(v.x), fract(v.y) }; }
-fract :: inline (v: Vector3) -> Vector3 { return Vector3.{ fract(v.x), fract(v.y), fract(v.z) }; }
-fract :: inline (v: Vector4) -> Vector4 { return Vector4.{ fract(v.x), fract(v.y), fract(v.z), fract(v.w) }; }
+fract :: inline (v: Vector2) -> Vector2 { return { fract(v.x), fract(v.y) }; }
+fract :: inline (v: Vector3) -> Vector3 { return { fract(v.x), fract(v.y), fract(v.z) }; }
+fract :: inline (v: Vector4) -> Vector4 { return { fract(v.x), fract(v.y), fract(v.z), fract(v.w) }; }
 
 inversesqrt :: inline (x: $T) -> T {
   #assert T == float || T == float64;
   return 1 / sqrt(x);
 }
-inversesqrt :: inline (v: Vector2) -> Vector2 { return Vector2.{ inversesqrt(v.x), inversesqrt(v.y) }; }
-inversesqrt :: inline (v: Vector3) -> Vector3 { return Vector3.{ inversesqrt(v.x), inversesqrt(v.y), inversesqrt(v.z) }; }
-inversesqrt :: inline (v: Vector4) -> Vector4 { return Vector4.{ inversesqrt(v.x), inversesqrt(v.y), inversesqrt(v.z), inversesqrt(v.w) }; }
+inversesqrt :: inline (v: Vector2) -> Vector2 { return { inversesqrt(v.x), inversesqrt(v.y) }; }
+inversesqrt :: inline (v: Vector3) -> Vector3 { return { inversesqrt(v.x), inversesqrt(v.y), inversesqrt(v.z) }; }
+inversesqrt :: inline (v: Vector4) -> Vector4 { return { inversesqrt(v.x), inversesqrt(v.y), inversesqrt(v.z), inversesqrt(v.w) }; }
 
 log2 :: inline (x: $T) -> T {
   #assert T == float || T == float64;
   return log(x) / log(2);
 }
-log2 :: inline (v: Vector2) -> Vector2 { return Vector2.{ log2(v.x), log2(v.y) }; }
-log2 :: inline (v: Vector3) -> Vector3 { return Vector3.{ log2(v.x), log2(v.y), log2(v.z) }; }
-log2 :: inline (v: Vector4) -> Vector4 { return Vector4.{ log2(v.x), log2(v.y), log2(v.z), log2(v.w) }; }
+log2 :: inline (v: Vector2) -> Vector2 { return { log2(v.x), log2(v.y) }; }
+log2 :: inline (v: Vector3) -> Vector3 { return { log2(v.x), log2(v.y), log2(v.z) }; }
+log2 :: inline (v: Vector4) -> Vector4 { return { log2(v.x), log2(v.y), log2(v.z), log2(v.w) }; }
 
 mix :: (x: $T, y: T, t: $M) -> T #expand {
   #assert (T == float || T == float64) && (M == float || M == float64 || M == bool);
   return lerp(x, y, xx t);
 }
-mix :: inline (a: Vector2, b: Vector2, m: BVector2) -> Vector2 { return Vector2.{ mix(a.x, b.x, m.x), mix(a.y, b.y, m.y) }; }
-mix :: inline (a: Vector3, b: Vector3, m: BVector3) -> Vector3 { return Vector3.{ mix(a.x, b.x, m.x), mix(a.y, b.y, m.y), mix(a.z, b.z, m.z) }; }
-mix :: inline (a: Vector4, b: Vector4, m: BVector4) -> Vector4 { return Vector4.{ mix(a.x, b.x, m.x), mix(a.y, b.y, m.y), mix(a.z, b.z, m.z), mix(a.w, b.w, m.w) }; }
+mix :: inline (a: Vector2, b: Vector2, m: float) -> Vector2    { return { mix(a.x, b.x, m), mix(a.y, b.y, m) }; }
+mix :: inline (a: Vector3, b: Vector3, m: float) -> Vector3    { return { mix(a.x, b.x, m), mix(a.y, b.y, m), mix(a.z, b.z, m) }; }
+mix :: inline (a: Vector4, b: Vector4, m: float) -> Vector4    { return { mix(a.x, b.x, m), mix(a.y, b.y, m), mix(a.z, b.z, m), mix(a.w, b.w, m) }; }
+mix :: inline (a: Vector2, b: Vector2, m: Vector2) -> Vector2  { return { mix(a.x, b.x, m.x), mix(a.y, b.y, m.y) }; }
+mix :: inline (a: Vector3, b: Vector3, m: Vector3) -> Vector3  { return { mix(a.x, b.x, m.x), mix(a.y, b.y, m.y), mix(a.z, b.z, m.z) }; }
+mix :: inline (a: Vector4, b: Vector4, m: Vector4) -> Vector4  { return { mix(a.x, b.x, m.x), mix(a.y, b.y, m.y), mix(a.z, b.z, m.z), mix(a.w, b.w, m.w) }; }
+mix :: inline (a: Vector2, b: Vector2, m: BVector2) -> Vector2 { return { mix(a.x, b.x, m.x), mix(a.y, b.y, m.y) }; }
+mix :: inline (a: Vector3, b: Vector3, m: BVector3) -> Vector3 { return { mix(a.x, b.x, m.x), mix(a.y, b.y, m.y), mix(a.z, b.z, m.z) }; }
+mix :: inline (a: Vector4, b: Vector4, m: BVector4) -> Vector4 { return { mix(a.x, b.x, m.x), mix(a.y, b.y, m.y), mix(a.z, b.z, m.z), mix(a.w, b.w, m.w) }; }
+
+clamp :: inline (v: Vector2, low: float, high: float) -> Vector2     { return { clamp(v.x, low, high), clamp(v.y, low, high) }; }
+clamp :: inline (v: Vector3, low: float, high: float) -> Vector3     { return { clamp(v.x, low, high), clamp(v.y, low, high), clamp(v.z, low, high) }; }
+clamp :: inline (v: Vector4, low: float, high: float) -> Vector4     { return { clamp(v.x, low, high), clamp(v.y, low, high), clamp(v.z, low, high), clamp(v.w, low, high) }; }
+clamp :: inline (v: Vector3, low: Vector3, high: Vector3) -> Vector3 { return { clamp(v.x, low.x, high.x), clamp(v.y, low.y, high.y), clamp(v.z, low.z, high.z) }; }
+clamp :: inline (v: Vector4, low: Vector4, high: Vector4) -> Vector4 { return { clamp(v.x, low.x, high.x), clamp(v.y, low.y, high.y), clamp(v.z, low.z, high.z), clamp(v.w, low.w, high.w) }; }
 
 mod :: inline (x: $T, y: T) -> T {
   #assert T == float || T == float64;
   return x - y * floor(x / y);
 }
-mod :: inline (a: Vector2, b: Vector2) -> Vector2 { return Vector2.{ mod(a.x, b.x), mod(a.y, b.y) }; }
-mod :: inline (a: Vector3, b: Vector3) -> Vector3 { return Vector3.{ mod(a.x, b.x), mod(a.y, b.y), mod(a.z, b.z) }; }
-mod :: inline (a: Vector4, b: Vector4) -> Vector4 { return Vector4.{ mod(a.x, b.x), mod(a.y, b.y), mod(a.z, b.z), mod(a.w, b.w) }; }
+mod :: inline (a: Vector2, b: float)   -> Vector2 { return { mod(a.x, b), mod(a.y, b) }; }
+mod :: inline (a: Vector3, b: float)   -> Vector3 { return { mod(a.x, b), mod(a.y, b), mod(a.z, b) }; }
+mod :: inline (a: Vector4, b: float)   -> Vector4 { return { mod(a.x, b), mod(a.y, b), mod(a.z, b), mod(a.w, b) }; }
+mod :: inline (a: Vector2, b: Vector2) -> Vector2 { return { mod(a.x, b.x), mod(a.y, b.y) }; }
+mod :: inline (a: Vector3, b: Vector3) -> Vector3 { return { mod(a.x, b.x), mod(a.y, b.y), mod(a.z, b.z) }; }
+mod :: inline (a: Vector4, b: Vector4) -> Vector4 { return { mod(a.x, b.x), mod(a.y, b.y), mod(a.z, b.z), mod(a.w, b.w) }; }
 
 round :: (x: $T) -> T {
   #assert T == float || T == float64;
   if x - floor(x) > 0.5 return ceil(x);
   else return floor(x);
 }
-round :: inline (v: Vector2) -> Vector2 { return Vector2.{ round(v.x), round(v.y) }; }
-round :: inline (v: Vector3) -> Vector3 { return Vector3.{ round(v.x), round(v.y), round(v.z) }; }
-round :: inline (v: Vector4) -> Vector4 { return Vector4.{ round(v.x), round(v.y), round(v.z), round(v.w) }; }
+round :: inline (v: Vector2) -> Vector2 { return { round(v.x), round(v.y) }; }
+round :: inline (v: Vector3) -> Vector3 { return { round(v.x), round(v.y), round(v.z) }; }
+round :: inline (v: Vector4) -> Vector4 { return { round(v.x), round(v.y), round(v.z), round(v.w) }; }
 
 roundEven :: (x: $T) -> T {
   #assert T == float || T == float64;
@@ -114,9 +128,9 @@ roundEven :: (x: $T) -> T {
   else if pivot < 0.5 return floor(x);
   else return ifx is_even(ceil(x)) then ceil(x) else floor(x);
 }
-roundEven :: inline (v: Vector2) -> Vector2 { return Vector2.{ roundEven(v.x), roundEven(v.y) }; }
-roundEven :: inline (v: Vector3) -> Vector3 { return Vector3.{ roundEven(v.x), roundEven(v.y), roundEven(v.z) }; }
-roundEven :: inline (v: Vector4) -> Vector4 { return Vector4.{ roundEven(v.x), roundEven(v.y), roundEven(v.z), roundEven(v.w) }; }
+roundEven :: inline (v: Vector2) -> Vector2 { return { roundEven(v.x), roundEven(v.y) }; }
+roundEven :: inline (v: Vector3) -> Vector3 { return { roundEven(v.x), roundEven(v.y), roundEven(v.z) }; }
+roundEven :: inline (v: Vector4) -> Vector4 { return { roundEven(v.x), roundEven(v.y), roundEven(v.z), roundEven(v.w) }; }
 
 sign :: (x: $T) -> T
 #modify { return is_number(T); }
@@ -133,22 +147,28 @@ smoothstep :: inline (edge0: $T, edge1: T, x: T) -> T {
   t := clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
   return t * t * (3.0 - 2.0 * t);
 }
-smoothstep :: inline (a: Vector2, b: Vector2, t: Vector2) -> Vector2 { return Vector2.{ smoothstep(a.x, b.x, t.x), smoothstep(a.y, b.y, t.y) }; }
-smoothstep :: inline (a: Vector3, b: Vector3, t: Vector3) -> Vector3 { return Vector3.{ smoothstep(a.x, b.x, t.x), smoothstep(a.y, b.y, t.y), smoothstep(a.z, b.z, t.z) }; }
-smoothstep :: inline (a: Vector4, b: Vector4, t: Vector4) -> Vector4 { return Vector4.{ smoothstep(a.x, b.x, t.x), smoothstep(a.y, b.y, t.y), smoothstep(a.z, b.z, t.z), smoothstep(a.w, b.w, t.w) }; }
+smoothstep :: inline (a: float, b: float, t: Vector2) -> Vector2     { return { smoothstep(a, b, t.x), smoothstep(a, b, t.y) }; }
+smoothstep :: inline (a: float, b: float, t: Vector3) -> Vector3     { return { smoothstep(a, b, t.x), smoothstep(a, b, t.y), smoothstep(a, b, t.z) }; }
+smoothstep :: inline (a: float, b: float, t: Vector4) -> Vector4     { return { smoothstep(a, b, t.x), smoothstep(a, b, t.y), smoothstep(a, b, t.z), smoothstep(a, b, t.w) }; }
+smoothstep :: inline (a: Vector2, b: Vector2, t: Vector2) -> Vector2 { return { smoothstep(a.x, b.x, t.x), smoothstep(a.y, b.y, t.y) }; }
+smoothstep :: inline (a: Vector3, b: Vector3, t: Vector3) -> Vector3 { return { smoothstep(a.x, b.x, t.x), smoothstep(a.y, b.y, t.y), smoothstep(a.z, b.z, t.z) }; }
+smoothstep :: inline (a: Vector4, b: Vector4, t: Vector4) -> Vector4 { return { smoothstep(a.x, b.x, t.x), smoothstep(a.y, b.y, t.y), smoothstep(a.z, b.z, t.z), smoothstep(a.w, b.w, t.w) }; }
 
 step :: (edge: $T, x: T) -> T {
   #assert T == float || T == float64;
   return ifx x < edge then 0.0 else 1.0;
 }
-step :: inline (edge: Vector2, x: Vector2) -> Vector2 { return Vector2.{ step(edge.x, x.x), step(edge.y, x.y) }; }
-step :: inline (edge: Vector3, x: Vector3) -> Vector3 { return Vector3.{ step(edge.x, x.x), step(edge.y, x.y), step(edge.z, x.z) }; }
-step :: inline (edge: Vector4, x: Vector4) -> Vector4 { return Vector4.{ step(edge.x, x.x), step(edge.y, x.y), step(edge.z, x.z), step(edge.w, x.w) }; }
+step :: inline (edge: float, x: Vector2)   -> Vector2 { return { step(edge, x.x), step(edge, x.y) }; }
+step :: inline (edge: float, x: Vector3)   -> Vector3 { return { step(edge, x.x), step(edge, x.y), step(edge, x.z) }; }
+step :: inline (edge: float, x: Vector4)   -> Vector4 { return { step(edge, x.x), step(edge, x.y), step(edge, x.z), step(edge, x.w) }; }
+step :: inline (edge: Vector2, x: Vector2) -> Vector2 { return { step(edge.x, x.x), step(edge.y, x.y) }; }
+step :: inline (edge: Vector3, x: Vector3) -> Vector3 { return { step(edge.x, x.x), step(edge.y, x.y), step(edge.z, x.z) }; }
+step :: inline (edge: Vector4, x: Vector4) -> Vector4 { return { step(edge.x, x.x), step(edge.y, x.y), step(edge.z, x.z), step(edge.w, x.w) }; }
 
 trunc :: inline (x: $T) -> T { #assert T == float || T == float64; return floor(x); };
-trunc :: inline (v: Vector2) -> Vector2 { return Vector2.{ trunc(v.x), trunc(v.y) }; }
-trunc :: inline (v: Vector3) -> Vector3 { return Vector3.{ trunc(v.x), trunc(v.y), trunc(v.z) }; }
-trunc :: inline (v: Vector4) -> Vector4 { return Vector4.{ trunc(v.x), trunc(v.y), trunc(v.z), trunc(v.w) }; }
+trunc :: inline (v: Vector2) -> Vector2 { return { trunc(v.x), trunc(v.y) }; }
+trunc :: inline (v: Vector3) -> Vector3 { return { trunc(v.x), trunc(v.y), trunc(v.z) }; }
+trunc :: inline (v: Vector4) -> Vector4 { return { trunc(v.x), trunc(v.y), trunc(v.z), trunc(v.w) }; }
 
 equal :: inline (a: $T, b: T) -> BVector2 { #assert T == Vector2 || T == IVector2 || T == UVector2; return BVector2.{ a.x == b.x, a.y == b.y }; }
 equal :: inline (a: $T, b: T) -> BVector3 { #assert T == Vector3 || T == IVector3 || T == UVector3; return BVector3.{ a.x == b.x, a.y == b.y, a.z == b.z }; }
@@ -159,10 +179,9 @@ faceforward :: inline (N: $T, I: T, Nref: T) -> T {
   return ifx dot(Nref, I) < 0 then N else -N;
 }
 
-normalize :: inline (v: $T) -> T {
-  #assert T == Vector2 || T == Vector3 || T == Vector4;
-  return v / length(v);
-}
+normalize :: inline (v: Vector2) -> Vector2 { return v / length(v); }
+normalize :: inline (v: Vector3) -> Vector3 { return v / length(v); }
+normalize :: inline (v: Vector4) -> Vector4 { return v / length(v); }
 
 notEqual :: inline (a: $T, b: T) -> BVector2 { #assert T == Vector2 || T == IVector2 || T == UVector2; return BVector2.{ a.x != b.x, a.y != b.y }; }
 notEqual :: inline (a: $T, b: T) -> BVector3 { #assert T == Vector3 || T == IVector3 || T == UVector3; return BVector3.{ a.x != b.x, a.y != b.y, a.z != b.z }; }
@@ -176,7 +195,7 @@ reflect :: (I: $T, N: T) -> T {
 refract :: (I: $T, N: T, eta: float) -> T {
   #assert T == Vector2 || T == Vector3 || T == Vector4;
   k := 1.0 - eta * eta * (1.0 - dot(N, I) * dot(N, I));
-  if (k < 0.0)
+  if k < 0.0
       return .{};
   else
       return eta * I - (eta * dot(N, I) + sqrt(k)) * N;
@@ -207,6 +226,10 @@ not :: inline (v: BVector4) -> BVector4 { return BVector4.{ !v.x, !v.y, !v.z, !v
 texture :: (sampler: $T, point: $S, bias: float = 0) -> Vector4 {
   #assert (T == Sampler1D && S == float) || (T == Sampler2D && S == Vector2) || (T == Sampler3D && S == Vector3);
 }
+
+// Sampling helper for the IR SPIR-V backend path.
+// `texture_index` and `sampler_index` index into backend-managed descriptor arrays.
+sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 { return {}; }
 
 is_number :: (T: Type) -> bool {
   return T == float ||

@@ -1159,8 +1159,23 @@ ir_lower_expr :: (node: *Code_Node,
     case .CAST; {
       cast_node := cast(*Code_Cast) node;
       if !cast_node.target_type {
-        ir_set_diagnostic(state, "IR lowering: cast is missing target type", node);
-        return null, false;
+        // Some implicit conversion casts arrive without an explicit target_type node.
+        // In that case, recover the destination type from the cast expression type.
+        fallback_type := node.type;
+        if !fallback_type fallback_type = expected_type;
+        inner, inner_ok := ir_lower_expr(cast_node.expression, input_fields, output_fields, active_usings, active_aliases, state, fallback_type);
+        if !inner_ok return null, false;
+        if !fallback_type return inner, true;
+
+        fallback_type_name, fallback_ok := ir_type_to_slang_name(fallback_type);
+        if !fallback_ok {
+          ir_set_diagnostic(state, "IR lowering: cast is missing target type and fallback type is unsupported", node);
+          return null, false;
+        }
+        out := ir_expr_new(.CAST);
+        out.text = fallback_type_name;
+        out.left = inner;
+        return out, true;
       }
       target_type_info := cast_node.target_type.result;
       type_name := "";
@@ -1198,6 +1213,48 @@ ir_lower_expr :: (node: *Code_Node,
         if !ok return null, false;
         array_add(*out.args, arg);
       }
+      return out, true;
+    }
+
+    case .EXTRACT; {
+      ex := cast(*Code_Extract) node;
+      if !ex.from {
+        ir_set_diagnostic(state, "IR lowering: extract expression missing source", node);
+        return null, false;
+      }
+
+      if ex.from.kind == .COMMA_SEPARATED_ARGUMENTS {
+        comma_args := cast(*Code_Comma_Separated_Arguments) ex.from;
+        if ex.index < 0 || ex.index >= comma_args.arguments.count {
+          ir_set_diagnostic(state, "IR lowering: extract index out of range for comma-separated arguments", node);
+          return null, false;
+        }
+        target := comma_args.arguments[ex.index].node;
+        if !target {
+          ir_set_diagnostic(state, "IR lowering: extract target argument is missing", node);
+          return null, false;
+        }
+        extracted_expr, extracted_ok := ir_lower_expr(target, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
+        return extracted_expr, extracted_ok;
+      }
+
+      from_expr, from_ok := ir_lower_expr(ex.from, input_fields, output_fields, active_usings, active_aliases, state);
+      if !from_ok return null, false;
+
+      member_name := "";
+      if ex.from.type && ex.from.type.type == .STRUCT {
+        st := cast(*Type_Info_Struct) ex.from.type;
+        if ex.index >= 0 && ex.index < st.members.count {
+          member_name = st.members[ex.index].name;
+        }
+      }
+      if member_name.count == 0 {
+        member_name = tprint("_%", ex.index);
+      }
+
+      out := ir_expr_new(.MEMBER);
+      out.left = from_expr;
+      out.text = member_name;
       return out, true;
     }
   }

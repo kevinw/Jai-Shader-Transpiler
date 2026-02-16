@@ -1,3 +1,25 @@
+SAMPLE_2D_TEXTURES_BINDING :: 1;
+SAMPLE_2D_SAMPLERS_BINDING :: 0;
+
+spv_append_sample_2d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  if !s.uses_sample_2d return;
+  append(sb, tprint("% = OpTypeImage % 2D 0 0 0 1 Unknown\n", id_text(s.id_image2d), id_text(s.id_float)));
+  append(sb, tprint("% = OpTypeSampler\n", id_text(s.id_sampler)));
+  append(sb, tprint("% = OpTypeSampledImage %\n", id_text(s.id_sampled_image2d), id_text(s.id_image2d)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_image2d_array), id_text(s.id_image2d), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_sampler_array), id_text(s.id_sampler), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_image2d_array), id_text(s.id_image2d_array)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_sampler_array), id_text(s.id_sampler_array)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_image2d), id_text(s.id_image2d)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_sampler), id_text(s.id_sampler)));
+}
+
+spv_append_sample_2d_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  if !s.uses_sample_2d return;
+  append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_sample_2d_textures_var), id_text(s.id_ptr_uniformconst_image2d_array)));
+  append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_sample_2d_samplers_var), id_text(s.id_ptr_uniformconst_sampler_array)));
+}
+
 emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
                                        source_name: string,
                                        input: IR_Struct,
@@ -184,6 +206,10 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   spv_append_var_ids(*entry_point_sb, state.input_vars);
   spv_append_var_ids(*entry_point_sb, state.output_vars);
   append(*entry_point_sb, " ", id_text(root_var_id));
+  if state.uses_sample_2d {
+    append(*entry_point_sb, " ", id_text(state.id_sample_2d_textures_var));
+    append(*entry_point_sb, " ", id_text(state.id_sample_2d_samplers_var));
+  }
   append(*entry_point_sb, "\n");
   append(*sb, builder_to_string(*entry_point_sb));
   if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
@@ -193,6 +219,10 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   for state.input_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   for state.output_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
+  if state.uses_sample_2d {
+    append(*sb, tprint("               OpName % \"sample_2d_textures\"\n", id_text(state.id_sample_2d_textures_var)));
+    append(*sb, tprint("               OpName % \"sample_2d_samplers\"\n", id_text(state.id_sample_2d_samplers_var)));
+  }
   for ps_infos {
     ps_info := it;
     append(*sb, tprint("               OpName % \"%\"\n", id_text(ps_info.type_id), debug_type_name(*state, ps_info.name)));
@@ -210,6 +240,12 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   append_interface_var_decorations(*sb, state.output_vars);
   append(*sb, tprint("               OpDecorate % Binding 0\n", id_text(root_var_id)));
   append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(root_var_id)));
+  if state.uses_sample_2d {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_2d_textures_var), SAMPLE_2D_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_textures_var)));
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_2d_samplers_var), SAMPLE_2D_SAMPLERS_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_samplers_var)));
+  }
   spv_append_base_buffer_decorations(*sb, *state);
   spv_append_buffer_layout_decorations(*sb, *state);
   for ps_infos {
@@ -235,6 +271,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
 
   spv_append_common_type_decls(*sb, *state, storage_class);
   spv_append_numeric_constants(*sb, *state);
+  spv_append_sample_2d_type_decls(*sb, *state);
   for ps_infos append(*sb, tprint("               OpTypeForwardPointer % %\n", id_text(it.ptr_type_id), storage_class));
   for state.buffers append(*sb, tprint("               OpTypeForwardPointer % %\n", id_text(it.ptr_wrapper_type_id), storage_class));
   for ps_infos {
@@ -280,6 +317,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   for state.input_vars append(*sb, tprint("% = OpVariable % Input\n", id_text(it.var_id), id_text(it.ptr_id)));
   for state.output_vars append(*sb, tprint("% = OpVariable % Output\n", id_text(it.var_id), id_text(it.ptr_id)));
   append(*sb, tprint("% = OpVariable % StorageBuffer\n", id_text(root_var_id), id_text(root_var_ptr_type_id)));
+  spv_append_sample_2d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
 
   spv_append_function_and_body(*sb, *state, entry_label, "    ", "     ");
@@ -556,6 +594,10 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   spv_append_var_ids(*entry_point_sb, state.output_vars);
   spv_append_var_ids(*entry_point_sb, state.buffers);
   spv_append_var_ids(*entry_point_sb, state.uniform_blocks);
+  if state.uses_sample_2d {
+    append(*entry_point_sb, " ", id_text(state.id_sample_2d_textures_var));
+    append(*entry_point_sb, " ", id_text(state.id_sample_2d_samplers_var));
+  }
   append(*entry_point_sb, "\n");
   append(*sb, builder_to_string(*entry_point_sb));
   if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
@@ -565,6 +607,10 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   for state.output_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   for state.uniform_blocks append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
+  if state.uses_sample_2d {
+    append(*sb, tprint("               OpName % \"sample_2d_textures\"\n", id_text(state.id_sample_2d_textures_var)));
+    append(*sb, tprint("               OpName % \"sample_2d_samplers\"\n", id_text(state.id_sample_2d_samplers_var)));
+  }
   for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
   for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
   append_interface_var_decorations(*sb, state.input_vars);
@@ -572,6 +618,12 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   spv_append_base_buffer_decorations(*sb, *state);
   spv_append_buffer_layout_decorations(*sb, *state);
   spv_append_buffer_binding_decorations(*sb, *state);
+  if state.uses_sample_2d {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_2d_textures_var), SAMPLE_2D_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_textures_var)));
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_2d_samplers_var), SAMPLE_2D_SAMPLERS_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_samplers_var)));
+  }
   for state.uniform_blocks {
     uniform := it;
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(uniform.var_id), uniform.binding_index));
@@ -585,6 +637,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
 
   spv_append_common_type_decls(*sb, *state, "StorageBuffer");
   spv_append_numeric_constants(*sb, *state);
+  spv_append_sample_2d_type_decls(*sb, *state);
   for state.uniform_blocks {
     type_line: String_Builder;
     for it.fields {
@@ -605,6 +658,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   for state.output_vars append(*sb, tprint("% = OpVariable % Output\n", id_text(it.var_id), id_text(it.ptr_id)));
   spv_append_buffer_vars(*sb, *state, "StorageBuffer");
   for state.uniform_blocks append(*sb, tprint("% = OpVariable % Uniform\n", id_text(it.var_id), id_text(it.ptr_uniform_struct_type_id)));
+  spv_append_sample_2d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
 
   spv_append_function_and_body(*sb, *state, entry_label, "    ", "     ");

@@ -2115,9 +2115,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     return "", false, diag;
   }
 
-  // Pair graphics shaders are expected to bind resources via SGPU's direct buffer-slot ABI
-  // (e.g. `[[buffer(0)]]`), which maps to Vulkan descriptor bindings without MSL argument-buffer
-  // indirection. Keep pair emission on direct bindings for now.
+  // Keep direct bindings by default for pair shaders, but switch to argument buffers when
+  // bindless globals are present in SPIR-V text (required for large bindless arrays on Metal).
   use_metal_argument_buffers := false;
 
 
@@ -2131,7 +2130,6 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_d
     }
     return "", false, pair_spvasm_diag;
   }
-
   build_dir := ".build/ir_slang";
   make_directory_if_it_does_not_exist(build_dir, recursive=true);
   vertex_spvasm_path := tprint("%/%_vert.spvasm", build_dir, pair_ctx.name);

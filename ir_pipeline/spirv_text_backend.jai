@@ -364,6 +364,7 @@ IR_SPV_Gen_State :: struct {
   input_vars: [..] IR_SPV_Gen_Interface_Var;
   output_vars: [..] IR_SPV_Gen_Interface_Var;
   use_physical_storage: bool;
+  uses_sample_2d: bool;
 
   id_extinst: s64;
   id_void: s64;
@@ -414,6 +415,18 @@ IR_SPV_Gen_State :: struct {
   id_ptr_uniform_uint: s64;
   id_ptr_uniform_int64: s64;
   id_ptr_uniform_uint64: s64;
+  id_sample_2d_array_len_const: s64;
+  id_image2d: s64;
+  id_sampler: s64;
+  id_sampled_image2d: s64;
+  id_image2d_array: s64;
+  id_sampler_array: s64;
+  id_ptr_uniformconst_image2d_array: s64;
+  id_ptr_uniformconst_sampler_array: s64;
+  id_ptr_uniformconst_image2d: s64;
+  id_ptr_uniformconst_sampler: s64;
+  id_sample_2d_textures_var: s64;
+  id_sample_2d_samplers_var: s64;
   id_ptr_func_float: s64;
   id_ptr_func_float2: s64;
   id_ptr_func_float3: s64;
@@ -933,6 +946,18 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   s.id_ptr_uniform_uint = new_id(s);
   s.id_ptr_uniform_int64 = new_id(s);
   s.id_ptr_uniform_uint64 = new_id(s);
+  s.id_sample_2d_array_len_const = get_u32_const(s, 16);
+  s.id_image2d = new_id(s);
+  s.id_sampler = new_id(s);
+  s.id_sampled_image2d = new_id(s);
+  s.id_image2d_array = new_id(s);
+  s.id_sampler_array = new_id(s);
+  s.id_ptr_uniformconst_image2d_array = new_id(s);
+  s.id_ptr_uniformconst_sampler_array = new_id(s);
+  s.id_ptr_uniformconst_image2d = new_id(s);
+  s.id_ptr_uniformconst_sampler = new_id(s);
+  s.id_sample_2d_textures_var = new_id(s);
+  s.id_sample_2d_samplers_var = new_id(s);
   s.id_ptr_uniform_float = new_id(s);
   s.id_ptr_uniform_float2 = new_id(s);
   s.id_ptr_uniform_float3 = new_id(s);
@@ -1823,6 +1848,93 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
   add_op(s, tprint("         % = OpExtInst % % % %",
                    id_text(result), id_text(s.id_float), id_text(s.id_extinst), op_name, id_text(vf)));
   return result, .FLOAT, true, diag;
+}
+
+emit_sample_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if s.stage != .FRAGMENT {
+    diag.message = "SPIR-V backend: sample_2d is currently fragment-stage only.";
+    return 0, .UNKNOWN, false, diag;
+  }
+  if args.count != 3 {
+    diag.message = "SPIR-V backend: sample_2d expects 3 args (texture_index, sampler_index, uv).";
+    return 0, .UNKNOWN, false, diag;
+  }
+
+  texture_index_id, texture_index_type, texture_index_ok, texture_index_diag := emit_expr(s, args[0]);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+  texture_index_id, texture_index_ok, texture_index_diag = coerce_to_kind(s, texture_index_id, texture_index_type, .UINT);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+
+  sampler_index_id, sampler_index_type, sampler_index_ok, sampler_index_diag := emit_expr(s, args[1]);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+  sampler_index_id, sampler_index_ok, sampler_index_diag = coerce_to_kind(s, sampler_index_id, sampler_index_type, .UINT);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+
+  // Clamp resource indices to the declared bindless array range [0, 15] to make
+  // out-of-range shader behavior explicit and deterministic across backends.
+  sample_2d_max_index := get_u32_const(s, 15);
+  clamped_texture_index := new_id(s);
+  add_op(s, tprint("         % = OpExtInst % % UMin % %",
+                   id_text(clamped_texture_index),
+                   id_text(s.id_uint),
+                   id_text(s.id_extinst),
+                   id_text(texture_index_id),
+                   id_text(sample_2d_max_index)));
+  clamped_sampler_index := new_id(s);
+  add_op(s, tprint("         % = OpExtInst % % UMin % %",
+                   id_text(clamped_sampler_index),
+                   id_text(s.id_uint),
+                   id_text(s.id_extinst),
+                   id_text(sampler_index_id),
+                   id_text(sample_2d_max_index)));
+
+  uv_id, uv_type, uv_ok, uv_diag := emit_expr(s, args[2]);
+  if !uv_ok return 0, .UNKNOWN, false, uv_diag;
+  uv_id, uv_ok, uv_diag = coerce_to_float2(s, uv_id, uv_type);
+  if !uv_ok return 0, .UNKNOWN, false, uv_diag;
+
+  tex_ptr := new_id(s);
+  add_op(s, tprint("         % = OpAccessChain % % %",
+                   id_text(tex_ptr),
+                   id_text(s.id_ptr_uniformconst_image2d),
+                   id_text(s.id_sample_2d_textures_var),
+                   id_text(clamped_texture_index)));
+  tex_id := new_id(s);
+  add_op(s, tprint("         % = OpLoad % %",
+                   id_text(tex_id),
+                   id_text(s.id_image2d),
+                   id_text(tex_ptr)));
+
+  sampler_ptr := new_id(s);
+  add_op(s, tprint("         % = OpAccessChain % % %",
+                   id_text(sampler_ptr),
+                   id_text(s.id_ptr_uniformconst_sampler),
+                   id_text(s.id_sample_2d_samplers_var),
+                   id_text(clamped_sampler_index)));
+  sampler_id := new_id(s);
+  add_op(s, tprint("         % = OpLoad % %",
+                   id_text(sampler_id),
+                   id_text(s.id_sampler),
+                   id_text(sampler_ptr)));
+
+  sampled_image := new_id(s);
+  add_op(s, tprint("         % = OpSampledImage % % %",
+                   id_text(sampled_image),
+                   id_text(s.id_sampled_image2d),
+                   id_text(tex_id),
+                   id_text(sampler_id)));
+
+  result := new_id(s);
+  add_op(s, tprint("         % = OpImageSampleImplicitLod % % %",
+                   id_text(result),
+                   id_text(s.id_float4),
+                   id_text(sampled_image),
+                   id_text(uv_id)));
+
+  s.uses_sample_2d = true;
+  return result, .FLOAT4, true, diag;
 }
 
 eval_inline_function_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Function, return_kind: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
@@ -2956,6 +3068,10 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if expr.left.kind == .IDENT callee = expr.left.text;
       else if expr.left.kind == .MEMBER callee = expr.left.text;
       if callee.count == 0 return_err("SPIR-V backend: unsupported call target expression.");
+      if callee == "sample_2d" {
+        sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_2d_call(s, expr.args);
+        return sampled_id, sampled_type, sampled_ok, sampled_diag;
+      }
       if callee == "radians" {
         if expr.args.count != 1 return_err("SPIR-V backend: radians expects 1 arg.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
@@ -2986,6 +3102,33 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !a_ok return 0, .UNKNOWN, false, a_diag;
         b_id, b_type, b_ok, b_diag := emit_expr(s, expr.args[1]);
         if !b_ok return 0, .UNKNOWN, false, b_diag;
+        if a_type == .FLOAT2 || b_type == .FLOAT2 {
+          av, av_ok, av_diag := coerce_to_float2(s, a_id, a_type);
+          if !av_ok return 0, .UNKNOWN, false, av_diag;
+          bv, bv_ok, bv_diag := coerce_to_float2(s, b_id, b_type);
+          if !bv_ok return 0, .UNKNOWN, false, bv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpFRem % % %", id_text(out), id_text(s.id_float2), id_text(av), id_text(bv)));
+          return out, .FLOAT2, true, diag;
+        }
+        if a_type == .FLOAT3 || b_type == .FLOAT3 {
+          av, av_ok, av_diag := coerce_to_float3(s, a_id, a_type);
+          if !av_ok return 0, .UNKNOWN, false, av_diag;
+          bv, bv_ok, bv_diag := coerce_to_float3(s, b_id, b_type);
+          if !bv_ok return 0, .UNKNOWN, false, bv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpFRem % % %", id_text(out), id_text(s.id_float3), id_text(av), id_text(bv)));
+          return out, .FLOAT3, true, diag;
+        }
+        if a_type == .FLOAT4 || b_type == .FLOAT4 {
+          av, av_ok, av_diag := coerce_to_float4(s, a_id, a_type);
+          if !av_ok return 0, .UNKNOWN, false, av_diag;
+          bv, bv_ok, bv_diag := coerce_to_float4(s, b_id, b_type);
+          if !bv_ok return 0, .UNKNOWN, false, bv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpFRem % % %", id_text(out), id_text(s.id_float4), id_text(av), id_text(bv)));
+          return out, .FLOAT4, true, diag;
+        }
         af, af_ok, af_diag := coerce_to_float(s, a_id, a_type);
         if !af_ok return 0, .UNKNOWN, false, af_diag;
         bf, bf_ok, bf_diag := coerce_to_float(s, b_id, b_type);
@@ -3078,6 +3221,33 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !edge_ok return 0, .UNKNOWN, false, edge_diag;
         x_id, x_type, x_ok, x_diag := emit_expr(s, expr.args[1]);
         if !x_ok return 0, .UNKNOWN, false, x_diag;
+        if x_type == .FLOAT2 || edge_type == .FLOAT2 {
+          edge2, edge2_ok, edge2_diag := coerce_to_float2(s, edge_id, edge_type);
+          if !edge2_ok return 0, .UNKNOWN, false, edge2_diag;
+          x2, x2_ok, x2_diag := coerce_to_float2(s, x_id, x_type);
+          if !x2_ok return 0, .UNKNOWN, false, x2_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % %", id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "Step", id_text(edge2), id_text(x2)));
+          return out, .FLOAT2, true, diag;
+        }
+        if x_type == .FLOAT3 || edge_type == .FLOAT3 {
+          edge3, edge3_ok, edge3_diag := coerce_to_float3(s, edge_id, edge_type);
+          if !edge3_ok return 0, .UNKNOWN, false, edge3_diag;
+          x3, x3_ok, x3_diag := coerce_to_float3(s, x_id, x_type);
+          if !x3_ok return 0, .UNKNOWN, false, x3_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % %", id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "Step", id_text(edge3), id_text(x3)));
+          return out, .FLOAT3, true, diag;
+        }
+        if x_type == .FLOAT4 || edge_type == .FLOAT4 {
+          edge4, edge4_ok, edge4_diag := coerce_to_float4(s, edge_id, edge_type);
+          if !edge4_ok return 0, .UNKNOWN, false, edge4_diag;
+          x4, x4_ok, x4_diag := coerce_to_float4(s, x_id, x_type);
+          if !x4_ok return 0, .UNKNOWN, false, x4_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % %", id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "Step", id_text(edge4), id_text(x4)));
+          return out, .FLOAT4, true, diag;
+        }
         edgef, edgef_ok, edgef_diag := coerce_to_float(s, edge_id, edge_type);
         if !edgef_ok return 0, .UNKNOWN, false, edgef_diag;
         xf, xf_ok, xf_diag := coerce_to_float(s, x_id, x_type);
@@ -3098,6 +3268,39 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !y_ok return 0, .UNKNOWN, false, y_diag;
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[2]);
         if !a_ok return 0, .UNKNOWN, false, a_diag;
+        if x_type == .FLOAT2 || y_type == .FLOAT2 || a_type == .FLOAT2 {
+          xv, xv_ok, xv_diag := coerce_to_float2(s, x_id, x_type);
+          if !xv_ok return 0, .UNKNOWN, false, xv_diag;
+          yv, yv_ok, yv_diag := coerce_to_float2(s, y_id, y_type);
+          if !yv_ok return 0, .UNKNOWN, false, yv_diag;
+          av, av_ok, av_diag := coerce_to_float2(s, a_id, a_type);
+          if !av_ok return 0, .UNKNOWN, false, av_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "FMix", id_text(xv), id_text(yv), id_text(av)));
+          return out, .FLOAT2, true, diag;
+        }
+        if x_type == .FLOAT3 || y_type == .FLOAT3 || a_type == .FLOAT3 {
+          xv, xv_ok, xv_diag := coerce_to_float3(s, x_id, x_type);
+          if !xv_ok return 0, .UNKNOWN, false, xv_diag;
+          yv, yv_ok, yv_diag := coerce_to_float3(s, y_id, y_type);
+          if !yv_ok return 0, .UNKNOWN, false, yv_diag;
+          av, av_ok, av_diag := coerce_to_float3(s, a_id, a_type);
+          if !av_ok return 0, .UNKNOWN, false, av_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "FMix", id_text(xv), id_text(yv), id_text(av)));
+          return out, .FLOAT3, true, diag;
+        }
+        if x_type == .FLOAT4 || y_type == .FLOAT4 || a_type == .FLOAT4 {
+          xv, xv_ok, xv_diag := coerce_to_float4(s, x_id, x_type);
+          if !xv_ok return 0, .UNKNOWN, false, xv_diag;
+          yv, yv_ok, yv_diag := coerce_to_float4(s, y_id, y_type);
+          if !yv_ok return 0, .UNKNOWN, false, yv_diag;
+          av, av_ok, av_diag := coerce_to_float4(s, a_id, a_type);
+          if !av_ok return 0, .UNKNOWN, false, av_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "FMix", id_text(xv), id_text(yv), id_text(av)));
+          return out, .FLOAT4, true, diag;
+        }
         xf, xf_ok, xf_diag := coerce_to_float(s, x_id, x_type);
         if !xf_ok return 0, .UNKNOWN, false, xf_diag;
         yf, yf_ok, yf_diag := coerce_to_float(s, y_id, y_type);
@@ -3135,6 +3338,39 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !e1_ok return 0, .UNKNOWN, false, e1_diag;
         x_id, x_type, x_ok, x_diag := emit_expr(s, expr.args[2]);
         if !x_ok return 0, .UNKNOWN, false, x_diag;
+        if x_type == .FLOAT2 || e0_type == .FLOAT2 || e1_type == .FLOAT2 {
+          e0v, e0v_ok, e0v_diag := coerce_to_float2(s, e0_id, e0_type);
+          if !e0v_ok return 0, .UNKNOWN, false, e0v_diag;
+          e1v, e1v_ok, e1v_diag := coerce_to_float2(s, e1_id, e1_type);
+          if !e1v_ok return 0, .UNKNOWN, false, e1v_diag;
+          xv, xv_ok, xv_diag := coerce_to_float2(s, x_id, x_type);
+          if !xv_ok return 0, .UNKNOWN, false, xv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "SmoothStep", id_text(e0v), id_text(e1v), id_text(xv)));
+          return out, .FLOAT2, true, diag;
+        }
+        if x_type == .FLOAT3 || e0_type == .FLOAT3 || e1_type == .FLOAT3 {
+          e0v, e0v_ok, e0v_diag := coerce_to_float3(s, e0_id, e0_type);
+          if !e0v_ok return 0, .UNKNOWN, false, e0v_diag;
+          e1v, e1v_ok, e1v_diag := coerce_to_float3(s, e1_id, e1_type);
+          if !e1v_ok return 0, .UNKNOWN, false, e1v_diag;
+          xv, xv_ok, xv_diag := coerce_to_float3(s, x_id, x_type);
+          if !xv_ok return 0, .UNKNOWN, false, xv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "SmoothStep", id_text(e0v), id_text(e1v), id_text(xv)));
+          return out, .FLOAT3, true, diag;
+        }
+        if x_type == .FLOAT4 || e0_type == .FLOAT4 || e1_type == .FLOAT4 {
+          e0v, e0v_ok, e0v_diag := coerce_to_float4(s, e0_id, e0_type);
+          if !e0v_ok return 0, .UNKNOWN, false, e0v_diag;
+          e1v, e1v_ok, e1v_diag := coerce_to_float4(s, e1_id, e1_type);
+          if !e1v_ok return 0, .UNKNOWN, false, e1v_diag;
+          xv, xv_ok, xv_diag := coerce_to_float4(s, x_id, x_type);
+          if !xv_ok return 0, .UNKNOWN, false, xv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "SmoothStep", id_text(e0v), id_text(e1v), id_text(xv)));
+          return out, .FLOAT4, true, diag;
+        }
         e0f, e0f_ok, e0f_diag := coerce_to_float(s, e0_id, e0_type);
         if !e0f_ok return 0, .UNKNOWN, false, e0f_diag;
         e1f, e1f_ok, e1f_diag := coerce_to_float(s, e1_id, e1_type);

@@ -85,3 +85,15 @@ bindless_nested_vertex_vk :: (using in: BindlessNestedVk_In, params: BindlessNes
   gl_Position = Vector4.{ p.x, p.y, 0.0, 1.0 };
   return out;
 } @vertex_shader
+
+BindlessTextureVk_Params :: struct {
+  texture_index: u32;
+  sampler_index: u32;
+}
+
+bindless_texture_fragment_vk :: (using in: VertexShaderVk_Out, params: BindlessTextureVk_Params) -> FragmentShaderVk_Out {
+  using out: FragmentShaderVk_Out;
+  uv := Vector2.{ gl_FragCoord.x, gl_FragCoord.y } * 0.001;
+  out_color = sample_2d(params.texture_index, params.sampler_index, uv);
+  return out;
+} @fragment_shader

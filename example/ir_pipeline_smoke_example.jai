@@ -19,4 +19,5 @@ on_dll_init :: () {
   // Vulkan GLSL requests, including nested pointer access coverage.
   _ = get_transpiled(.VULKAN_GLSL, compute_write_indices_vk);
   _ = get_transpiled(.VULKAN_GLSL, bindless_nested_vertex_vk);
+  _ = get_transpiled(.VULKAN_GLSL, bindless_texture_fragment_vk);
 }
