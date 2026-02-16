@@ -21,9 +21,7 @@ time_scope :: (enabled: bool, label: string) #expand {
 
 run_all_tests :: () {
   log("Running tests...");
-  use_slang_backend := false;
   for get_command_line_arguments() {
-    if it == "-slang_backend" use_slang_backend = true;
     if it == "-timings" TIMINGS_ENABLED = true;
   }
   {
@@ -59,28 +57,12 @@ run_all_tests :: () {
   
   debug_path :: (name: string) -> string { return tprint("%/%", DEBUG_OUTDIR, name); }
   
-  if use_slang_backend {
-    check_file_contains(debug_path("array_support_vertex_shader.glsl"), "vec2 positions[3] = vec2[](");
-    check_file_contains(debug_path("array_support_fragment_shader.glsl"), "uniform vec4 u_palette[2];");
-    check_file_contains(debug_path("array_support_vertex_shader.metal"), "float2 positions[3] = {");
-    check_file_contains(debug_path("compute_write_indices.glsl"), "#version 430 core");
-    check_file_contains(debug_path("compute_write_indices.glsl"), "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;");
-    check_file_contains(debug_path("compute_write_indices.glsl"), "gl_GlobalInvocationID");
-    check_file_contains(debug_path("tiles_pair_shader.metal"), "vertex VertexShader_Out VertexMain(");
-    check_file_contains(debug_path("tiles_pair_shader.metal"), "fragment FragmentShader_Out FragmentMain(");
-    check_file_contains(debug_path("tiles_pair_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
-    check_file_not_contains(debug_path("array_support_vertex_shader.glsl"), "<operator_not_supported>");
-    check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(float2(cos(rot), -sin(rot)), float2(sin(rot), cos(rot)))");
-    check_file_contains(debug_path("array_support_fragment_shader.metal"), "float4 u_palette[2];");
-  }
-  if !use_slang_backend {
-    // SPIR-V-Cross may fold local array literals, so validate indexed uniform usage instead.
-    check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[2u]", "(*spvDescriptorSet0.un).u_offsets[2u]", "un._m0[2u]"]);
-    check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[1u]", "(*spvDescriptorSet0.un).u_offsets[1u]", "un._m0[1u]"]);
-    check_file_contains_any(debug_path("array_support_fragment_shader.metal"), .["un.u_palette[1u]", "(*spvDescriptorSet0.un).u_palette[1u]", "un._m0[1u]"]);
-    check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(");
-    check_file_contains(debug_path("tiles_fragment_shader.metal"), "gl_FragCoord");
-  }
+  // SPIR-V-Cross may fold local array literals, so validate indexed uniform usage instead.
+  check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[2u]", "(*spvDescriptorSet0.un).u_offsets[2u]", "un._m0[2u]"]);
+  check_file_contains_any(debug_path("array_support_vertex_shader.metal"), .["un.u_offsets[1u]", "(*spvDescriptorSet0.un).u_offsets[1u]", "un._m0[1u]"]);
+  check_file_contains_any(debug_path("array_support_fragment_shader.metal"), .["un.u_palette[1u]", "(*spvDescriptorSet0.un).u_palette[1u]", "un._m0[1u]"]);
+  check_file_contains(debug_path("tiles_fragment_shader.metal"), "float2x2(");
+  check_file_contains(debug_path("tiles_fragment_shader.metal"), "gl_FragCoord");
   check_file_contains(debug_path("tiles_vertex_shader_vk.glsl"), "#version 450");
   check_file_contains_any(debug_path("tiles_vertex_shader_vk.glsl"), .["layout (location=0) in", "layout(location = 0) in"]);
   check_file_contains_any(debug_path("tiles_fragment_shader_vk.glsl"), .["layout (location=0) out", "layout(location = 0) out"]);

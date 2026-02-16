@@ -25,10 +25,6 @@ Proc :: #import "Process";
   timings := false;
 
   for command_line_opts.compile_time_command_line {
-
-    if it == "-slang_emit_line_directives" {
-      plugin.slang_emit_line_directives = true;
-    }
     if it == "-timings" timings = true;
   }
 

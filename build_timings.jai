@@ -20,7 +20,6 @@ Build_Timing_Totals :: struct {
   spv_pair_total_s: float64;
   spv_lower_s: float64;
   spv_normalize_s: float64;
-  spv_emit_slang_s: float64;
   spv_emit_text_s: float64;
   spv_write_files_s: float64;
   spv_read_files_s: float64;
@@ -61,12 +60,11 @@ log_timings :: (using totals: Build_Timing_Totals) {
     lookup_emit_s,
     emitted_pair_count,
     emitted_single_count);
-  log("[timing][build][plugin][spv] wall_single=%s wall_pair=%s worker_sum_lower=%s worker_sum_normalize=%s worker_sum_emit_slang=%s worker_sum_emit_spvasm=%s worker_sum_write_files=%s worker_sum_read_files=%s worker_sum_assemble=%s worker_sum_optimize=%s worker_sum_validate=%s worker_sum_cross=%s",
+  log("[timing][build][plugin][spv] wall_single=%s wall_pair=%s worker_sum_lower=%s worker_sum_normalize=%s worker_sum_emit_spvasm=%s worker_sum_write_files=%s worker_sum_read_files=%s worker_sum_assemble=%s worker_sum_optimize=%s worker_sum_validate=%s worker_sum_cross=%s",
     spv_single_total_s,
     spv_pair_total_s,
     spv_lower_s,
     spv_normalize_s,
-    spv_emit_slang_s,
     spv_emit_text_s,
     spv_write_files_s,
     spv_read_files_s,

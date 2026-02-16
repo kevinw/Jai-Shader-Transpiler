@@ -26,12 +26,6 @@ ir_run_command_checked :: (description: string, args: [] string) -> bool {
   return true;
 }
 
-compile_slang_to_spirv :: (source_path: string, entry_name: string, stage: Slang_Stage, output_spv: string) -> bool {
-  return ir_run_command_checked(
-    tprint("slangc %", entry_name),
-    .["slangc", source_path, "-entry", entry_name, "-stage", slang_stage_name(stage), "-target", "spirv", "-o", output_spv]);
-}
-
 assemble_spirv_text :: (spvasm_path: string, output_spv: string) -> bool {
   return ir_run_command_checked(
     tprint("spirv-as %", spvasm_path),
@@ -97,54 +91,12 @@ emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: 
   return false;
 }
 
-emit_slang_target_source :: (source_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string, emit_line_directives := false) -> bool {
-  line_mode := ifx emit_line_directives then "default" else "none";
-  if target == .METAL {
-    return ir_run_command_checked(
-      tprint("slangc metal %", entry_name),
-      .["slangc", source_path, "-entry", entry_name, "-stage", slang_stage_name(stage), "-target", "metal", "-line-directive-mode", line_mode, "-o", output_path]);
-  }
-
-  if target == .VULKAN_GLSL {
-    return ir_run_command_checked(
-      tprint("slangc glsl %", entry_name),
-      .["slangc", source_path, "-entry", entry_name, "-stage", slang_stage_name(stage), "-target", "glsl", "-profile", "glsl_450", "-line-directive-mode", line_mode, "-o", output_path]);
-  }
-
-  log_error("Unsupported Slang target requested in new IR pipeline: %", target);
-  return false;
-}
-
-emit_slang_module_target_source :: (source_path: string, target: Slang_Target, output_path: string, emit_line_directives := false) -> bool {
-  line_mode := ifx emit_line_directives then "default" else "none";
-  if target == .METAL {
-    return ir_run_command_checked(
-      "slangc metal module",
-      .["slangc", source_path, "-target", "metal", "-line-directive-mode", line_mode, "-o", output_path]);
-  }
-
-  if target == .VULKAN_GLSL {
-    return ir_run_command_checked(
-      "slangc glsl module",
-      .["slangc", source_path, "-target", "glsl", "-profile", "glsl_450", "-line-directive-mode", line_mode, "-o", output_path]);
-  }
-
-  log_error("Unsupported Slang module target requested in IR pipeline: %", target);
-  return false;
-}
-
 #scope_file
 
 spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
   if stage == .VERTEX return "vert";
   if stage == .FRAGMENT return "frag";
   return "comp";
-}
-
-slang_stage_name :: (stage: Slang_Stage) -> string {
-  if stage == .VERTEX return "vertex";
-  if stage == .FRAGMENT return "fragment";
-  return "compute";
 }
 
 #import "Basic";

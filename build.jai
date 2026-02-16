@@ -20,13 +20,11 @@ time_scope :: (enabled: bool, label: string) #expand {
 #run,stallable {
   command_line_opts := get_build_options();
   run_tests := false;
-  use_slang_backend := false;
   verbose_build_progress := false;
   timings := false;
   ir_case := "";
   for command_line_opts.compile_time_command_line {
     if it == "-run_tests" run_tests = true;
-    else if it == "-slang_backend" use_slang_backend = true;
     else if it == "-verbose_build_progress" verbose_build_progress = true;
     else if it == "-timings" timings = true;
     else if begins_with(it, "-ir_case=") {
@@ -80,7 +78,6 @@ time_scope :: (enabled: bool, label: string) #expand {
     result: Process_Result;
     output, error: string;
     timeout_reached: bool;
-    if use_slang_backend array_add(*run_args, "-slang_backend");
     if timings array_add(*run_args, "-timings");
     {
       time_scope(timings, "Run test_runner.jai");

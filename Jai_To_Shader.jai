@@ -18,8 +18,6 @@ Jai_To_Shader_Plugin :: struct {
     // options
     output_shaders: bool;
     shader_entry_ids_filter: string;
-    use_slang_backend: bool = false;
-    slang_emit_line_directives: bool;
     timings_enabled: bool;
     
     using impl: struct {
@@ -48,13 +46,8 @@ Transpiled_Lookup_Entry :: struct {
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
   p := New(Jai_To_Shader_Plugin);
-  if getenv("JSL_SLANG_BACKEND") {
-    p.use_slang_backend = true;
-  }
   for get_build_options().compile_time_command_line {
-    if it == "-slang_emit_line_directives" {
-      p.slang_emit_line_directives = true;
-    } else if it == "-timings" {
+    if it == "-timings" {
       p.timings_enabled = true;
     } else if begins_with(it, "-shader_entry_ids=") {
       filter: string;
@@ -266,9 +259,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
         for * pair_ctx: plugin.currently_waiting_pair_contexts {
           s: string;
           used_ir_pipeline := false;
-          assert(!plugin.use_slang_backend);
           {
-            s2, ok2, diag := write_shader_pair_ir_spirv(pair_ctx, plugin.slang_emit_line_directives, *plugin.timings);
+            s2, ok2, diag := write_shader_pair_ir_spirv(pair_ctx, *plugin.timings);
             if ok2 {
               s = s2;
               used_ir_pipeline = true;
@@ -317,7 +309,6 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
         plugin.timings.pair_emit_s += to_float64_seconds(current_time_monotonic() - t_pairs);
 
         t_single := current_time_monotonic();
-        assert(!plugin.use_slang_backend);
         {
           t_single_spv := current_time_monotonic();
           jobs: [..] SPV_External_Single_Job;
@@ -507,11 +498,6 @@ ir_source_file_from_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> st
   return tprint("% | %", vertex_file, fragment_file);
 }
 
-ir_pipeline_label_slang :: (target: Slang_Target) -> string {
-  if target == .METAL return "Jai -> IR -> Slang -> Metal";
-  return "Jai -> IR -> Slang -> GLSL";
-}
-
 ir_pipeline_label_spirv :: (target: Slang_Target) -> string {
   if target == .METAL return "Jai -> IR -> SPIRV -> SPIRV-Cross -> Metal";
   return "Jai -> IR -> SPIRV -> SPIRV-Cross -> GLSL";
@@ -542,149 +528,6 @@ normalize_compute_ir :: (shader: *IR_Compute_Shader) -> (ok: bool, diag: IR_Diag
   base := cast(*IR_Shader) shader;
   ok, diag := normalize_shader(base);
   return ok, diag;
-}
-
-write_shader_single_ir_slang :: (ctx: *Shader_Write_Context, emit_line_directives := false) -> (string, bool, IR_Diagnostic) {
-  diag: IR_Diagnostic;
-  if !ir_supports_single_context(ctx) {
-    diag.message = "IR lowering: unsupported shader context/target combination.";
-    if ctx && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", false, diag;
-  }
-
-  stage, stage_ok := ir_stage_from_context(ctx);
-  target, target_ok := ir_target_from_context(ctx);
-  if !stage_ok || !target_ok {
-    diag.message = "IR lowering: unsupported shader stage/target combination.";
-    if ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", false, diag;
-  }
-
-  emitted_source: string;
-  entry_name: string;
-  if ctx.type == .Vertex {
-    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
-    if !lowered {
-      #if VERBOSE log("IR lowering failed for %", ctx.name);
-      return "", false, lowered_diag;
-    }
-    normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
-    if !normalized return "", false, normalize_diag;
-    emitted_source=, emitted := emit_ir_vertex_to_slang(ir_vertex);
-    if !emitted {
-      #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
-      diag.message = tprint("IR->Slang emission failed for vertex shader '%'.", ctx.name);
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-      return "", false, diag;
-    }
-    entry_name = ir_vertex.entry_name;
-  } else if ctx.type == .Fragment {
-    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
-    if !lowered {
-      #if VERBOSE log("IR lowering failed for %", ctx.name);
-      return "", false, lowered_diag;
-    }
-    normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
-    if !normalized return "", false, normalize_diag;
-    emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
-    if !emitted {
-      #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
-      diag.message = tprint("IR->Slang emission failed for fragment shader '%'.", ctx.name);
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-      return "", false, diag;
-    }
-    slang_source = emitted_source;
-    entry_name = ir_fragment.entry_name;
-  } else if ctx.type == .Compute {
-    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
-    if !lowered {
-      #if VERBOSE log("IR lowering failed for %", ctx.name);
-      return "", false, lowered_diag;
-    }
-    normalized, normalize_diag := normalize_compute_ir(*ir_compute);
-    if !normalized return "", false, normalize_diag;
-    emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
-    if !emitted {
-      #if VERBOSE log("IR->Slang emission failed for %", ctx.name);
-      diag.message = tprint("IR->Slang emission failed for compute shader '%'.", ctx.name);
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-      return "", false, diag;
-    }
-    slang_source = emitted_source;
-    entry_name = ir_compute.entry_name;
-  } else {
-    diag.message = "IR lowering: unsupported shader type.";
-    if ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", false, diag;
-  }
-
-  build_dir := IR_INTERMEDIATE_DIR;
-  make_directory_if_it_does_not_exist(build_dir, recursive=true);
-
-  stage_short := "frag";
-  if ctx.type == .Vertex stage_short = "vert";
-  if ctx.type == .Compute stage_short = "comp";
-  source_path := tprint("%/%_%.slang", build_dir, ctx.name, stage_short);
-  output_ext := ifx ctx.language == .METAL then "metal" else "glsl";
-  output_path := tprint("%/%_%.%", build_dir, ctx.name, stage_short, output_ext);
-
-  if !write_entire_file(source_path, slang_source) {
-    #if VERBOSE log("Failed writing IR Slang source %", source_path);
-    diag.message = tprint("IR pipeline: failed writing Slang source file '%'.", source_path);
-    return "", false, diag;
-  }
-
-  if entry_name.count == 0 {
-    diag.message = "IR pipeline: entry name is empty.";
-    if ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", false, diag;
-  }
-  if !emit_slang_target_source(source_path, entry_name, stage, target, output_path, emit_line_directives) {
-    #if VERBOSE log("Slang target emission failed for %", ctx.name);
-    diag.message = tprint("IR pipeline: Slang target emission failed for shader '%'. Source: %", ctx.name, source_path);
-    if ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", false, diag;
-  }
-
-  target_source, ok := read_entire_file(output_path);
-  if !ok {
-    diag.message = tprint("IR pipeline: failed reading emitted target source '%'.", output_path);
-    return "", false, diag;
-  }
-  if ctx.language == .METAL && ctx.type != .Compute {
-    target_source = ir_mark_metal_device_pointers_const(target_source);
-    target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
-    // Keep intermediate output aligned with the embedded string for debugging and test checks.
-    write_entire_file(output_path, target_source);
-  }
-  if ctx.type == .Compute && ctx.language == .METAL {
-    target_source = replace(target_source, "[[kernel]] void", "kernel void");
-  }
-  target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_context(ctx), ir_pipeline_label_slang(target));
-  // Keep intermediate output aligned with the embedded string for debugging and test checks.
-  write_entire_file(output_path, target_source);
-
-  symbol_name := ir_symbol_name_from_context(ctx);
-  decl := tprint("% :: #string END\n%\nEND", symbol_name, target_source);
-  return decl, true, diag;
 }
 
 ir_spirv_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
@@ -749,8 +592,6 @@ SPV_External_Single_Job :: struct {
   target: Slang_Target;
   entry_name: string;
   use_metal_argument_buffers: bool;
-
-  source_path: string;
   spvasm_path: string;
   spv_path: string;
   spv_opt_path: string;
@@ -801,7 +642,6 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
     return false, diag;
   }
 
-  slang_source: string;
   spvasm_source: string;
   spvasm_ok := false;
   spvasm_diag: IR_Diagnostic;
@@ -817,18 +657,6 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
     normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return false, normalize_diag;
-    t0 = current_time_monotonic();
-    emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
-    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !emitted {
-      diag.message = tprint("IR->Slang emission failed for vertex shader '%'.", ctx.name);
-      if ctx.main_fn && ctx.main_fn.header {
-        diag.location = make_location(ctx.main_fn.header);
-        diag.has_location = true;
-      }
-      return false, diag;
-    }
-    slang_source = emitted_source;
     entry_name = ir_vertex.entry_name;
     t0 = current_time_monotonic();
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
@@ -843,18 +671,6 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
     normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return false, normalize_diag;
-    t0 = current_time_monotonic();
-    emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
-    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !emitted {
-      diag.message = tprint("IR->Slang emission failed for fragment shader '%'.", ctx.name);
-      if ctx.main_fn && ctx.main_fn.header {
-        diag.location = make_location(ctx.main_fn.header);
-        diag.has_location = true;
-      }
-      return false, diag;
-    }
-    slang_source = emitted_source;
     entry_name = ir_fragment.entry_name;
     t0 = current_time_monotonic();
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
@@ -869,18 +685,6 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
     normalized, normalize_diag := normalize_compute_ir(*ir_compute);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return false, normalize_diag;
-    t0 = current_time_monotonic();
-    emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
-    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !emitted {
-      diag.message = tprint("IR->Slang emission failed for compute shader '%'.", ctx.name);
-      if ctx.main_fn && ctx.main_fn.header {
-        diag.location = make_location(ctx.main_fn.header);
-        diag.has_location = true;
-      }
-      return false, diag;
-    }
-    slang_source = emitted_source;
     entry_name = ir_compute.entry_name;
     t0 = current_time_monotonic();
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
@@ -1087,7 +891,6 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  slang_source: string;
   spvasm_source: string;
   spvasm_ok := false;
   spvasm_diag: IR_Diagnostic;
@@ -1102,18 +905,6 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return "", "", false, normalize_diag;
-    t0 = current_time_monotonic();
-    emitted_source, emitted := emit_ir_vertex_to_slang(ir_vertex);
-    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !emitted {
-      diag.message = tprint("IR->Slang emission failed for vertex shader '%'.", ctx.name);
-      if ctx.main_fn && ctx.main_fn.header {
-        diag.location = make_location(ctx.main_fn.header);
-        diag.has_location = true;
-      }
-      return "", "", false, diag;
-    }
-    slang_source = emitted_source;
     entry_name = ir_vertex.entry_name;
     t0 = current_time_monotonic();
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
@@ -1128,18 +919,6 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return "", "", false, normalize_diag;
-    t0 = current_time_monotonic();
-    emitted_source, emitted := emit_ir_fragment_to_slang(ir_fragment);
-    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !emitted {
-      diag.message = tprint("IR->Slang emission failed for fragment shader '%'.", ctx.name);
-      if ctx.main_fn && ctx.main_fn.header {
-        diag.location = make_location(ctx.main_fn.header);
-        diag.has_location = true;
-      }
-      return "", "", false, diag;
-    }
-    slang_source = emitted_source;
     entry_name = ir_fragment.entry_name;
     t0 = current_time_monotonic();
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
@@ -1154,18 +933,6 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     normalized, normalize_diag := normalize_compute_ir(*ir_compute);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return "", "", false, normalize_diag;
-    t0 = current_time_monotonic();
-    emitted_source, emitted := emit_ir_compute_to_slang(ir_compute);
-    if timings_totals timings_totals.spv_emit_slang_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !emitted {
-      diag.message = tprint("IR->Slang emission failed for compute shader '%'.", ctx.name);
-      if ctx.main_fn && ctx.main_fn.header {
-        diag.location = make_location(ctx.main_fn.header);
-        diag.has_location = true;
-      }
-      return "", "", false, diag;
-    }
-    slang_source = emitted_source;
     entry_name = ir_compute.entry_name;
     t0 = current_time_monotonic();
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
@@ -1532,9 +1299,7 @@ ir_validate_pair_stage_interface_local :: (pair_name: string, vertex: *IR_Vertex
   return true, "";
 }
 
-write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, emit_line_directives := false, timings_totals: *Build_Timing_Totals = null) -> (string, bool, IR_Diagnostic) {
-  _ = emit_line_directives;
-
+write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_totals: *Build_Timing_Totals = null) -> (string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   pair_start := current_time_monotonic();
   defer if timings_totals {
@@ -2258,7 +2023,6 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
 
 #load "build_timings.jai";
 
-using,only(getenv) POSIX :: #import "POSIX";
 #import,dir "ir_pipeline";
 
 since :: inline (start_time: Apollo_Time) -> float64 { return to_float64_seconds(current_time_monotonic() - start_time); }
