@@ -1,30 +1,7 @@
-#import "Basic";
-P :: #import "Process";
+// Functions for running external shader compilation tools
 
-#scope_export
-
-Slang_Target :: enum {
-  METAL;
-  VULKAN_GLSL;
-}
-
-Slang_Stage :: enum {
-  VERTEX;
-  FRAGMENT;
-  COMPUTE;
-}
-
-SLANG_TIMEOUT_MS :: 15_000;
-
-#scope_file
-
-slang_stage_name :: (stage: Slang_Stage) -> string {
-  if stage == .VERTEX return "vertex";
-  if stage == .FRAGMENT return "fragment";
-  return "compute";
-}
-
-#scope_export
+Slang_Target :: enum { METAL; VULKAN_GLSL; }
+Slang_Stage  :: enum { VERTEX; FRAGMENT; COMPUTE; }
 
 ir_run_command_checked :: (description: string, args: [] string) -> bool {
   result, output, error, timeout_reached := P.run_command(..args, timeout_ms=SLANG_TIMEOUT_MS);
@@ -48,8 +25,6 @@ ir_run_command_checked :: (description: string, args: [] string) -> bool {
 
   return true;
 }
-
-#scope_export
 
 compile_slang_to_spirv :: (source_path: string, entry_name: string, stage: Slang_Stage, output_spv: string) -> bool {
   return ir_run_command_checked(
@@ -87,6 +62,7 @@ link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool {
     return false;
   }
   args: [..] string;
+  args.allocator = temp;
   array_add(*args, "spirv-link");
   for inputs array_add(*args, it);
   array_add(*args, "-o", output_spv);
@@ -94,16 +70,6 @@ link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool {
     tprint("spirv-link % inputs", inputs.count),
     args);
 }
-
-#scope_file
-
-spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
-  if stage == .VERTEX return "vert";
-  if stage == .FRAGMENT return "frag";
-  return "comp";
-}
-
-#scope_export
 
 emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool {
   if target == .METAL {
@@ -166,3 +132,21 @@ emit_slang_module_target_source :: (source_path: string, target: Slang_Target, o
   log_error("Unsupported Slang module target requested in IR pipeline: %", target);
   return false;
 }
+
+#scope_file
+
+spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
+  if stage == .VERTEX return "vert";
+  if stage == .FRAGMENT return "frag";
+  return "comp";
+}
+
+slang_stage_name :: (stage: Slang_Stage) -> string {
+  if stage == .VERTEX return "vertex";
+  if stage == .FRAGMENT return "fragment";
+  return "compute";
+}
+
+#import "Basic";
+P :: #import "Process";
+SLANG_TIMEOUT_MS :: 15_000;

@@ -1,16 +1,6 @@
-// TODOS:
-// Add the different types of Vectors and implement the 'Component Comparison' set of GLSL functions
-// Translation for more advanced jai features
-// Add the differet types of Samplers
-// Add support for out parameters
-// Add support for structs and arrays
-
-// Think about:
-// Changing GLSL version without changing module code.
-// Adding #line directive for shader debuggers to point back at the original Jai file
-
 VERBOSE      :: false;
 DEBUG_OUTDIR :: ".generated_shaders";
+USE_SPIRV_OPT :: true;
 
 Transpiled_Target :: enum {
   METAL;
@@ -19,11 +9,10 @@ Transpiled_Target :: enum {
   VULKAN_GLSL;
 }
 
-IR_Pipeline :: #import,dir "ir_pipeline";
-using IR_Pipeline;
-
 Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
+    
+    message = convert_procs;
     
     // options
     output_shaders: bool;
@@ -47,38 +36,6 @@ Jai_To_Shader_Plugin :: struct {
     }
 }
 
-Build_Timing_Totals :: struct {
-  typechecked_message_s: float64;
-  phase_message_s: float64;
-
-  known_proc_collect_s: float64;
-  declaration_collect_s: float64;
-  pending_resolution_s: float64;
-
-  pair_emit_s: float64;
-  single_emit_s: float64;
-  add_build_string_s: float64;
-  lookup_emit_s: float64;
-
-  typechecked_message_count: s64;
-  phase_message_count: s64;
-  emitted_pair_count: s64;
-  emitted_single_count: s64;
-
-  spv_single_total_s: float64;
-  spv_pair_total_s: float64;
-  spv_lower_s: float64;
-  spv_normalize_s: float64;
-  spv_emit_slang_s: float64;
-  spv_emit_text_s: float64;
-  spv_write_files_s: float64;
-  spv_read_files_s: float64;
-  spv_assemble_s: float64;
-  spv_optimize_s: float64;
-  spv_validate_s: float64;
-  spv_cross_s: float64;
-}
-
 Transpiled_Lookup_Entry :: struct {
   target_name: string;
   primary_name: string;
@@ -86,394 +43,14 @@ Transpiled_Lookup_Entry :: struct {
   symbol_name: string;
 }
 
-Shader_Reload_Manifest_Entry :: struct {
-  entry_id: string;
-  request_name: string;
-  shader_kind: string;
-  stage: string;
-  target: string;
-  primary_name: string;
-  secondary_name: string;
-  signature: string;
-  signature_hash: u64;
-  dependencies: [..] string;
-}
-
-manifest_target_from_language :: (language: Shader_Language, glsl_target: GLSL_Target) -> string {
-  if language == .METAL return "METAL";
-  if language == .HLSL return "HLSL";
-  if language == .GLSL {
-    if glsl_target == .VULKAN return "VULKAN_GLSL";
-    return "OPENGL_GLSL";
-  }
-  return "UNKNOWN";
-}
-
-manifest_stage_from_shader_type :: (type: Shader_Type) -> string {
-  if type == .Vertex return "vertex";
-  if type == .Fragment return "fragment";
-  if type == .Compute return "compute";
-  return "unknown";
-}
-
-manifest_target_from_context :: (ctx: *Shader_Write_Context) -> string {
-  if !ctx return "UNKNOWN";
-  return manifest_target_from_language(ctx.language, ctx.glsl_target);
-}
-
-manifest_target_from_pair_context :: (ctx: *Shader_Write_Pair_Context) -> string {
-  if !ctx return "UNKNOWN";
-  return manifest_target_from_language(ctx.language, ctx.glsl_target);
-}
-
-manifest_hash_u64 :: (s: string) -> u64 {
-  h: u64 = 1469598103934665603;
-  for s {
-    h = h ^ cast(u64) it;
-    h *= 1099511628211;
-  }
-  return h;
-}
-
-manifest_path_to_workspace_relative :: (full_path: string, workspace_root: string) -> (string, bool) {
-  if full_path.count == 0 || workspace_root.count == 0 return "", false;
-  root := workspace_root;
-  if ends_with(root, "/") root.count -= 1;
-  prefix := tprint("%/", root);
-  if !begins_with(full_path, prefix) return "", false;
-  out: string;
-  out.data = full_path.data + prefix.count;
-  out.count = full_path.count - prefix.count;
-  return manifest_normalize_relative_path(out), true;
-}
-
-manifest_array_add_unique_string :: (dst: *[..] string, value: string) {
-  for dst.* if it == value return;
-  array_add(dst, value);
-}
-
-manifest_normalize_relative_path :: (path: string) -> string {
-  if path.count == 0 return "";
-  parts: [..] string;
-  i: s64 = 0;
-  while i < path.count {
-    while i < path.count && path[i] == #char "/" i += 1;
-    if i >= path.count break;
-    start := i;
-    while i < path.count && path[i] != #char "/" i += 1;
-    part: string;
-    part.data = path.data + start;
-    part.count = i - start;
-    if part == "." continue;
-    if part == ".." {
-      if parts.count > 0 && parts[parts.count-1] != ".." {
-        parts.count -= 1;
-        continue;
-      }
-      array_add(*parts, part);
-      continue;
-    }
-    array_add(*parts, part);
-  }
-
-  if parts.count == 0 return ".";
-  sb: String_Builder;
-  for parts {
-    if it_index != 0 append(*sb, "/");
-    append(*sb, it);
-  }
-  return builder_to_string(*sb);
-}
-
-manifest_make_entry_id_single :: (ctx: *Shader_Write_Context) -> string {
-  if !ctx || !ctx.main_fn || !ctx.main_fn.header return "";
-  return tprint("single|%|%|%", manifest_target_from_context(ctx), manifest_stage_from_shader_type(ctx.type), ctx.main_fn.header.name);
-}
-
-manifest_make_entry_id_pair :: (ctx: *Shader_Write_Pair_Context) -> string {
-  if !ctx || !ctx.vertex_fn || !ctx.fragment_fn || !ctx.vertex_fn.header || !ctx.fragment_fn.header return "";
-  return tprint("pair|%|%|%", manifest_target_from_pair_context(ctx), ctx.vertex_fn.header.name, ctx.fragment_fn.header.name);
-}
-
-manifest_make_entry_id_single_from_parts :: (language: Shader_Language, glsl_target: GLSL_Target, type: Shader_Type, name: string) -> string {
-  if name.count == 0 return "";
-  return tprint("single|%|%|%", manifest_target_from_language(language, glsl_target), manifest_stage_from_shader_type(type), name);
-}
-
-manifest_make_entry_id_pair_from_parts :: (language: Shader_Language, glsl_target: GLSL_Target, vertex_name: string, fragment_name: string) -> string {
-  if vertex_name.count == 0 || fragment_name.count == 0 return "";
-  return tprint("pair|%|%|%", manifest_target_from_language(language, glsl_target), vertex_name, fragment_name);
-}
-
-manifest_collect_header_file_dependency :: (header: *Code_Procedure_Header,
-                                            workspace_root: string,
-                                            out_deps: *[..] string) {
-  if !header return;
-  loc := make_location(header);
-  if loc.fully_pathed_filename.count == 0 return;
-  rel, ok := manifest_path_to_workspace_relative(loc.fully_pathed_filename, workspace_root);
-  if !ok return;
-  manifest_array_add_unique_string(out_deps, copy_string(rel));
-}
-
-manifest_header_seen :: (seen: [] *Code_Procedure_Header, header: *Code_Procedure_Header) -> bool {
-  for seen if it == header return true;
-  return false;
-}
-
-manifest_collect_node_dependencies :: (node: *Code_Node,
-                                       workspace_root: string,
-                                       out_deps: *[..] string,
-                                       seen_headers: *[..] *Code_Procedure_Header) {
-  if !node return;
-
-  if node.kind == {
-    case .PROCEDURE_CALL; {
-      pc := cast(*Code_Procedure_Call) node;
-      if pc.resolved_procedure_expression && pc.resolved_procedure_expression.kind == .PROCEDURE_HEADER {
-        header := cast(*Code_Procedure_Header) pc.resolved_procedure_expression;
-        manifest_collect_header_dependencies(header, workspace_root, out_deps, seen_headers);
-      }
-      if pc.procedure_expression manifest_collect_node_dependencies(pc.procedure_expression, workspace_root, out_deps, seen_headers);
-      for pc.arguments_sorted manifest_collect_node_dependencies(it, workspace_root, out_deps, seen_headers);
-      for pc.arguments_unsorted if it.expression manifest_collect_node_dependencies(it.expression, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .DECLARATION; {
-      decl := cast(*Code_Declaration) node;
-      if decl.expression manifest_collect_node_dependencies(decl.expression, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .BINARY_OPERATOR; {
-      bn := cast(*Code_Binary_Operator) node;
-      if bn.left manifest_collect_node_dependencies(bn.left, workspace_root, out_deps, seen_headers);
-      if bn.right manifest_collect_node_dependencies(bn.right, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .UNARY_OPERATOR; {
-      un := cast(*Code_Unary_Operator) node;
-      if un.subexpression manifest_collect_node_dependencies(un.subexpression, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .CAST; {
-      cn := cast(*Code_Cast) node;
-      if cn.expression manifest_collect_node_dependencies(cn.expression, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .LITERAL; {
-      lit := cast(*Code_Literal) node;
-      if lit.value_type == .STRUCT {
-        for lit.struct_literal_info.arguments manifest_collect_node_dependencies(it, workspace_root, out_deps, seen_headers);
-      } else if lit.value_type == .ARRAY {
-        for lit.array_literal_info.array_members manifest_collect_node_dependencies(it, workspace_root, out_deps, seen_headers);
-      }
-      return;
-    }
-
-    case .IF; {
-      ifn := cast(*Code_If) node;
-      if ifn.condition manifest_collect_node_dependencies(ifn.condition, workspace_root, out_deps, seen_headers);
-      if ifn.then_block manifest_collect_node_dependencies(cast(*Code_Node) ifn.then_block, workspace_root, out_deps, seen_headers);
-      if ifn.else_block manifest_collect_node_dependencies(cast(*Code_Node) ifn.else_block, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .BLOCK; {
-      block := cast(*Code_Block) node;
-      for block.statements manifest_collect_node_dependencies(it, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .RETURN; {
-      rn := cast(*Code_Return) node;
-      for rn.arguments_sorted manifest_collect_node_dependencies(it, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .FOR; {
-      fn := cast(*Code_For) node;
-      if fn.iteration_expression manifest_collect_node_dependencies(fn.iteration_expression, workspace_root, out_deps, seen_headers);
-      if fn.iteration_expression_right manifest_collect_node_dependencies(fn.iteration_expression_right, workspace_root, out_deps, seen_headers);
-      if fn.ident_decl manifest_collect_node_dependencies(cast(*Code_Node) fn.ident_decl, workspace_root, out_deps, seen_headers);
-      if fn.block manifest_collect_node_dependencies(cast(*Code_Node) fn.block, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .WHILE; {
-      wn := cast(*Code_While) node;
-      if wn.condition manifest_collect_node_dependencies(wn.condition, workspace_root, out_deps, seen_headers);
-      if wn.block manifest_collect_node_dependencies(cast(*Code_Node) wn.block, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .USING; {
-      un := cast(*Code_Using) node;
-      if un.expression manifest_collect_node_dependencies(un.expression, workspace_root, out_deps, seen_headers);
-      return;
-    }
-
-    case .DEFER; {
-      dn := cast(*Code_Defer) node;
-      if dn.block manifest_collect_node_dependencies(cast(*Code_Node) dn.block, workspace_root, out_deps, seen_headers);
-      return;
-    }
-  }
-}
-
-manifest_collect_header_dependencies :: (header: *Code_Procedure_Header,
-                                         workspace_root: string,
-                                         out_deps: *[..] string,
-                                         seen_headers: *[..] *Code_Procedure_Header) {
-  if !header return;
-  if manifest_header_seen(seen_headers.*, header) return;
-  array_add(seen_headers, header);
-
-  manifest_collect_header_file_dependency(header, workspace_root, out_deps);
-  if header.body_or_null manifest_collect_node_dependencies(cast(*Code_Node) header.body_or_null, workspace_root, out_deps, seen_headers);
-}
-
-manifest_decl_type_signature :: (decl: *Code_Declaration) -> string {
-  if !decl return "unknown";
-  decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
-  if decl_type return type_to_string(decl_type);
-  return "unknown";
-}
-
-manifest_header_signature :: (header: *Code_Procedure_Header) -> string {
-  if !header return "header=null";
-  sb: String_Builder;
-  append(*sb, "name=");
-  append(*sb, header.name);
-  append(*sb, ";ret=");
-  if header.returns.count == 0 {
-    append(*sb, "void");
-  } else if header.returns.count == 1 {
-    append(*sb, manifest_decl_type_signature(header.returns[0]));
-  } else {
-    append(*sb, "multi(");
-    for header.returns {
-      if it_index != 0 append(*sb, ",");
-      append(*sb, manifest_decl_type_signature(it));
-    }
-    append(*sb, ")");
-  }
-  append(*sb, ";args=");
-  for header.arguments {
-    if it_index != 0 append(*sb, ",");
-    append(*sb, it.name);
-    append(*sb, ":");
-    append(*sb, manifest_decl_type_signature(it));
-  }
-  return builder_to_string(*sb);
-}
-
-manifest_make_single_entry :: (ctx: *Shader_Write_Context, workspace_root: string) -> Shader_Reload_Manifest_Entry {
-  out: Shader_Reload_Manifest_Entry;
-  if !ctx || !ctx.main_fn || !ctx.main_fn.header return out;
-
-  out.request_name = copy_string(ctx.name);
-  out.entry_id = manifest_make_entry_id_single(ctx);
-  out.shader_kind = "single";
-  out.stage = manifest_stage_from_shader_type(ctx.type);
-  out.target = manifest_target_from_context(ctx);
-  out.primary_name = copy_string(ctx.main_fn.header.name);
-  out.secondary_name = "";
-  proc_sig := manifest_header_signature(ctx.main_fn.header);
-  out.signature = tprint("kind=single;stage=%;target=%;%", out.stage, out.target, proc_sig);
-  out.signature_hash = manifest_hash_u64(out.signature);
-
-  seen_headers: [..] *Code_Procedure_Header;
-  manifest_collect_header_dependencies(ctx.main_fn.header, workspace_root, *out.dependencies, *seen_headers);
-  for ctx.functions if it.prototype manifest_collect_header_dependencies(it.prototype, workspace_root, *out.dependencies, *seen_headers);
-  return out;
-}
-
-manifest_make_pair_entry :: (ctx: *Shader_Write_Pair_Context, workspace_root: string) -> Shader_Reload_Manifest_Entry {
-  out: Shader_Reload_Manifest_Entry;
-  if !ctx || !ctx.vertex_fn || !ctx.fragment_fn || !ctx.vertex_fn.header || !ctx.fragment_fn.header return out;
-
-  out.request_name = copy_string(ctx.name);
-  out.entry_id = manifest_make_entry_id_pair(ctx);
-  out.shader_kind = "pair";
-  out.stage = "pair";
-  out.target = manifest_target_from_pair_context(ctx);
-  out.primary_name = copy_string(ctx.vertex_fn.header.name);
-  out.secondary_name = copy_string(ctx.fragment_fn.header.name);
-  v_sig := manifest_header_signature(ctx.vertex_fn.header);
-  f_sig := manifest_header_signature(ctx.fragment_fn.header);
-  out.signature = tprint("kind=pair;target=%;vertex={%};fragment={%}", out.target, v_sig, f_sig);
-  out.signature_hash = manifest_hash_u64(out.signature);
-
-  seen_headers: [..] *Code_Procedure_Header;
-  manifest_collect_header_dependencies(ctx.vertex_fn.header, workspace_root, *out.dependencies, *seen_headers);
-  manifest_collect_header_dependencies(ctx.fragment_fn.header, workspace_root, *out.dependencies, *seen_headers);
-  return out;
-}
-
-emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
-  assert(plugin != null);
-
-  global_dependencies: [..] string;
-  for plugin.manifest_entries {
-    for it.dependencies manifest_array_add_unique_string(*global_dependencies, it);
-  }
-
-  sb: String_Builder;
-  append(*sb, "version 1\n");
-  append(*sb, tprint("entry_count %\n", plugin.manifest_entries.count));
-  append(*sb, tprint("global_dependency_count %\n", global_dependencies.count));
-  for global_dependencies append(*sb, tprint("global_dependency %\n", it));
-
-  for plugin.manifest_entries {
-    append(*sb, "entry_begin\n");
-    append(*sb, tprint("entry_id %\n", it.entry_id));
-    append(*sb, tprint("request_name %\n", it.request_name));
-    append(*sb, tprint("shader_kind %\n", it.shader_kind));
-    append(*sb, tprint("stage %\n", it.stage));
-    append(*sb, tprint("target %\n", it.target));
-    append(*sb, tprint("primary_name %\n", it.primary_name));
-    append(*sb, tprint("secondary_name %\n", it.secondary_name));
-    append(*sb, tprint("signature_hash 0x%\n", formatInt(it.signature_hash, base=16)));
-    append(*sb, tprint("signature %\n", it.signature));
-    append(*sb, tprint("dependency_count %\n", it.dependencies.count));
-    for it.dependencies append(*sb, tprint("dependency %\n", it));
-    append(*sb, "entry_end\n");
-  }
-
-  make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive=true);
-  workspace_name := get_name(plugin.workspace);
-  if workspace_name.count == 0 workspace_name = "workspace";
-  workspace_name = replace(workspace_name, " ", "_");
-  workspace_name = replace(workspace_name, "/", "_");
-  workspace_name = replace(workspace_name, "\\", "_");
-  workspace_name = replace(workspace_name, ":", "_");
-
-  manifest_set_hash: u64 = 0;
-  for plugin.manifest_entries manifest_set_hash = manifest_set_hash ^ manifest_hash_u64(it.entry_id);
-  if manifest_set_hash == 0 manifest_set_hash = manifest_hash_u64(workspace_name);
-
-  path := tprint("%/shader_reload_manifest_%_%.txt", DEBUG_OUTDIR, workspace_name, formatInt(manifest_set_hash, base=16));
-  manifest_text := builder_to_string(*sb);
-  ok := write_entire_file(path, manifest_text);
-  if !ok {
-    log_error("Jai Shader Transpiler: failed to write shader reload manifest to '%'.", path);
-    return;
-  }
-
-  latest_path := tprint("%/shader_reload_manifest_latest.txt", DEBUG_OUTDIR);
-  _ = write_entire_file(latest_path, manifest_text);
-}
+#load "write_shader_manifest.jai";
 
 get_plugin :: () -> *Jai_To_Shader_Plugin {
   p := New(Jai_To_Shader_Plugin);
-  opts := get_build_options();
-  if getenv("JSL_SLANG_BACKEND") p.use_slang_backend = true;
-  for opts.compile_time_command_line {
+  if getenv("JSL_SLANG_BACKEND") {
+    p.use_slang_backend = true;
+  }
+  for get_build_options().compile_time_command_line {
     if it == "-slang_emit_line_directives" {
       p.slang_emit_line_directives = true;
     } else if it == "-timings" {
@@ -485,8 +62,6 @@ get_plugin :: () -> *Jai_To_Shader_Plugin {
       p.shader_entry_ids_filter = trim_ascii_whitespace(filter);
     }
   }
-
-  p.message = convert_procs;
 
   return p;
 }
@@ -555,11 +130,16 @@ shader_name_from_call_arg :: (arg: *Code_Node) -> (string, bool) {
 
 sanitize_identifier_component :: (in: string) -> string {
   out := copy_string(in);
-  out = replace(out, ".", "_");
-  out = replace(out, " ", "_");
-  out = replace(out, "(", "_");
-  out = replace(out, ")", "_");
-  out = replace(out, ",", "_");
+  for out {
+    if it == {
+      case #char "."; #through;
+      case #char " "; #through;
+      case #char "("; #through;
+      case #char ")"; #through;
+      case #char ",";
+        out[it_index] = "_";
+    }
+  }
   return out;
 }
 
@@ -636,6 +216,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
   if message.kind == {
     case .IMPORT; {
       import_message := cast(*Message_Import) message;
+      
+      // TODO: HACK
       if import_message.module_name == "generated" || import_message.module_name == "Jai-Shader-Transpiler/generated" {
         plugin.generated_module_import = import_message;
       }
@@ -644,29 +226,27 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     case .TYPECHECKED; {
       tc_message_start := current_time_monotonic();
       tc := cast(*Message_Typechecked) message;
-      t0 := current_time_monotonic();
-      for tc.procedure_bodies {
-        proc := it.expression;
-        already := false;
-        for plugin.known_procedure_bodies if it == proc { already = true; break; }
-        if !already array_add(*plugin.known_procedure_bodies, proc);
-      }
-      plugin.timings.known_proc_collect_s += to_float64_seconds(current_time_monotonic() - t0);
-
-      t0 = current_time_monotonic();
-      for tc.declarations {
-        resolved := collect_shader_requests_from_declaration(plugin, it.expression, plugin.known_procedure_bodies);
-        if !resolved add_pending_request_declaration(plugin, it.expression);
-      }
-      plugin.timings.declaration_collect_s += to_float64_seconds(current_time_monotonic() - t0);
-
-      t0 = current_time_monotonic();
-      for plugin.pending_request_declarations {
-        if collect_shader_requests_from_declaration(plugin, it, plugin.known_procedure_bodies) {
-          remove it;
+      timed(*plugin.timings.known_proc_collect_s, #code {
+        for tc.procedure_bodies {
+          proc := it.expression;
+          already := false;
+          for plugin.known_procedure_bodies if it == proc { already = true; break; }
+          if !already array_add(*plugin.known_procedure_bodies, proc);
         }
-      }
-      plugin.timings.pending_resolution_s += to_float64_seconds(current_time_monotonic() - t0);
+      });
+      timed(*plugin.timings.declaration_collect_s, #code {
+        for tc.declarations {
+          resolved := collect_shader_requests_from_declaration(plugin, it.expression, plugin.known_procedure_bodies);
+          if !resolved add_pending_request_declaration(plugin, it.expression);
+        }
+      });
+      timed(*plugin.timings.pending_resolution_s, #code {
+        for plugin.pending_request_declarations {
+          if collect_shader_requests_from_declaration(plugin, it, plugin.known_procedure_bodies) {
+            remove it;
+          }
+        }
+      });
       plugin.timings.typechecked_message_s += to_float64_seconds(current_time_monotonic() - tc_message_start);
       plugin.timings.typechecked_message_count += 1;
     }
@@ -867,53 +447,27 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     }
     
     case .COMPLETE; {
-      if plugin.currently_waiting_contexts.count != 0 || plugin.currently_waiting_pair_contexts.count != 0 {
+      using,except(message, plugin) plugin;
+      if currently_waiting_contexts.count != 0 || currently_waiting_pair_contexts.count != 0 {
         complete_message := cast(*Message_Complete)message;
         if complete_message.error_code == 0 {
           compiler_report("Jai Shader Transpiler: Compiler is finished, but some functions have not yet been transpiled.");
         }
       }
-      if plugin.timings_enabled {
-        log("[timing][build][plugin] typechecked msgs=% total=%s collect_known=%s collect_decl=%s resolve_pending=%s",
-          plugin.timings.typechecked_message_count,
-          plugin.timings.typechecked_message_s,
-          plugin.timings.known_proc_collect_s,
-          plugin.timings.declaration_collect_s,
-          plugin.timings.pending_resolution_s);
-        log("[timing][build][plugin] phase msgs=% total=%s pair_emit=%s single_emit=%s add_build_string=%s emit_lookup=%s emitted_pairs=% emitted_singles=%",
-          plugin.timings.phase_message_count,
-          plugin.timings.phase_message_s,
-          plugin.timings.pair_emit_s,
-          plugin.timings.single_emit_s,
-          plugin.timings.add_build_string_s,
-          plugin.timings.lookup_emit_s,
-          plugin.timings.emitted_pair_count,
-          plugin.timings.emitted_single_count);
-        log("[timing][build][plugin][spv] wall_single=%s wall_pair=%s worker_sum_lower=%s worker_sum_normalize=%s worker_sum_emit_slang=%s worker_sum_emit_spvasm=%s worker_sum_write_files=%s worker_sum_read_files=%s worker_sum_assemble=%s worker_sum_optimize=%s worker_sum_validate=%s worker_sum_cross=%s",
-          plugin.timings.spv_single_total_s,
-          plugin.timings.spv_pair_total_s,
-          plugin.timings.spv_lower_s,
-          plugin.timings.spv_normalize_s,
-          plugin.timings.spv_emit_slang_s,
-          plugin.timings.spv_emit_text_s,
-          plugin.timings.spv_write_files_s,
-          plugin.timings.spv_read_files_s,
-          plugin.timings.spv_assemble_s,
-          plugin.timings.spv_optimize_s,
-          plugin.timings.spv_validate_s,
-          plugin.timings.spv_cross_s);
+      if timings_enabled {
+        log_timings(plugin.timings);
       }
-      array_reset(*plugin.currently_waiting_contexts);
-      array_reset(*plugin.currently_waiting_pair_contexts);
-      array_reset(*plugin.pending_request_declarations);
-      array_reset(*plugin.known_procedure_bodies);
-      array_reset(*plugin.lookup_entries);
-      array_reset(*plugin.manifest_entries);
-      plugin.generated_module_import = null;
-      plugin.did_emit_lookup_overloads = false;
-      plugin.did_log_ir_pipeline = false;
-      plugin.did_log_ir_limitations = false;
-      plugin.timings = .{};
+      array_reset(*currently_waiting_contexts);
+      array_reset(*currently_waiting_pair_contexts);
+      array_reset(*pending_request_declarations);
+      array_reset(*known_procedure_bodies);
+      array_reset(*lookup_entries);
+      array_reset(*manifest_entries);
+      generated_module_import = null;
+      did_emit_lookup_overloads = false;
+      did_log_ir_pipeline = false;
+      did_log_ir_limitations = false;
+      timings = .{};
       table_reset(*get_transpiled_requests_seen);
     }
   }
@@ -1461,9 +1015,13 @@ run_spirv_external_single_job :: (job: *SPV_External_Single_Job) -> bool {
   }
 
   t0 = current_time_monotonic();
-  if !optimize_spirv_binary(job.spv_path, job.spv_opt_path) {
-    job.error_message = copy_string(tprint("SPIR-V backend: spirv-opt failed for '%'. SPIR-V: %", job.ctx.name, job.spv_path));
-    return false;
+  if USE_SPIRV_OPT {
+    if !optimize_spirv_binary(job.spv_path, job.spv_opt_path) {
+      job.error_message = copy_string(tprint("SPIR-V backend: spirv-opt failed for '%'. SPIR-V: %", job.ctx.name, job.spv_path));
+      return false;
+    }
+  } else {
+    job.spv_opt_path = job.spv_path;
   }
   job.optimize_s = to_float64_seconds(current_time_monotonic() - t0);
 
@@ -2724,31 +2282,24 @@ member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
   return false;
 }
 
-member_has_note_contains :: (member: *Type_Info_Struct_Member, note_fragment: string) -> bool {
-  normalized_fragment := copy_string(note_fragment);
-  to_lower_in_place(normalized_fragment);
-  normalized_fragment = replace(normalized_fragment, "_", "");
-
-  for member.notes {
-    normalized_note := copy_string(it);
-    to_lower_in_place(normalized_note);
-    normalized_note = replace(normalized_note, "_", "");
-    found, _ := contains(normalized_note, normalized_fragment);
-    if found return true;
-  }
-  return false;
-}
 
 member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
-  if member_has_note_contains(member, "position") return true;
-  if member_has_note_contains(member, "frag_coord") return true;
-  if member_has_note_contains(member, "frag_depth") return true;
-  if member_has_note_contains(member, "vertex_id") return true;
-  if member_has_note_contains(member, "instance_id") return true;
-  if member_has_note_contains(member, "front_facing") return true;
-  if member_has_note_contains(member, "point_size") return true;
-  if member_has_note_contains(member, "sample_id") return true;
-  if member_has_note_contains(member, "sample_mask") return true;
+  auto_release_temp();
+  
+  builtin_string_fragments :: []string.{
+    "position", "fragcoord", "fragdepth", "vertexid", "instanceid",
+    "frontfacing", "pointsize", "sampleid", "samplemask",
+  };
+
+  for member.notes {
+    normalized_note = replace(it, "_", "",, temp);
+    to_lower_in_place(normalized_note);
+    for fragment: builtin_string_fragment {
+      if contains(normalized_note, fragment) {
+        return true;
+      }
+    }
+  }
   return false;
 }
 
@@ -2835,4 +2386,7 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
     };
 }
 
+#load "build_timings.jai";
+
 using,only(getenv) POSIX :: #import "POSIX";
+#import,dir "ir_pipeline";

@@ -1,9 +1,3 @@
-#import "Basic";
-#import "File";
-#import "File_Utilities";
-#import "String";
-#import,file "../module.jai";
-
 HEADLESS_IR_DIR :: ".build/headless_ir";
 
 fail :: (message: string, args: .. Any) {
@@ -448,3 +442,11 @@ ir_headless_fragment_boost :: (x: float) -> float {
 }
 
 main :: () {}
+
+#scope_file
+#import "Basic";
+#import "File";
+#import "File_Utilities";
+#import "String";
+#import,file "../module.jai";
+#load "../ir_pipeline/external_toolchain.jai";
