@@ -9,3 +9,7 @@ a :: inline (sb: *String_Builder, fmt: string, args: ..Any) { a(sb, tprint(fmt, 
 append_lines :: inline (sb: *String_Builder, lines: ..string) {
   for lines a(sb, it);
 }
+
+append_many :: inline (sb: *String_Builder, strs: ..string) {
+  for strs append(sb, it);
+}
