@@ -468,13 +468,6 @@ is_internal_transpiled_request_name :: (name: string) -> bool {
   return begins_with(name, "transpiled_single_") || begins_with(name, "transpiled_pair_");
 }
 
-ir_mark_metal_device_pointers_const :: (source: string) -> string {
-  // Slang currently emits graphics buffer params as `T device*` in Metal wrappers, which triggers
-  // writable-resource warnings on non-void vertex functions. Rewriting to `T const device*` keeps
-  // the generated code semantically read-only for graphics stages and removes that warning.
-  return replace(source, " device*", " const device*");
-}
-
 ir_metal_enable_unsafe_runtime_array_indexing :: (source: string) -> string {
   return source;
 }
@@ -842,7 +835,6 @@ finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job,
   }
 
   if job.ctx.language == .METAL && job.ctx.type != .Compute {
-    target_source = ir_mark_metal_device_pointers_const(target_source);
     target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
     t0 = current_time_monotonic();
     write_entire_file(job.output_path, target_source);
@@ -1038,7 +1030,6 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
   if ctx.language == .METAL && ctx.type != .Compute {
-    target_source = ir_mark_metal_device_pointers_const(target_source);
     target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
     t0 = current_time_monotonic();
     write_entire_file(output_path, target_source);
@@ -1455,8 +1446,14 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
     return "", false, diag;
   }
 
+  vertex_source = ir_metal_enable_unsafe_runtime_array_indexing(vertex_source);
+  fragment_source = ir_metal_enable_unsafe_runtime_array_indexing(fragment_source);
+  t0 = current_time_monotonic();
+  _ = write_entire_file(vertex_output_path, vertex_source);
+  _ = write_entire_file(fragment_output_path, fragment_source);
+  if timings_totals timings_totals.spv_write_files_s += since(t0);
+
   merged_source := ir_merge_metal_pair_sources(vertex_source, fragment_source);
-  merged_source = ir_mark_metal_device_pointers_const(merged_source);
   merged_source = ir_metal_enable_unsafe_runtime_array_indexing(merged_source);
   merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));
   output_path := ir_output_path_from_pair_context(pair_ctx);

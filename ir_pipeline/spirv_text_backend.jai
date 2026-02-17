@@ -286,6 +286,7 @@ IR_SPV_Gen_Buffer :: struct {
   name: string;
   var_id: s64;
   binding_index: s64;
+  is_readonly: bool;
   element_type_name: string;
   element_kind: IR_SPV_Gen_Type;
   element_type_id: s64;
@@ -630,20 +631,24 @@ is_uint_type_name :: (name: string) -> bool {
   return name == "uint" || name == "u32";
 }
 
-parse_structured_buffer_element_type :: (type_name: string) -> (string, bool) {
+parse_structured_buffer_type_info :: (type_name: string) -> (element_type_name: string, is_resource: bool, is_readonly: bool) {
   ro_prefix :: "StructuredBuffer<";
   rw_prefix :: "RWStructuredBuffer<";
   prefix := "";
-  if begins_with(type_name, ro_prefix) prefix = ro_prefix;
-  else if begins_with(type_name, rw_prefix) prefix = rw_prefix;
-  else return "", false;
-  if type_name.count < prefix.count + 2 return "", false;
-  if type_name[type_name.count-1] != #char ">" return "", false;
+  is_readonly := false;
+  if begins_with(type_name, ro_prefix) {
+    prefix = ro_prefix;
+    is_readonly = true;
+  } else if begins_with(type_name, rw_prefix) {
+    prefix = rw_prefix;
+  } else return "", false, false;
+  if type_name.count < prefix.count + 2 return "", false, false;
+  if type_name[type_name.count-1] != #char ">" return "", false, false;
   out: string;
   out.data = type_name.data + prefix.count;
   out.count = type_name.count - prefix.count - 1;
-  if out.count == 0 return "", false;
-  return out, true;
+  if out.count == 0 return "", false, false;
+  return out, true, is_readonly;
 }
 
 parse_fixed_array_type_name :: (type_name: string) -> (element_type_name: string, array_count: s64, ok: bool) {
@@ -702,7 +707,7 @@ struct_has_pointer_fields :: (st: *IR_Struct) -> bool {
   return false;
 }
 
-resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> (string, bool) {
+resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> (element_type_name: string, is_resource: bool, is_readonly: bool) {
   assert(s != null);
   assert(field != null);
 
@@ -710,27 +715,27 @@ resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> 
     pointee_name := field.pointer_pointee_type_name;
     if pointee_name.count == 0 pointee_name = field.type.pointee_struct_name;
     if pointee_name.count == 0 pointee_name = field.type.pointee_display_name;
-    if pointee_name.count == 0 return "", false;
+    if pointee_name.count == 0 return "", false, false;
     if field.pointer_pointee_is_struct {
       nested_struct := find_struct(s, pointee_name);
-      if nested_struct && struct_has_pointer_fields(nested_struct) return "", false;
+      if nested_struct && struct_has_pointer_fields(nested_struct) return "", false, false;
     }
-    return pointee_name, true;
+    return pointee_name, true, false;
   }
 
   if field.type.kind == .POINTER {
     pointee_name := field.type.pointee_struct_name;
     if pointee_name.count == 0 pointee_name = field.type.pointee_display_name;
-    if pointee_name.count == 0 return "", false;
+    if pointee_name.count == 0 return "", false, false;
     if field.type.pointee_kind == .STRUCT {
       nested_struct := find_struct(s, pointee_name);
-      if nested_struct && struct_has_pointer_fields(nested_struct) return "", false;
+      if nested_struct && struct_has_pointer_fields(nested_struct) return "", false, false;
     }
-    return pointee_name, true;
+    return pointee_name, true, false;
   }
 
-  elem_type_name, is_resource := parse_structured_buffer_element_type(field.type_name);
-  return elem_type_name, is_resource;
+  elem_type_name, is_resource, is_readonly := parse_structured_buffer_type_info(field.type_name);
+  return elem_type_name, is_resource, is_readonly;
 }
 
 resource_walk_nested_struct :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> *IR_Struct {
@@ -751,7 +756,7 @@ resource_walk_nested_struct :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> *IR_S
   return find_struct(s, field.type_name);
 }
 
-collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_prefix: string, out_buffers: *[..] IR_Compute_Buffer) -> (has_resource: bool, has_non_resource: bool) {
+collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_prefix: string, out_buffers: *[..] IR_Compute_Buffer, default_readonly: bool = false) -> (has_resource: bool, has_non_resource: bool) {
   assert(s != null);
   assert(st != null);
 
@@ -759,7 +764,7 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
   has_non_resource := false;
   for st.fields {
     field_path := ifx name_prefix.count == 0 then it.name else tprint("%.%", name_prefix, it.name);
-    elem_type_name, is_resource_field := resource_element_type_from_field(s, *it);
+    elem_type_name, is_resource_field, field_readonly := resource_element_type_from_field(s, *it);
     if is_resource_field {
       has_resource = true;
       if out_buffers {
@@ -767,6 +772,7 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
           name = field_path,
           element_type = .{display_name = elem_type_name},
           element_type_name = elem_type_name,
+          is_readonly = field_readonly || default_readonly,
         });
       }
       continue;
@@ -774,7 +780,7 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
 
     nested_struct := resource_walk_nested_struct(s, *it);
     if nested_struct {
-      nested_has_resource, nested_has_non_resource := collect_struct_resource_fields(s, nested_struct, field_path, out_buffers);
+      nested_has_resource, nested_has_non_resource := collect_struct_resource_fields(s, nested_struct, field_path, out_buffers, default_readonly);
       if nested_has_resource has_resource = true;
       if nested_has_non_resource has_non_resource = true;
       if !nested_has_resource has_non_resource = true;
@@ -801,7 +807,7 @@ expand_compute_resource_root_buffers :: (s: *IR_SPV_Gen_State, in_buffers: [] IR
       continue;
     }
 
-    saw_resource, saw_non_resource := collect_struct_resource_fields(s, struct_def, buf.name, out_buffers);
+    saw_resource, saw_non_resource := collect_struct_resource_fields(s, struct_def, buf.name, out_buffers, buf.is_readonly);
     if saw_resource {
       if saw_non_resource {
         return_err("SPIR-V generic backend: compute resource-root '%' mixes resource and non-resource fields.", buf.name);
@@ -919,6 +925,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       name = it.name,
       var_id = var_id,
       binding_index = it_index,
+      is_readonly = it.is_readonly,
     };
 
     element_info := parse_buffer_element_info(it);
@@ -943,7 +950,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
         return_err("SPIR-V generic backend: buffer '%' has unsupported primitive element type '%'.", it.name, element_type_name);
       }
 
-      if elem_kind == .UINT && !parsed_fixed_array {
+      if elem_kind == .UINT && !parsed_fixed_array && !it.is_readonly {
         buffer_info.runtimearr_type_id = s.id_runtimearr_uint;
         buffer_info.wrapper_struct_type_id = s.id_buffer_struct;
         buffer_info.ptr_wrapper_type_id = s.id_ptr_storage_buffer_struct;
@@ -3667,7 +3674,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
         }
         if field.type != .FLOAT2 && field.type != .FLOAT3 && field.type != .FLOAT4 return_err("SPIR-V backend: component lvalue requires float2/float3/float4 field, got %.", field.type);
         comp_index: u32 = 0;
-        if expr.text == "x" comp_index = 0;
+        if      expr.text == "x" comp_index = 0;
         else if expr.text == "y" comp_index = 1;
         else if expr.text == "z" comp_index = 2;
         else if expr.text == "w" comp_index = 3;
@@ -4271,9 +4278,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return_err("SPIR-V backend: unsupported for-loop step '%'.", stmt.for_step);
       }
       step_id: s64;
-      if start_type == .INT step_id = get_i32_const(s, 1);
-      else if start_type == .UINT step_id = get_u32_const(s, 1);
-      else if start_type == .INT64 step_id = get_i64_const(s, 1);
+      if      start_type == .INT step_id    = get_i32_const(s, 1);
+      else if start_type == .UINT step_id   = get_u32_const(s, 1);
+      else if start_type == .INT64 step_id  = get_i64_const(s, 1);
       else if start_type == .UINT64 step_id = get_u64_const(s, 1);
       else return_err("SPIR-V backend: unsupported for-loop induction type %.", start_type);
       it_current := new_id(s);
@@ -4390,34 +4397,25 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
   return_err("SPIR-V backend: unsupported statement kind %.", stmt.kind);
 }
 
-emit_stmt_block :: (s: *IR_SPV_Gen_State, block: *IR_Block) -> (ok: bool, terminated: bool, diag: IR_Diagnostic) {
+emit_stmt_block :: (using s: *IR_SPV_Gen_State, block: *IR_Block) -> (ok: bool, terminated: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return false, false, make_diag(msg, ..args); }
 
   assert(s != null);
-  diag: IR_Diagnostic;
   if !block return_err("SPIR-V backend: null statement block.");
   local_count_before := s.locals.count;
   local_array_count_before := s.local_arrays.count;
   local_struct_count_before := s.local_structs.count;
+  defer {
+    locals.count = local_count_before;
+    local_arrays.count = local_array_count_before;
+    local_structs.count = local_struct_count_before;
+  }
   for block.statements {
     ok, terminated, step_diag := emit_stmt(s, *it);
-    if !ok {
-      s.locals.count = local_count_before;
-      s.local_arrays.count = local_array_count_before;
-      s.local_structs.count = local_struct_count_before;
-      return false, false, step_diag;
-    }
-    if terminated {
-      s.locals.count = local_count_before;
-      s.local_arrays.count = local_array_count_before;
-      s.local_structs.count = local_struct_count_before;
-      return true, true, diag;
-    }
+    if !ok return false, false, step_diag;
+    if terminated return true, true, {};
   }
-  s.locals.count = local_count_before;
-  s.local_arrays.count = local_array_count_before;
-  s.local_structs.count = local_struct_count_before;
-  return true, false, diag;
+  return true, false, {};
 }
 
 interface_builtin_from_semantic :: (stage: IR_SPV_Gen_Stage, field_name: string, semantic: string) -> IR_SPV_Gen_Interface_Builtin {
@@ -4496,29 +4494,30 @@ spv_append_base_buffer_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_State
 spv_append_buffer_layout_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   for s.buffers {
     buffer := it;
-    if buffer.element_kind == .UINT continue;
-    append(sb, tprint("               OpDecorate % ArrayStride %\n", id_text(buffer.runtimearr_type_id), buffer.array_stride));
+    if buffer.element_kind == .UINT && buffer.wrapper_struct_type_id == s.id_buffer_struct continue;
+    a(sb, "               OpDecorate % ArrayStride %", id_text(buffer.runtimearr_type_id), buffer.array_stride);
     if buffer.element_kind == .STRUCT {
       for buffer.fields {
-        append(sb, tprint("               OpMemberDecorate % % Offset %\n", id_text(buffer.element_type_id), it.index, it.offset));
+        a(sb, "               OpMemberDecorate % % Offset %", id_text(buffer.element_type_id), it.index, it.offset);
       }
     }
-    append(sb, tprint("               OpDecorate % Block\n", id_text(buffer.wrapper_struct_type_id)));
-    append(sb, tprint("               OpMemberDecorate % 0 Offset 0\n", id_text(buffer.wrapper_struct_type_id)));
+    a(sb, "               OpDecorate % Block", id_text(buffer.wrapper_struct_type_id));
+    a(sb, "               OpMemberDecorate % 0 Offset 0", id_text(buffer.wrapper_struct_type_id));
+    if buffer.is_readonly a(sb, "               OpMemberDecorate % 0 NonWritable", id_text(buffer.wrapper_struct_type_id));
   }
 }
 
 spv_append_buffer_binding_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   for s.buffers {
-    append(sb, tprint("               OpDecorate % Binding %\n", id_text(it.var_id), it.binding_index));
-    append(sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(it.var_id)));
+    a(sb, "               OpDecorate % Binding %", id_text(it.var_id), it.binding_index);
+    a(sb, "               OpDecorate % DescriptorSet 0", id_text(it.var_id));
   }
 }
 
 spv_append_buffer_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State, storage_class: string) {
   for s.buffers {
     buffer := it;
-    if buffer.element_kind == .UINT continue;
+    if buffer.element_kind == .UINT && buffer.wrapper_struct_type_id == s.id_buffer_struct continue;
     if buffer.element_kind == .STRUCT {
       struct_type_line_sb: String_Builder;
       append(*struct_type_line_sb, tprint("% = OpTypeStruct", id_text(buffer.element_type_id)));
@@ -4527,14 +4526,14 @@ spv_append_buffer_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State, stor
       append(sb, builder_to_string(*struct_type_line_sb));
     }
     spv_append_buffer_array_type(sb, buffer);
-    append(sb, tprint("% = OpTypeStruct %\n", id_text(buffer.wrapper_struct_type_id), id_text(buffer.runtimearr_type_id)));
-    append(sb, tprint("% = OpTypePointer % %\n", id_text(buffer.ptr_wrapper_type_id), storage_class, id_text(buffer.wrapper_struct_type_id)));
-    append(sb, tprint("% = OpTypePointer % %\n", id_text(buffer.ptr_storage_element_type_id), storage_class, id_text(buffer.element_type_id)));
+    a(sb, "% = OpTypeStruct %", id_text(buffer.wrapper_struct_type_id), id_text(buffer.runtimearr_type_id));
+    a(sb, "% = OpTypePointer % %", id_text(buffer.ptr_wrapper_type_id), storage_class, id_text(buffer.wrapper_struct_type_id));
+    a(sb, "% = OpTypePointer % %", id_text(buffer.ptr_storage_element_type_id), storage_class, id_text(buffer.element_type_id));
   }
 }
 
 spv_append_buffer_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State, storage_class: string) {
-  for s.buffers append(sb, tprint("% = OpVariable % %\n", id_text(it.var_id), id_text(it.ptr_wrapper_type_id), storage_class));
+  for s.buffers a(sb, "% = OpVariable % %", id_text(it.var_id), id_text(it.ptr_wrapper_type_id), storage_class);
 }
 
 spv_append_var_ids :: (sb: *String_Builder, items: [] $T) #expand {
@@ -4543,13 +4542,13 @@ spv_append_var_ids :: (sb: *String_Builder, items: [] $T) #expand {
 
 spv_append_local_array_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   for s.local_array_types {
-    append(sb, tprint("% = OpTypeArray % %\n",
-                      id_text(it.array_type_id),
-                      id_text(type_id_from_kind(s, it.element_type)),
-                      id_text(it.count_const_id)));
-    append(sb, tprint("% = OpTypePointer Function %\n",
-                      id_text(it.ptr_func_array_type_id),
-                      id_text(it.array_type_id)));
+    a(sb, "% = OpTypeArray % %",
+      id_text(it.array_type_id),
+      id_text(type_id_from_kind(s, it.element_type)),
+      id_text(it.count_const_id));
+    a(sb, "% = OpTypePointer Function %",
+      id_text(it.ptr_func_array_type_id),
+      id_text(it.array_type_id));
   }
 }
 
@@ -4558,9 +4557,7 @@ parse_parameter_block_struct_name :: (type_name: string) -> (string, bool) {
   if !begins_with(type_name, prefix) return "", false;
   if type_name.count < prefix.count + 1 return "", false;
   if type_name[type_name.count-1] != #char ">" return "", false;
-  out: string;
-  out.data = type_name.data + prefix.count;
-  out.count = type_name.count - prefix.count - 1;
+  out: string = { type_name.count - prefix.count - 1, type_name.data + prefix.count };
   if out.count == 0 return "", false;
   return out, true;
 }
@@ -4596,13 +4593,13 @@ ps_assign_struct_info :: (s: *IR_SPV_Gen_State, infos: *[..] IR_SPV_PS_Struct_In
     ptr_type_id = new_id(s),
   });
   for st.fields {
-    field := it;
-    if !field.is_pointer continue;
-    if !field.pointer_pointee_is_struct continue;
-    if field.pointer_pointee_type_name.count == 0 continue;
-    if !struct_has_pointer_fields_recursive(s.extra_structs, field.pointer_pointee_type_name, depth + 1) continue;
-    next_prefix := tprint("%.%", prefix, field.name);
-    if !ps_assign_struct_info(s, infos, field.pointer_pointee_type_name, next_prefix, depth + 1) return false;
+    using it;
+    if !is_pointer continue;
+    if !pointer_pointee_is_struct continue;
+    if pointer_pointee_type_name.count == 0 continue;
+    if !struct_has_pointer_fields_recursive(s.extra_structs, pointer_pointee_type_name, depth + 1) continue;
+    next_prefix := tprint("%.%", prefix, name);
+    if !ps_assign_struct_info(s, infos, pointer_pointee_type_name, next_prefix, depth + 1) return false;
   }
   return true;
 }

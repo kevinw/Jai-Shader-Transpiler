@@ -51,7 +51,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   if !root_struct return_err("SPIR-V backend: missing root pointer struct '%'.", root_arg.pointer_pointee_type_name);
 
   graphics_buffers: [..] IR_Compute_Buffer;
-  saw_resource, saw_non_resource := collect_struct_resource_fields(*state, root_struct, root_arg.name, *graphics_buffers);
+  saw_resource, saw_non_resource := collect_struct_resource_fields(*state, root_struct, root_arg.name, *graphics_buffers, root_arg.is_readonly);
   if !saw_resource return_err("SPIR-V backend: pointer root '%' has no resource fields.", root_arg.name);
   if saw_non_resource return_err("SPIR-V backend: pointer root '%' currently requires pointer-only members.", root_arg.name);
 
@@ -357,6 +357,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
           struct_name = arg.type.pointee_struct_name,
         },
         element_type_name = arg.type.pointee_display_name,
+        is_readonly = arg.is_readonly,
       });
       continue;
     }
@@ -365,15 +366,17 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         name = arg.name,
         element_type = .{display_name = arg.pointer_pointee_type_name},
         element_type_name = arg.pointer_pointee_type_name,
+        is_readonly = arg.is_readonly,
       });
       continue;
     }
-    elem_type_name, is_resource_buffer := parse_structured_buffer_element_type(arg.type_name);
+    elem_type_name, is_resource_buffer, resource_readonly := parse_structured_buffer_type_info(arg.type_name);
     if is_resource_buffer {
       array_add(*graphics_buffers, .{
         name = arg.name,
         element_type = .{display_name = elem_type_name},
         element_type_name = elem_type_name,
+        is_readonly = arg.is_readonly || resource_readonly,
       });
       continue;
     }
@@ -396,7 +399,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     }
     struct_def := find_struct(*state, container_type_name);
     if !struct_def continue;
-    saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, struct_def, arg.name, *graphics_buffers);
+    saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, struct_def, arg.name, *graphics_buffers, arg.is_readonly);
     if !is_param_block && saw_resource_field && saw_non_resource_field {
       return_err("SPIR-V backend: resource-container arg '%' currently requires all fields to be StructuredBuffer/RWStructuredBuffer.", arg.name);
     }
@@ -487,7 +490,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
           continue;
         }
       }
-      _, is_resource_field := parse_structured_buffer_element_type(field.type_name);
+      _, is_resource_field, _ := parse_structured_buffer_type_info(field.type_name);
       if is_resource_field continue;
       field_type := IR_SPV_Gen_Type.UNKNOWN;
       field_type_id: s64 = 0;

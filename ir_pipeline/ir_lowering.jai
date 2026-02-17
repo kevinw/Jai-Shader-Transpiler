@@ -85,6 +85,7 @@ IR_Compute_Buffer :: struct {
   name: string;
   element_type: IR_Type;
   element_type_name: string;
+  is_readonly: bool;
 }
 
 IR_Function_Arg :: struct {
@@ -1887,6 +1888,7 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
       name = arg.name,
       element_type = elem_ir_type,
       element_type_name = elem_type_name,
+      is_readonly = false,
     });
   }
 
