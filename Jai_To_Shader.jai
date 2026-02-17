@@ -1162,9 +1162,8 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
   ir_metal_split_top_level_decls(fragment_source, *preamble_f, *decls_f);
 
   sb: String_Builder;
-  if preamble_v.count != 0 append(*sb, preamble_v);
-  else if preamble_f.count != 0 append(*sb, preamble_f);
-  append(*sb, "\n");
+  if preamble_v.count != 0      a(*sb, preamble_v);
+  else if preamble_f.count != 0 a(*sb, preamble_f);
 
   seen: Table(string, bool);
   for decls_v {
@@ -1174,8 +1173,7 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
     found, _ := table_find(*seen, key);
     if found continue;
     table_add(*seen, copy_string(key), true);
-    append(*sb, decl);
-    append(*sb, "\n");
+    a(*sb, decl);
   }
 
   for decls_f {
@@ -1185,8 +1183,7 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
     found, _ := table_find(*seen, key);
     if found continue;
     table_add(*seen, copy_string(key), true);
-    append(*sb, decl);
-    append(*sb, "\n");
+    a(*sb, decl);
   }
 
   return builder_to_string(*sb);
@@ -1544,14 +1541,16 @@ emit_lookup_overloads :: (plugin: *Jai_To_Shader_Plugin, workspace: Workspace) {
   if plugin.did_emit_lookup_overloads return;
 
   sb: String_Builder;
-  append(*sb, "G :: #import \"generated\";\n");
-  append(*sb, "#poke_name G lookup_transpiled_impl;\n");
-  append(*sb, "lookup_transpiled_impl :: (target_name: string, primary_name: string, secondary_name: string) -> string {\n");
+  append_lines(*sb,
+    "G :: #import \"generated\";",
+    "#poke_name G lookup_transpiled_impl;",
+    "lookup_transpiled_impl :: (target_name: string, primary_name: string, secondary_name: string) -> string {",
+  );
   for plugin.lookup_entries {
-    append(*sb, tprint("  if target_name == \"%\" && primary_name == \"%\" && secondary_name == \"%\" return %;\n",
-                       it.target_name, it.primary_name, it.secondary_name, it.symbol_name));
+    a(*sb, "  if target_name == \"%\" && primary_name == \"%\" && secondary_name == \"%\" return %;",
+                       it.target_name, it.primary_name, it.secondary_name, it.symbol_name);
   }
-  append(*sb, "  return \"\";\n}\n");
+  a(*sb, "  return \"\";\n}");
 
   if plugin.generated_module_import add_build_string(builder_to_string(*sb), workspace, plugin.generated_module_import);
   else add_build_string(builder_to_string(*sb), workspace);
@@ -1572,9 +1571,7 @@ parse_shader_pair_note :: (note_text: string) -> (Shader_Language, GLSL_Target, 
     prefix := it;
     if !begins_with(note_text, prefix) continue;
 
-    rest: string;
-    rest.data = note_text.data + prefix.count;
-    rest.count = note_text.count - prefix.count;
+    rest: string = { note_text.count - prefix.count, note_text.data + prefix.count };
     if rest.count == 0 return .NONE, .OPENGL, "", true, false;
 
     close_paren_index: s64 = -1;
@@ -1586,15 +1583,11 @@ parse_shader_pair_note :: (note_text: string) -> (Shader_Language, GLSL_Target, 
     }
     if close_paren_index == -1 return .NONE, .OPENGL, "", true, false;
 
-    arg: string;
-    arg.data = rest.data;
-    arg.count = close_paren_index;
+    arg: string = { close_paren_index, rest.data };
     arg = trim_ascii_whitespace(arg);
     if arg.count == 0 return .NONE, .OPENGL, "", true, false;
 
-    trailing: string;
-    trailing.data = rest.data + close_paren_index + 1;
-    trailing.count = rest.count - (close_paren_index + 1);
+    trailing: string = { rest.count - (close_paren_index + 1), rest.data + close_paren_index + 1 };
     trailing = trim_ascii_whitespace(trailing);
     if trailing.count != 0 return .NONE, .OPENGL, "", true, false;
 
@@ -1729,7 +1722,7 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
       return false;
     }
 
-    vertex_is_valid := proc_has_note(vertex_proc.header, "vertex_shader");
+    vertex_is_valid   := proc_has_note(vertex_proc.header, "vertex_shader");
     fragment_is_valid := proc_has_note(fragment_proc.header, "fragment_shader");
     if !vertex_is_valid || !fragment_is_valid {
       compiler_report("Jai Shader Transpiler: shader_pair_to_* requires the declaration expression to resolve to a @vertex_shader and the note argument to resolve to a @fragment_shader.", make_location(decl));
@@ -1778,31 +1771,6 @@ shader_entry_id_is_selected :: (csv_filter: string, entry_id: string) -> bool {
   }
 
   return false;
-}
-
-
-
-
-// Only function that has to be called from a backend
-
-handle_custom_procedure_call :: (ctx: *Shader_Write_Context, sb: *String_Builder, pc: *Code_Procedure_Call) {
-  name := cast(*Code_Ident) pc.procedure_expression;
-  
-  // Make sure we're not writing the function again
-  found := false;
-  for ctx.functions if it.name == name.name found = true;
-  if !found {
-    called_function := cast(*Code_Procedure_Header) pc.resolved_procedure_expression;
-    
-    function_code: String_Builder;
-    write_function(ctx, *function_code, called_function);
-      
-    array_add(*ctx.functions, .{
-      prototype=called_function,
-      name=name.name,
-      code=builder_to_string(*function_code),
-    });
-  }
 }
 
 // @whatthefuckisthis im 99% sure there's a simpler way of converting an int to a string directly.
@@ -1861,10 +1829,6 @@ operator_string :: (op: Operator_Type) -> string {
   }
 }
 
-//~
-
-
-
 Shader_Type :: enum {
   Vertex;
   Fragment;
@@ -1909,17 +1873,6 @@ Shader_Write_Pair_Context :: struct {
   fragment_fn: *Code_Procedure_Body;
 }
 
-node_is_fragment_shader :: (node: *Code_Procedure_Header) -> bool {
-  for node.notes if it.text == "fragment_shader" return true;
-  return false;
-}
-
-member_has_note :: (member: *Type_Info_Struct_Member, note: string) -> bool {
-  for member.notes if it == note return true;
-  return false;
-}
-
-
 member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
   auto_release_temp();
   
@@ -1940,35 +1893,9 @@ member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
   return false;
 }
 
-member_get_compute_builtin_note :: (member: *Type_Info_Struct_Member) -> (string, bool) {
-  for member.notes {
-    found, _ := contains(it, "thread_position_in_grid");
-    if found return "thread_position_in_grid", true;
-    found, _ = contains(it, "thread_position_in_threadgroup");
-    if found return "thread_position_in_threadgroup", true;
-    found, _ = contains(it, "threadgroup_position_in_grid");
-    if found return "threadgroup_position_in_grid", true;
-    found, _ = contains(it, "thread_index_in_threadgroup");
-    if found return "thread_index_in_threadgroup", true;
-  }
-  return "", false;
-}
-
-member_get_note_suffix :: (member: *Type_Info_Struct_Member, prefix_check: string) -> (string, bool) {
-  for member.notes if begins_with(it, prefix_check) {
-    ret: string;
-    ret.data = it.data + prefix_check.count;
-    ret.count = it.count - prefix_check.count;
-    return ret, true;
-  }
-  return "", false;
-}
-
 declaration_get_note_suffix :: (decl: *Code_Declaration, prefix_check: string) -> (string, bool) {
   for decl.notes if begins_with(it.text, prefix_check) {
-    ret: string;
-    ret.data = it.text.data + prefix_check.count;
-    ret.count = it.text.count - prefix_check.count;
+    ret: string = { it.text.count - prefix_check.count, it.text.data + prefix_check.count };
     return ret, true;
   }
   return "", false;
@@ -1984,6 +1911,7 @@ declaration_is_parameter_using :: (header: *Code_Procedure_Header, decl: *Code_D
   return false;
 }
 
+#scope_file
 
 #import "Basic";
 #import "Compiler";
@@ -1993,10 +1921,11 @@ PP :: #import "Program_Print";
 #import "Hash_Table";
 #import "Thread";
 #import "System";
-
-#scope_file
-
 #import "File";
+
+#import,dir "ir_pipeline";
+#load "build_timings.jai";
+#load "string_builder_util.jai";
 
 proc_has_note :: (node: *Code_Procedure_Header, note: string) -> bool {
   for node.notes if it.text == note return true;
@@ -2022,9 +1951,5 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
         metal_allow_fragcoord_from_position = false,
     };
 }
-
-#load "build_timings.jai";
-
-#import,dir "ir_pipeline";
 
 since :: inline (start_time: Apollo_Time) -> float64 { return to_float64_seconds(current_time_monotonic() - start_time); }

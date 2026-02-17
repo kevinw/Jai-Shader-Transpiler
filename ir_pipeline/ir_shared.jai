@@ -215,7 +215,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       decl := cast(*Code_Declaration) stmt;
       for decl.notes if it.text == "jai_only" return true;
       decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
-      type_name, type_ok := ir_type_to_slang_name(decl_type);
+      type_name, type_ok := ir_type_to_shader_name(decl_type);
       if !type_ok {
         ir_set_diagnostic(state, tprint("IR lowering: unsupported declaration type for '%'", decl.name), stmt);
         return false;
@@ -875,8 +875,9 @@ ir_shared_collect_calls_in_node :: (node: *Code_Node, called_headers: *[..] *Cod
 }
 
 ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering_State) -> (IR_Function, bool) {
-  out: IR_Function;
   assert(state != null);
+  
+  out: IR_Function;
   if !header return out, false;
   if !header.body_or_null || !header.body_or_null.block return out, false;
   if header.returns.count > 1 return out, false;
@@ -887,7 +888,7 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
     ret_type := ifx ret.type_inst then ret.type_inst.result else ifx ret.expression then ret.expression.type else null;
     ret_ir_type, ret_ir_ok := ir_type_from_type_info(ret_type);
     if !ret_ir_ok return out, false;
-    ret_name, ret_ok := ir_type_to_slang_name(ret_type);
+    ret_name, ret_ok := ir_type_to_shader_name(ret_type);
     if !ret_ok return out, false;
     out.return_type = ret_ir_type;
     out.return_type_name = ret_name;
@@ -898,7 +899,7 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
 
   for header.arguments {
     arg_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
-    arg_type_name, arg_ok := ir_type_to_slang_name(arg_type);
+    arg_type_name, arg_ok := ir_type_to_shader_name(arg_type);
     if !arg_ok return out, false;
     original_type_name, original_ok := ir_type_to_original_name(arg_type);
     if !original_ok return out, false;
@@ -927,10 +928,10 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
 }
 
 ir_shared_collect_functions_recursive :: (header: *Code_Procedure_Header,
-                                                seen_headers: *[..] *Code_Procedure_Header,
-                                                functions: *[..] IR_Function,
-                                                main_header: *Code_Procedure_Header,
-                                                state: *IR_Lowering_State) -> bool {
+                                          seen_headers: *[..] *Code_Procedure_Header,
+                                          functions: *[..] IR_Function,
+                                          main_header: *Code_Procedure_Header,
+                                          state: *IR_Lowering_State) -> bool {
   assert(state != null);
   if !header || !header.body_or_null || !header.body_or_null.block return false;
   if ir_shared_header_in_list(seen_headers, header) return true;
@@ -979,11 +980,11 @@ ir_emit_function_definitions :: (sb: *String_Builder, functions: [] IR_Function)
   assert(sb != null);
   if functions.count == 0 return true;
   for functions {
-    append(sb, ir_function_signature_string(*it, include_arg_names=true), " {\n");
+    a(sb, ir_function_signature_string(*it, include_arg_names=true), " {");
     body_lines: [..] string;
     if !ir_emit_ir_block_lines(*body_lines, *it.body, 1) return false;
-    for body_lines append(sb, it, "\n");
-    append(sb, "}\n\n");
+    for body_lines a(sb, it);
+    a(sb, "}\n");
   }
   return true;
 }

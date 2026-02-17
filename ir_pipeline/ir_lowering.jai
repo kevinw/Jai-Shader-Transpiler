@@ -240,13 +240,13 @@ ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
 
 #scope_module
 
-ir_type_to_slang_name :: (type: *Type_Info) -> (string, bool) {
+ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
   if !type return "", false;
 
   if type.type == .POINTER {
     ptr := cast(*Type_Info_Pointer) type;
     if !ptr.pointer_to return "", false;
-    pointee_name, pointee_ok := ir_type_to_slang_name(ptr.pointer_to);
+    pointee_name, pointee_ok := ir_type_to_shader_name(ptr.pointer_to);
     if !pointee_ok return "", false;
     return tprint("*%", pointee_name), true;
   }
@@ -254,7 +254,7 @@ ir_type_to_slang_name :: (type: *Type_Info) -> (string, bool) {
   if type.type == .ARRAY {
     base_type, suffix := split_array_type_and_suffix("IR lowering", type);
     if !base_type return "", false;
-    base_name, base_ok := ir_type_to_slang_name(base_type);
+    base_name, base_ok := ir_type_to_shader_name(base_type);
     if !base_ok return "", false;
     return tprint("%%", base_name, suffix), true;
   }
@@ -302,7 +302,7 @@ ir_type_to_original_name :: (type: *Type_Info) -> (string, bool) {
     return tprint("%%", base_name, suffix), true;
   }
 
-  type_name, type_ok := ir_type_to_slang_name(type);
+  type_name, type_ok := ir_type_to_shader_name(type);
   return type_name, type_ok;
 }
 
@@ -324,7 +324,7 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
   out: IR_Type;
   if !type return out, false;
 
-  display_name, display_ok := ir_type_to_slang_name(type);
+  display_name, display_ok := ir_type_to_shader_name(type);
   if !display_ok return out, false;
   out.display_name = display_name;
 
@@ -381,7 +381,7 @@ ir_pointer_pointee_lowered_name :: (pointer_type: *Type_Info) -> (string, bool, 
     return jai_to_hlsl_type_name(get_struct_type_name(st)), true, true;
   }
 
-  pointee_name, pointee_ok := ir_type_to_slang_name(ptr.pointer_to);
+  pointee_name, pointee_ok := ir_type_to_shader_name(ptr.pointer_to);
   if !pointee_ok return "", false, false;
   return pointee_name, true, false;
 }
@@ -396,7 +396,7 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
   for *struct_type.members {
     ir_type, ir_type_ok := ir_type_from_type_info(it.type);
     if !ir_type_ok return out, false;
-    type_name, ok := ir_type_to_slang_name(it.type);
+    type_name, ok := ir_type_to_shader_name(it.type);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
     original_type_name, original_ok := ir_type_to_original_name(it.type);
@@ -450,7 +450,7 @@ ir_lower_struct_member_type_name :: (type: *Type_Info, extra_structs: *[..] IR_S
     if ptr.pointer_to.type == .STRUCT {
       st := cast(*Type_Info_Struct) ptr.pointer_to;
       nested_name := jai_to_hlsl_type_name(get_struct_type_name(st));
-      if !ir_is_builtin_slang_type_name(nested_name) {
+      if !ir_is_builtin_shader_type_name(nested_name) {
         nested_struct, nested_ok := ir_lower_struct_with_pointer_members_from_type(nested_name, ptr.pointer_to, extra_structs);
         if !nested_ok return "", false;
         ir_add_struct_unique_by_name(extra_structs, nested_struct);
@@ -462,7 +462,7 @@ ir_lower_struct_member_type_name :: (type: *Type_Info, extra_structs: *[..] IR_S
       return tprint("StructuredBuffer<%>", nested_name), true;
     }
 
-    elem_name, elem_ok := ir_type_to_slang_name(ptr.pointer_to);
+    elem_name, elem_ok := ir_type_to_shader_name(ptr.pointer_to);
     if !elem_ok return "", false;
     return tprint("StructuredBuffer<%>", elem_name), true;
   }
@@ -470,7 +470,7 @@ ir_lower_struct_member_type_name :: (type: *Type_Info, extra_structs: *[..] IR_S
   if type.type == .STRUCT {
     st := cast(*Type_Info_Struct) type;
     nested_name := jai_to_hlsl_type_name(get_struct_type_name(st));
-    if !ir_is_builtin_slang_type_name(nested_name) {
+    if !ir_is_builtin_shader_type_name(nested_name) {
       nested_struct, nested_ok := ir_lower_struct_with_pointer_members_from_type(nested_name, type, extra_structs);
       if !nested_ok return "", false;
       ir_add_struct_unique_by_name(extra_structs, nested_struct);
@@ -478,7 +478,7 @@ ir_lower_struct_member_type_name :: (type: *Type_Info, extra_structs: *[..] IR_S
     return nested_name, true;
   }
 
-  type_name, type_ok := ir_type_to_slang_name(type);
+  type_name, type_ok := ir_type_to_shader_name(type);
   return type_name, type_ok;
 }
 
@@ -538,7 +538,7 @@ ir_add_struct_unique_by_name :: (structs: *[..] IR_Struct, s: IR_Struct) {
   array_add(structs, s);
 }
 
-ir_is_builtin_slang_type_name :: (name: string) -> bool {
+ir_is_builtin_shader_type_name :: (name: string) -> bool {
   if name == "bool" || name == "int" || name == "uint" || name == "float" || name == "double" return true;
   if name == "bool2" || name == "bool3" || name == "bool4" return true;
   if name == "int2" || name == "int3" || name == "int4" return true;
@@ -670,7 +670,7 @@ ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Stru
     if ptr.pointer_to.type == .STRUCT {
       st := cast(*Type_Info_Struct) ptr.pointer_to;
       struct_name := jai_to_hlsl_type_name(get_struct_type_name(st));
-      if !ir_is_builtin_slang_type_name(struct_name) {
+      if !ir_is_builtin_shader_type_name(struct_name) {
         lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, ptr.pointer_to, extra_structs);
         if !lowered_ok return "", false;
         ir_add_struct_unique_by_name(extra_structs, lowered_struct);
@@ -678,14 +678,14 @@ ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Stru
       if ir_struct_has_pointer_members(ptr.pointer_to) return struct_name, true;
       return tprint("StructuredBuffer<%>", struct_name), true;
     }
-    elem_name, elem_ok := ir_type_to_slang_name(ptr.pointer_to);
+    elem_name, elem_ok := ir_type_to_shader_name(ptr.pointer_to);
     if !elem_ok return "", false;
     return tprint("StructuredBuffer<%>", elem_name), true;
   }
   if type.type == .STRUCT {
     st := cast(*Type_Info_Struct) type;
     struct_name := jai_to_hlsl_type_name(get_struct_type_name(st));
-    if !ir_is_builtin_slang_type_name(struct_name) {
+    if !ir_is_builtin_shader_type_name(struct_name) {
       lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, type, extra_structs);
       if !lowered_ok return "", false;
       ir_add_struct_unique_by_name(extra_structs, lowered_struct);
@@ -693,7 +693,7 @@ ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Stru
     // For graphics stages, extra struct args represent uniforms/resources, not stage input varyings.
     return tprint("ParameterBlock<%>", struct_name), true;
   }
-  type_name, type_ok := ir_type_to_slang_name(type);
+  type_name, type_ok := ir_type_to_shader_name(type);
   return type_name, type_ok;
 }
 
@@ -929,11 +929,11 @@ ir_lower_expr :: (node: *Code_Node,
           type_ident := cast(*Code_Ident) lit.struct_literal_info.type_expression.type_valued_expression;
           constructor_name = jai_to_hlsl_type_name(type_ident.name);
         } else if lit.type {
-          lowered_type_name, lowered_type_ok := ir_type_to_slang_name(lit.type);
+          lowered_type_name, lowered_type_ok := ir_type_to_shader_name(lit.type);
           if lowered_type_ok constructor_name = lowered_type_name;
         }
         if constructor_name.count == 0 && expected_type {
-          expected_name, expected_ok := ir_type_to_slang_name(expected_type);
+          expected_name, expected_ok := ir_type_to_shader_name(expected_type);
           if expected_ok constructor_name = expected_name;
         }
         if constructor_name.count == 0 && lit.type && lit.type.type == .STRUCT {
@@ -961,7 +961,7 @@ ir_lower_expr :: (node: *Code_Node,
 
               lowered_right, right_ok := ir_lower_expr(named.right, input_fields, output_fields, active_usings, active_aliases, state, arg_expected_type);
               if !right_ok return null, false;
-              if ir_is_builtin_slang_type_name(constructor_name) {
+              if ir_is_builtin_shader_type_name(constructor_name) {
                 // Builtin vector/matrix constructors expect positional args only.
                 array_add(*out.args, lowered_right);
                 continue;
@@ -1147,7 +1147,7 @@ ir_lower_expr :: (node: *Code_Node,
       result_type := expected_type;
       if !result_type result_type = node.type;
       if result_type {
-        result_type_name, result_type_ok := ir_type_to_slang_name(result_type);
+        result_type_name, result_type_ok := ir_type_to_shader_name(result_type);
         if result_type_ok out.text = result_type_name;
       }
       return out, true;
@@ -1164,7 +1164,7 @@ ir_lower_expr :: (node: *Code_Node,
         if !inner_ok return null, false;
         if !fallback_type return inner, true;
 
-        fallback_type_name, fallback_ok := ir_type_to_slang_name(fallback_type);
+        fallback_type_name, fallback_ok := ir_type_to_shader_name(fallback_type);
         if !fallback_ok {
           ir_set_diagnostic(state, "IR lowering: cast is missing target type and fallback type is unsupported", node);
           return null, false;
@@ -1177,7 +1177,7 @@ ir_lower_expr :: (node: *Code_Node,
       target_type_info := cast_node.target_type.result;
       type_name := "";
       if target_type_info {
-        t, ok := ir_type_to_slang_name(target_type_info);
+        t, ok := ir_type_to_shader_name(target_type_info);
         if !ok {
           ir_set_diagnostic(state, "IR lowering: unsupported cast target type", cast_node.target_type.type_valued_expression);
           return null, false;
@@ -1262,9 +1262,7 @@ ir_lower_expr :: (node: *Code_Node,
 
 ir_parse_float_matrix_dims :: (type_name: string) -> (cols: s64, rows: s64, ok: bool) {
   if !begins_with(type_name, "float") return 0, 0, false;
-  dims: string;
-  dims.data = type_name.data + 5;
-  dims.count = type_name.count - 5;
+  dims: string = { type_name.count - 5, type_name.data + 5 };
   if dims.count < 3 return 0, 0, false;
 
   x_index := cast(s64) -1;
@@ -1276,12 +1274,8 @@ ir_parse_float_matrix_dims :: (type_name: string) -> (cols: s64, rows: s64, ok: 
   }
   if x_index <= 0 || x_index >= dims.count-1 return 0, 0, false;
 
-  cols_text: string;
-  cols_text.data = dims.data;
-  cols_text.count = x_index;
-  rows_text: string;
-  rows_text.data = dims.data + x_index + 1;
-  rows_text.count = dims.count - x_index - 1;
+  cols_text: string = { x_index, dims.data };
+  rows_text: string = { dims.count - x_index - 1, dims.data + x_index + 1 };
 
   parse_decimal_s64 :: (s: string) -> (s64, bool) {
     if s.count == 0 return 0, false;
@@ -1477,7 +1471,7 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
     if !found return out, false;
     semantic, sem_ok := ir_compute_builtin_to_semantic(builtin_name);
     if !sem_ok return out, false;
-    type_name, type_ok := ir_type_to_slang_name(it.type);
+    type_name, type_ok := ir_type_to_shader_name(it.type);
     if !type_ok return out, false;
     original_type_name, original_ok := ir_type_to_original_name(it.type);
     if !original_ok return out, false;
@@ -1511,7 +1505,7 @@ ir_collect_compute_declared_struct_type :: (ti: *Type_Info, state: *IR_Lowering_
   if ti.type != .STRUCT return true;
   st := cast(*Type_Info_Struct) ti;
   struct_name := jai_to_hlsl_type_name(get_struct_type_name(st));
-  if ir_is_builtin_slang_type_name(struct_name) return true;
+  if ir_is_builtin_shader_type_name(struct_name) return true;
   lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, ti, out_extra_structs);
   if !lowered_ok {
     ir_set_diagnostic(state, tprint("IR lowering(compute): could not lower declared struct type '%'", struct_name), loc_node);
@@ -1695,8 +1689,8 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
 
   in_type := ifx arg0.type_inst then arg0.type_inst.result else ifx arg0.expression then arg0.expression.type else null;
   out_type := ifx ret0.type_inst then ret0.type_inst.result else ifx ret0.expression then ret0.expression.type else null;
-  out_type_name_for_classify, out_type_name_ok := ir_type_to_slang_name(out_type);
-  out_type_is_builtin_value := out_type_name_ok && ir_is_builtin_slang_type_name(out_type_name_for_classify);
+  out_type_name_for_classify, out_type_name_ok := ir_type_to_shader_name(out_type);
+  out_type_is_builtin_value := out_type_name_ok && ir_is_builtin_shader_type_name(out_type_name_for_classify);
 
   in_struct, in_ok := ir_lower_struct_from_type(tprint("%_In", ctx.name), in_type);
   if !in_ok {
@@ -1740,7 +1734,7 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
     }
     ret_type_name := out_type_name_for_classify;
     if !out_type_name_ok {
-      ret_type_name, out_type_name_ok = ir_type_to_slang_name(out_type);
+      ret_type_name, out_type_name_ok = ir_type_to_shader_name(out_type);
     }
     if !out_type_name_ok {
       ir_set_diagnostic(*state, "IR lowering(fragment): unsupported non-struct return type name.", cast(*Code_Node) ret0);
@@ -1872,7 +1866,7 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
       ir_set_diagnostic(*state, tprint("IR lowering(compute): unsupported typed pointee for argument '%'", arg.name), cast(*Code_Node) header);
       return out, false, ir_get_diagnostic(*state);
     }
-    elem_type_name, elem_ok := ir_type_to_slang_name(ptr.pointer_to);
+    elem_type_name, elem_ok := ir_type_to_shader_name(ptr.pointer_to);
     if !elem_ok {
       ir_set_diagnostic(*state, tprint("IR lowering(compute): unsupported pointee type for argument '%'", arg.name), cast(*Code_Node) header);
       return out, false, ir_get_diagnostic(*state);
@@ -1880,7 +1874,7 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
     if ptr.pointer_to && ptr.pointer_to.type == .STRUCT {
       struct_type := cast(*Type_Info_Struct) ptr.pointer_to;
       struct_name := jai_to_hlsl_type_name(get_struct_type_name(struct_type));
-      if !ir_is_builtin_slang_type_name(struct_name) {
+      if !ir_is_builtin_shader_type_name(struct_name) {
         lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, ptr.pointer_to, *out.extra_structs);
         if !lowered_ok {
           ir_set_diagnostic(*state, tprint("IR lowering(compute): could not lower struct type '%' for argument '%'", struct_name, arg.name), cast(*Code_Node) header);
@@ -1909,7 +1903,7 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
       if !arg_type || arg_type.type != .STRUCT continue;
       struct_type := cast(*Type_Info_Struct) arg_type;
       struct_name := jai_to_hlsl_type_name(get_struct_type_name(struct_type));
-      if ir_is_builtin_slang_type_name(struct_name) continue;
+      if ir_is_builtin_shader_type_name(struct_name) continue;
       lowered_struct, lowered_ok := ir_lower_struct_from_type(struct_name, arg_type);
       if !lowered_ok {
         ir_set_diagnostic(*state, tprint("IR lowering(compute): could not lower helper struct argument type '%' ", struct_name), cast(*Code_Node) it);
@@ -1922,7 +1916,7 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_C
       if !ret_type || ret_type.type != .STRUCT continue;
       ret_struct_type := cast(*Type_Info_Struct) ret_type;
       ret_struct_name := jai_to_hlsl_type_name(get_struct_type_name(ret_struct_type));
-      if ir_is_builtin_slang_type_name(ret_struct_name) continue;
+      if ir_is_builtin_shader_type_name(ret_struct_name) continue;
       lowered_struct, lowered_ok := ir_lower_struct_from_type(ret_struct_name, ret_type);
       if !lowered_ok {
         ir_set_diagnostic(*state, tprint("IR lowering(compute): could not lower helper struct return type '%'", ret_struct_name), cast(*Code_Node) it);

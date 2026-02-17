@@ -1,13 +1,11 @@
 //
 // Jai IR -> SPIR-V text
 // 
-#scope_export
 
 emit_ir_compute_to_spirv_text_branch :: (shader: IR_Compute_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
   generic_out, generic_ok, generic_diag := emit_compute_generic_uint_buffer(shader);
   if generic_ok return generic_out, true, diag;
-
   if generic_diag.message.count == 0 {
     generic_diag.message = tprint("SPIR-V generic backend: unsupported compute shader '%'.", shader.source_name);
   }
@@ -35,7 +33,6 @@ emit_ir_fragment_to_spirv_text_branch :: (shader: IR_Fragment_Shader) -> (spvasm
   return spvasm, ok, diag;
 }
 
-#scope_module
 // -----------------------------------------------------------------------------
 // Parsing / Text Helpers
 // -----------------------------------------------------------------------------
@@ -77,9 +74,7 @@ parse_i64_literal_text :: (text: string) -> (s64, bool) {
   }
 
   if compact.count >= 2 {
-    end2: string;
-    end2.data = compact.data + compact.count - 2;
-    end2.count = 2;
+    end2: string = { 2, compact.data + compact.count - 2 };
     if end2 == "ll" || end2 == "LL" {
       compact.count -= 2;
     }
@@ -151,11 +146,6 @@ is_thread_x_text :: (text: string) -> bool {
 
 thread_x_expr :: (expr: *IR_Expr) -> bool {
   return is_thread_x_text(expr_text(expr));
-}
-
-values_at_thread_x_expr :: (expr: *IR_Expr, buffer_name: string) -> bool {
-  text := expr_text(expr);
-  return text == tprint("%[thread_id.x]", buffer_name) || text == tprint("%[input.thread_id.x]", buffer_name);
 }
 
 match_branch_condition_outer :: (expr: *IR_Expr) -> (u32, bool) {
@@ -365,80 +355,86 @@ IR_SPV_Gen_State :: struct {
   output_vars: [..] IR_SPV_Gen_Interface_Var;
   use_physical_storage: bool;
   uses_sample_2d: bool;
-
-  id_extinst: s64;
-  id_void: s64;
-  id_fn_void: s64;
-  id_uint: s64;
-  id_float: s64;
-  id_float2: s64;
-  id_float3: s64;
-  id_float4: s64;
-  id_float2x2: s64;
-  id_bool: s64;
-  id_bool_true: s64;
-  id_bool_false: s64;
-  id_v3uint: s64;
-  id_ptr_input_v3uint: s64;
-  id_gl_global_invocation_id: s64;
-  id_ptr_input_uint: s64;
-  id_int: s64;
-  id_int64: s64;
-  id_uint64: s64;
-  id_int_0: s64;
-  id_int64_0: s64;
-  id_uint64_0: s64;
-  id_uint_0: s64;
-  id_runtimearr_uint: s64;
-  id_buffer_struct: s64;
-  id_ptr_storage_buffer_struct: s64;
-  id_ptr_storage_uint: s64;
-  id_ptr_storage_int: s64;
-  id_ptr_storage_int64: s64;
-  id_ptr_storage_uint64: s64;
-  id_ptr_storage_float: s64;
-  id_ptr_storage_float2: s64;
-  id_ptr_storage_float3: s64;
-  id_ptr_input_float: s64;
-  id_ptr_input_float2: s64;
-  id_ptr_input_float3: s64;
-  id_ptr_input_float4: s64;
-  id_ptr_output_float: s64;
-  id_ptr_output_float2: s64;
-  id_ptr_output_float3: s64;
-  id_ptr_output_float4: s64;
-  id_ptr_uniform_float: s64;
-  id_ptr_uniform_float2: s64;
-  id_ptr_uniform_float3: s64;
-  id_ptr_uniform_float4: s64;
-  id_ptr_uniform_int: s64;
-  id_ptr_uniform_uint: s64;
-  id_ptr_uniform_int64: s64;
-  id_ptr_uniform_uint64: s64;
-  id_sample_2d_array_len_const: s64;
-  id_image2d: s64;
-  id_sampler: s64;
-  id_sampled_image2d: s64;
-  id_image2d_array: s64;
-  id_sampler_array: s64;
-  id_ptr_uniformconst_image2d_array: s64;
-  id_ptr_uniformconst_sampler_array: s64;
-  id_ptr_uniformconst_image2d: s64;
-  id_ptr_uniformconst_sampler: s64;
-  id_sample_2d_textures_var: s64;
-  id_sample_2d_samplers_var: s64;
-  id_ptr_func_float: s64;
-  id_ptr_func_float2: s64;
-  id_ptr_func_float3: s64;
-  id_ptr_func_float4: s64;
-  id_ptr_func_float2x2: s64;
-  id_ptr_func_bool: s64;
-  id_ptr_func_int: s64;
-  id_ptr_func_uint: s64;
-  id_ptr_func_int64: s64;
-  id_ptr_func_uint64: s64;
-  id_main: s64;
+  
+  using const_ids: struct {
+    id_uint_0: s64;
+    id_int_0: s64;
+    id_int64_0: s64;
+    id_uint64_0: s64;
+    id_sample_2d_array_len_const: s64;
+  }
+  
   id_bound_const: s64;
+
+  using unique_ids: struct {
+    id_extinst: s64;
+    id_void: s64;
+    id_fn_void: s64;
+    id_uint: s64;
+    id_float: s64;
+    id_float2: s64;
+    id_float3: s64;
+    id_float4: s64;
+    id_float2x2: s64;
+    id_bool: s64;
+    id_bool_true: s64;
+    id_bool_false: s64;
+    id_v3uint: s64;
+    id_ptr_input_v3uint: s64;
+    id_gl_global_invocation_id: s64;
+    id_ptr_input_uint: s64;
+    id_int: s64;
+    id_int64: s64;
+    id_uint64: s64;
+    id_runtimearr_uint: s64;
+    id_buffer_struct: s64;
+    id_ptr_storage_buffer_struct: s64;
+    id_ptr_storage_uint: s64;
+    id_ptr_storage_int: s64;
+    id_ptr_storage_int64: s64;
+    id_ptr_storage_uint64: s64;
+    id_ptr_storage_float: s64;
+    id_ptr_storage_float2: s64;
+    id_ptr_storage_float3: s64;
+    id_ptr_input_float: s64;
+    id_ptr_input_float2: s64;
+    id_ptr_input_float3: s64;
+    id_ptr_input_float4: s64;
+    id_ptr_output_float: s64;
+    id_ptr_output_float2: s64;
+    id_ptr_output_float3: s64;
+    id_ptr_output_float4: s64;
+    id_ptr_uniform_float: s64;
+    id_ptr_uniform_float2: s64;
+    id_ptr_uniform_float3: s64;
+    id_ptr_uniform_float4: s64;
+    id_ptr_uniform_int: s64;
+    id_ptr_uniform_uint: s64;
+    id_ptr_uniform_int64: s64;
+    id_ptr_uniform_uint64: s64;
+    id_image2d: s64;
+    id_sampler: s64;
+    id_sampled_image2d: s64;
+    id_image2d_array: s64;
+    id_sampler_array: s64;
+    id_ptr_uniformconst_image2d_array: s64;
+    id_ptr_uniformconst_sampler_array: s64;
+    id_ptr_uniformconst_image2d: s64;
+    id_ptr_uniformconst_sampler: s64;
+    id_sample_2d_textures_var: s64;
+    id_sample_2d_samplers_var: s64;
+    id_ptr_func_float: s64;
+    id_ptr_func_float2: s64;
+    id_ptr_func_float3: s64;
+    id_ptr_func_float4: s64;
+    id_ptr_func_float2x2: s64;
+    id_ptr_func_bool: s64;
+    id_ptr_func_int: s64;
+    id_ptr_func_uint: s64;
+    id_ptr_func_int64: s64;
+    id_ptr_func_uint64: s64;
+    id_main: s64;
+  };
 
   bound_value: u32;
 }
@@ -447,7 +443,7 @@ IR_SPV_Gen_State :: struct {
 // Core State Helpers
 // -----------------------------------------------------------------------------
 
-id_text :: (id: s64) -> string {
+id_text :: inline (id: s64) -> string {
   return tprint("%%", "%", id);
 }
 
@@ -899,87 +895,31 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   s.next_id = 1;
   s.bound_value = bound_value;
   s.use_physical_storage = use_physical_storage;
-
-  s.id_extinst = new_id(s);
-  s.id_void = new_id(s);
-  s.id_fn_void = new_id(s);
-  s.id_uint = new_id(s);
-  s.id_float = new_id(s);
-  s.id_float2 = new_id(s);
-  s.id_float3 = new_id(s);
-  s.id_float4 = new_id(s);
-  s.id_float2x2 = new_id(s);
-  s.id_bool = new_id(s);
-  s.id_bool_true = new_id(s);
-  s.id_bool_false = new_id(s);
-  s.id_v3uint = new_id(s);
-  s.id_ptr_input_v3uint = new_id(s);
-  s.id_gl_global_invocation_id = new_id(s);
-  s.id_uint_0 = get_u32_const(s, 0);
-  s.id_ptr_input_uint = new_id(s);
-  s.id_bound_const = get_u32_const(s, bound_value);
-  s.id_runtimearr_uint = new_id(s);
-  s.id_buffer_struct = new_id(s);
-  s.id_ptr_storage_buffer_struct = new_id(s);
-  s.id_int = new_id(s);
-  s.id_int64 = new_id(s);
-  s.id_uint64 = new_id(s);
-  s.id_int_0 = get_i32_const(s, 0);
-  s.id_int64_0 = get_i64_const(s, 0);
-  s.id_uint64_0 = get_u64_const(s, 0);
-  s.id_ptr_storage_uint = new_id(s);
-  s.id_ptr_storage_int = new_id(s);
-  s.id_ptr_storage_int64 = new_id(s);
-  s.id_ptr_storage_uint64 = new_id(s);
-  s.id_ptr_storage_float = new_id(s);
-  s.id_ptr_storage_float2 = new_id(s);
-  s.id_ptr_storage_float3 = new_id(s);
-  s.id_ptr_input_float = new_id(s);
-  s.id_ptr_input_float2 = new_id(s);
-  s.id_ptr_input_float3 = new_id(s);
-  s.id_ptr_input_float4 = new_id(s);
-  s.id_ptr_output_float = new_id(s);
-  s.id_ptr_output_float2 = new_id(s);
-  s.id_ptr_output_float3 = new_id(s);
-  s.id_ptr_output_float4 = new_id(s);
-  s.id_ptr_uniform_int = new_id(s);
-  s.id_ptr_uniform_uint = new_id(s);
-  s.id_ptr_uniform_int64 = new_id(s);
-  s.id_ptr_uniform_uint64 = new_id(s);
+  
+  s.id_uint_0      = get_u32_const(s, 0);
+  s.id_int_0       = get_i32_const(s, 0);
+  s.id_int64_0     = get_i64_const(s, 0);
+  s.id_uint64_0    = get_u64_const(s, 0);
   s.id_sample_2d_array_len_const = get_u32_const(s, 16);
-  s.id_image2d = new_id(s);
-  s.id_sampler = new_id(s);
-  s.id_sampled_image2d = new_id(s);
-  s.id_image2d_array = new_id(s);
-  s.id_sampler_array = new_id(s);
-  s.id_ptr_uniformconst_image2d_array = new_id(s);
-  s.id_ptr_uniformconst_sampler_array = new_id(s);
-  s.id_ptr_uniformconst_image2d = new_id(s);
-  s.id_ptr_uniformconst_sampler = new_id(s);
-  s.id_sample_2d_textures_var = new_id(s);
-  s.id_sample_2d_samplers_var = new_id(s);
-  s.id_ptr_uniform_float = new_id(s);
-  s.id_ptr_uniform_float2 = new_id(s);
-  s.id_ptr_uniform_float3 = new_id(s);
-  s.id_ptr_uniform_float4 = new_id(s);
-  s.id_ptr_func_float = new_id(s);
-  s.id_ptr_func_float2 = new_id(s);
-  s.id_ptr_func_float3 = new_id(s);
-  s.id_ptr_func_float4 = new_id(s);
-  s.id_ptr_func_float2x2 = new_id(s);
-  s.id_ptr_func_bool = new_id(s);
-  s.id_ptr_func_int = new_id(s);
-  s.id_ptr_func_uint = new_id(s);
-  s.id_ptr_func_int64 = new_id(s);
-  s.id_ptr_func_uint64 = new_id(s);
-  s.id_main = new_id(s);
+  
+  s.id_bound_const = get_u32_const(s, bound_value);
+  
+  #insert -> string {
+    sb: String_Builder;
+    sb.allocator = temp;
+    for type_info(type_of(IR_SPV_Gen_State.unique_ids)).members {
+      a(*sb, "s.% = new_id(s);", it.name);
+    }
+    return builder_to_string(*sb,, temp);
+  };
 
   for buffers {
     var_id := new_id(s);
-    buffer_info: IR_SPV_Gen_Buffer;
-    buffer_info.name = it.name;
-    buffer_info.var_id = var_id;
-    buffer_info.binding_index = it_index;
+    buffer_info: IR_SPV_Gen_Buffer = {
+      name = it.name,
+      var_id = var_id,
+      binding_index = it_index,
+    };
 
     element_info := parse_buffer_element_info(it);
     element_type_name := element_info.element_type_name;
@@ -1124,6 +1064,7 @@ emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, kind: IR_SPV_Ge
 
 spv_line_is_terminator :: (line: string) -> bool {
   trimmed := compact_text(line);
+  if trimmed[0] != #char "O" return false;
   if begins_with(trimmed, "OpReturn") return true;
   if begins_with(trimmed, "OpKill") return true;
   if begins_with(trimmed, "OpUnreachable") return true;
@@ -1147,25 +1088,24 @@ spv_last_op_is_terminator :: (op_lines: [] string) -> bool {
 spv_append_module_preamble :: (sb: *String_Builder, s: *IR_SPV_Gen_State, memory_model: string, use_physical_storage := false) {
   assert(sb != null);
   assert(s != null);
-  append(sb, "; SPIR-V\n");
-  append(sb, "; Version: 1.5\n");
-  append(sb, "; Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1\n");
-  append(sb, tprint("; Bound: %\n", s.next_id));
-  append(sb, "; Schema: 0\n");
+  a(sb, "; SPIR-V");
+  a(sb, "; Version: 1.5");
+  a(sb, "; Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1");
+  a(sb, "; Bound: %", s.next_id);
+  a(sb, "; Schema: 0");
   spv_append_capabilities(sb, s, use_physical_storage);
-  append(sb, tprint("          % = OpExtInstImport \"GLSL.std.450\"\n", id_text(s.id_extinst)));
-  append(sb, tprint("               OpMemoryModel %\n", memory_model));
+  a(sb, "          % = OpExtInstImport \"GLSL.std.450\"", id_text(s.id_extinst));
+  a(sb, "               OpMemoryModel %", memory_model);
 }
 
 spv_append_function_and_body :: (sb: *String_Builder, s: *IR_SPV_Gen_State, entry_label: s64, function_indent: string, label_indent: string) {
-  assert(sb != null);
-  assert(s != null);
-  append(sb, tprint("% % = OpFunction % None %\n", function_indent, id_text(s.id_main), id_text(s.id_void), id_text(s.id_fn_void)));
-  append(sb, tprint("% % = OpLabel\n", label_indent, id_text(entry_label)));
-  for s.local_var_lines append(sb, it, "\n");
-  for s.op_lines append(sb, it, "\n");
-  if !spv_last_op_is_terminator(s.op_lines) append(sb, "               OpReturn\n");
-  append(sb, "               OpFunctionEnd\n");
+  assert(sb != null && s != null);
+  a(sb, "% % = OpFunction % None %", function_indent, id_text(s.id_main), id_text(s.id_void), id_text(s.id_fn_void));
+  a(sb, "% % = OpLabel\n", label_indent, id_text(entry_label));
+  for s.local_var_lines a(sb, it);
+  for s.op_lines a(sb, it);
+  if !spv_last_op_is_terminator(s.op_lines) a(sb, "               OpReturn");
+  a(sb, "               OpFunctionEnd");
 }
 
 align_up :: (value: s64, alignment: s64) -> s64 {
@@ -1187,12 +1127,8 @@ make_unique_local_struct_name :: (s: *IR_SPV_Gen_State, requested: string) -> st
 
 alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) -> (local_struct: *IR_SPV_Gen_Local_Struct, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
-  diag: IR_Diagnostic;
   struct_def := find_struct(s, type_name);
-  if !struct_def {
-    diag.message = tprint("SPIR-V backend: unknown local struct type '%'.", type_name);
-    return null, false, diag;
-  }
+  if !struct_def return null, false, make_diag("SPIR-V backend: unknown local struct type '%'.", type_name);
 
   local_struct: IR_SPV_Gen_Local_Struct;
   local_struct.name = name;
@@ -1202,10 +1138,8 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
     if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
     if field_type == .UNKNOWN || field_type == .STRUCT {
       nested_def := find_struct(s, it.type_name);
-      if !nested_def {
-        diag.message = tprint("SPIR-V backend: local struct '%' field '%' has unsupported type '%'.", type_name, it.name, it.type_name);
-        return null, false, diag;
-      }
+      if !nested_def return null, false, make_diag("SPIR-V backend: local struct '%' field '%' has unsupported type '%'.", type_name, it.name, it.type_name);
+      
       nested_name := make_unique_local_struct_name(s, tprint("%.%", name, it.name));
       _, nested_ok, nested_diag := alloc_local_struct(s, nested_name, it.type_name);
       if !nested_ok return null, false, nested_diag;
@@ -1219,8 +1153,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
     }
     field_ptr_type := func_ptr_type_id_from_kind(s, field_type);
     if field_ptr_type == 0 {
-      diag.message = tprint("SPIR-V backend: local struct '%' field '%' type '%' has no function pointer type.", type_name, it.name, it.type_name);
-      return null, false, diag;
+      return null, false, make_diag("SPIR-V backend: local struct '%' field '%' type '%' has no function pointer type.", type_name, it.name, it.type_name);
     }
     field_ptr := new_id(s);
     add_local_decl(s, tprint("         % = OpVariable % Function",
@@ -1233,10 +1166,9 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
   array_add(*s.local_structs, local_struct);
   out_struct := find_local_struct(s, name);
   if !out_struct {
-    diag.message = tprint("SPIR-V backend: failed to register local struct '%'.", name);
-    return null, false, diag;
+    return null, false, make_diag("SPIR-V backend: failed to register local struct '%'.", name);
   }
-  return out_struct, true, diag;
+  return out_struct, true, {};
 }
 
 copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, src: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
@@ -4235,12 +4167,12 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 
       add_op(s, tprint("               OpSelectionMerge % None", id_text(merge_label)));
       switch_line_sb: String_Builder;
-      append(*switch_line_sb, tprint("               OpSwitch % %", id_text(cond_id), id_text(default_label)));
+      a(*switch_line_sb, "               OpSwitch % %", id_text(cond_id), id_text(default_label));
       for stmt.switch_cases {
         if !it.condition continue;
         value, value_ok := parse_u32_literal_expr(it.condition);
         if !value_ok return_err("SPIR-V backend: switch case values must be uint literals.");
-        append(*switch_line_sb, tprint(" % %", value, id_text(case_labels[it_index])));
+        a(*switch_line_sb, " % %", value, id_text(case_labels[it_index]));
       }
       add_op(s, builder_to_string(*switch_line_sb));
 
@@ -4506,50 +4438,42 @@ append_interface_var_decorations :: (sb: *String_Builder, vars: [] IR_SPV_Gen_In
   location: s64 = 0;
   for vars {
     if it.builtin == .POSITION {
-      append(sb, tprint("               OpDecorate % BuiltIn Position\n", id_text(it.var_id)));
+      a(sb, "               OpDecorate % BuiltIn Position", id_text(it.var_id));
       continue;
     }
     if it.builtin == .FRAG_COORD {
-      append(sb, tprint("               OpDecorate % BuiltIn FragCoord\n", id_text(it.var_id)));
+      a(sb, "               OpDecorate % BuiltIn FragCoord", id_text(it.var_id));
       continue;
     }
     if it.builtin == .VERTEX_INDEX {
-      append(sb, tprint("               OpDecorate % BuiltIn VertexIndex\n", id_text(it.var_id)));
+      a(sb, "               OpDecorate % BuiltIn VertexIndex", id_text(it.var_id));
       continue;
     }
     if it.builtin == .INSTANCE_INDEX {
-      append(sb, tprint("               OpDecorate % BuiltIn InstanceIndex\n", id_text(it.var_id)));
+      a(sb, "               OpDecorate % BuiltIn InstanceIndex", id_text(it.var_id));
       continue;
     }
-    append(sb, tprint("               OpDecorate % Location %\n", id_text(it.var_id), location));
+    a(sb, "               OpDecorate % Location %", id_text(it.var_id), location);
     location += 1;
   }
 }
 
 emit_output_return_from_struct :: (s: *IR_SPV_Gen_State, local_struct: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
-  diag: IR_Diagnostic;
-  if !local_struct {
-    diag.message = "SPIR-V backend: missing local output struct for return.";
-    return false, diag;
-  }
+  if !local_struct return false, make_diag("SPIR-V backend: missing local output struct for return.");
   for s.output_vars {
     src := find_local_struct_field(local_struct, it.name);
-    if !src {
-      diag.message = tprint("SPIR-V backend: output struct is missing field '%'.", it.name);
-      return false, diag;
-    }
-    if src.type != it.type {
-      diag.message = tprint("SPIR-V backend: output field '%' type mismatch.", it.name);
-      return false, diag;
-    }
+    if !src return false, make_diag("SPIR-V backend: output struct is missing field '%'.", it.name);
+    
+    if src.type != it.type  return false, make_diag("SPIR-V backend: output field '%' type mismatch.", it.name);
+    
     value_id := new_id(s);
-    type_id := type_id_from_kind(s, it.type);
+    type_id  := type_id_from_kind(s, it.type);
     add_op(s, tprint("         % = OpLoad % %", id_text(value_id), id_text(type_id), id_text(src.ptr_id)));
     add_op(s, tprint("               OpStore % %", id_text(it.var_id), id_text(value_id)));
   }
   add_op(s, "               OpReturn");
-  return true, diag;
+  return true, {};
 }
 
 spv_append_buffer_array_type :: (sb: *String_Builder, buffer: IR_SPV_Gen_Buffer) {
@@ -4696,3 +4620,4 @@ ps_get_ptr_to_ptr_type :: (s: *IR_SPV_Gen_State, ptr_to_ptr_types: *[..] IR_SPV_
 }
 
 #load "spirv_text_backend_emitters.jai";
+#load "../string_builder_util.jai";
