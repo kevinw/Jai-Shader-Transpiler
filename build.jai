@@ -1,87 +1,77 @@
-#import "Basic";
-#import "Compiler";
-#import "String";
-#import "Hash_Table";
-#import "Process";
-#import "Metaprogram_Plugins";
-#import,file "./module.jai"; // #import "Jai-Shader-Transpiler" in your code.
-
-time_scope :: (enabled: bool, label: string) #expand {
-  __jsl_timing_enabled := enabled;
-  __jsl_timing_start := current_time_monotonic();
-  `defer {
-    if __jsl_timing_enabled {
-      __jsl_timing_elapsed := to_float64_seconds(current_time_monotonic() - __jsl_timing_start);
-      log("[timing] %: %s", label, __jsl_timing_elapsed);
-    }
-  }
-}
-
 #run,stallable {
+  set_build_options_dc(.{do_output=false, write_added_strings=false});
+  
   command_line_opts := get_build_options();
+  opts: Opts;
   run_tests := false;
-  verbose_build_progress := false;
-  timings := false;
-  ir_case := "";
+  single_build := "";
   for command_line_opts.compile_time_command_line {
-    if it == "-run_tests" run_tests = true;
-    else if it == "-verbose_build_progress" verbose_build_progress = true;
-    else if it == "-timings" timings = true;
-    else if begins_with(it, "-ir_case=") {
-      ir_case = slice(it, 9, it.count);
-    } else {
-      compiler_report(tprint("Unrecognized argument '%'", it));
+    if it == "-single" {
+      single_build = command_line_opts.compile_time_command_line[it_index + 1];
+      it_index += 1;
+    } else if it == "-run_tests" {
+      run_tests = true;
+      opts.emit_shader_outputs = true;
     }
+    else if it == "-verbose_build_progress" opts.verbose_build_progress = true;
+    else if it == "-timings" opts.timings = true;
+    else compiler_report(tprint("Unrecognized argument '%'", it));
   }
 
   {
     start_time := current_time_monotonic();
     defer {
-      if timings {
+      if !single_build && opts.timings {
         elapsed_time := to_float64_seconds(current_time_monotonic() - start_time);
         log("All examples built in %s", elapsed_time);
       }
     }
     
-    emit_shader_outputs := run_tests;
-    build("example/cpu_example.jai", "cpu_example", verbose_build_progress, timings, emit_shader_outputs);
-    build("example/vulkan_example.jai", "vulkan_example", verbose_build_progress, timings, emit_shader_outputs);
-    //build("example/glsl_example.jai", "glsl_example", verbose_build_progress);
-    //build("example/hlsl_example.jai", "hlsl_example", verbose_build_progress);
-    #if OS == .MACOS {
-      build("example/metal_example.jai", "metal_example", verbose_build_progress, timings, emit_shader_outputs);
-    }
-    if ir_case.count == 0 {
-      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress, timings, emit_shader_outputs);
-      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress, timings, emit_shader_outputs);
-      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress, timings, emit_shader_outputs);
-    } else if ir_case == "metal_pair" {
-      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress, timings, emit_shader_outputs);
-    } else if ir_case == "vk_compute" {
-      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress, timings, emit_shader_outputs);
-    } else if ir_case == "vk_bindless" {
-      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress, timings, emit_shader_outputs);
+    to_build: [..]string;
+    if single_build {
+      array_add(*to_build, single_build);
     } else {
-      compiler_report(tprint("Unknown -ir_case value '%'. Expected one of: metal_pair, vk_compute, vk_bindless.", ir_case));
+      #if OS == .MACOS {
+        array_add(*to_build, "example/metal_example.jai");
+      }
+      array_add(*to_build, 
+        "example/cpu_example.jai",
+        "example/vulkan_example.jai",
+        "example/ir_smoke_metal_pair.jai",
+        "example/ir_smoke_vk_compute.jai",
+        "example/ir_smoke_vk_bindless.jai");
+      if run_tests {
+        array_add(*to_build, "test_runner.jai");
+      }
+    }
+    
+    assert(to_build.count > 0, "Expected something to build");
+    if single_build != "" {
+      assert(to_build.count == 1);
+      build(to_build[0], opts);
+    } else {
+      // parallelize builds
+      to_args :: (opts: Opts) -> [..]string {
+        res: [..]string;
+        if opts.verbose_build_progress array_add(*res, "-verbose_build_progress");
+        if opts.timings array_add(*res, "-timings");
+        return res;
+      }
+      extra_args := to_args(opts);
+      parallel_build(to_build, extra_args);
     }
   }
 
   if run_tests {
     TEST_RUNNER :: "test_runner.jai";
-    log("Running %...", TEST_RUNNER);
-    {
-      time_scope(timings, "Compile test_runner.jai");
-      build(TEST_RUNNER, "test_runner", verbose_build_progress, timings=false, emit_shader_outputs=true);
-    }
-
     run_args: [..] string;
     array_add(*run_args, "./test_runner");
     result: Process_Result;
     output, error: string;
     timeout_reached: bool;
-    if timings array_add(*run_args, "-timings");
+    if opts.timings array_add(*run_args, "-timings");
     {
-      time_scope(timings, "Run test_runner.jai");
+      time_scope(opts.timings, "Run test_runner.jai");
       result, output, error, timeout_reached = run_command(..run_args);
     }
     if timeout_reached {
@@ -96,14 +86,21 @@ time_scope :: (enabled: bool, label: string) #expand {
   }
 }
 
-build :: (build_file: string, output_exe_name: string, verbose_build_progress: bool=false, timings: bool=false, emit_shader_outputs: bool=false) {
-  set_build_options_dc(.{do_output=false, write_added_strings=false});
+Opts :: struct {
+  verbose_build_progress: bool;
+  timings: bool;
+  emit_shader_outputs: bool;
+}
+
+build :: (build_file: string, using opts: Opts) {
+  output_exe_name := path_strip_extension(path_filename(build_file));
 
   command_line_opts := get_build_options();
 
   w := compiler_create_workspace(output_exe_name);
 
   options := get_build_options(w);
+  options.intermediate_path = sprint(".build/%", output_exe_name);
   options.output_executable_name = output_exe_name;
   options.text_output_flags = 0; // command_line_opts.text_output_flags;
   set_optimization(*options, .VERY_DEBUG);
@@ -171,3 +168,91 @@ message_loop :: (w: Workspace, plugin: *Metaprogram_Plugin, verbose_build_progre
   }
   return ok;
 }
+
+time_scope :: (enabled: bool, label: string) #expand {
+  __jsl_timing_enabled := enabled;
+  __jsl_timing_start := current_time_monotonic();
+  `defer {
+    if __jsl_timing_enabled {
+      __jsl_timing_elapsed := to_float64_seconds(current_time_monotonic() - __jsl_timing_start);
+      log("[timing] %: %s", label, __jsl_timing_elapsed);
+    }
+  }
+}
+
+parallel_build :: (to_build: []string, extra_args: []string) {
+  
+  parallel_fail :: (fmt: string, args: ..Any) #expand {
+    compiler_report(tprint(fmt, ..args));
+    for * children if !it.done {
+      kill_process(*it.proc);
+    }
+    exit(1);
+  }
+  
+  children: [..]struct { proc: Process; done: bool; };
+  defer for children deinit(*it.proc);
+  
+  // spawn processes
+  for to_build {
+    child := array_add(*children);
+    args: [..]string;
+    array_add(*args, jai_exe, "build.jai", "-", "-single", it);
+    array_add(*args, ..extra_args);
+    create_success := create_process(*child.proc, ..args, capture_and_return_output=true);
+    if !create_success {
+      parallel_fail("Failed to create subprocess for build: %", it);
+    }
+  }
+  
+  // interleave output
+  done_count := 0;
+  while done_count < children.count {
+    made_progress := false;
+    for to_build {
+      if children[it_index].done continue;
+      child := *children[it_index].proc;
+
+      out_buf: [4096]u8;
+      err_buf: [4096]u8;
+      read_ok, output_bytes, error_bytes := read_from_process(child, out_buf, err_buf, timeout_ms = 0);
+      if !read_ok parallel_fail("Failed while reading output from build '%'.", to_build[it_index]);
+
+      if output_bytes > 0 {
+        write_string(to_string(out_buf.data, output_bytes), to_standard_error = false);
+        made_progress = true;
+      }
+      if error_bytes > 0 {
+        write_string(to_string(err_buf.data, error_bytes), to_standard_error = true);
+        made_progress = true;
+      }
+
+      if child.output.eof && child.error.eof {
+        result_ok, process_result := get_process_result(child, timeout_ms = -1);
+        if !result_ok parallel_fail("Failed to fetch subprocess result for build '%'.", to_build[it_index]);
+
+        children[it_index].done = true;
+        done_count += 1;
+
+        if process_result.type != .EXITED || process_result.exit_code != 0 {
+          parallel_fail("Subprocess build '%' failed with exit code %.", to_build[it_index], process_result.exit_code);
+        }
+      }
+    }
+    if !made_progress {
+      sleep_milliseconds(1);
+    }
+  }
+}
+
+#import "Basic";
+#import "Compiler";
+#import "String";
+#import "Hash_Table";
+#import "Process";
+#import "Metaprogram_Plugins";
+#import,file "./module.jai"; // #import "Jai-Shader-Transpiler" in your code.
+
+#if OS == .MACOS jai_exe :: "jai-macos";
+else #if OS == .LINUX jai_exe :: "jai-linux";
+else jai_exe :: "jai";
