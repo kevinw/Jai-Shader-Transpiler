@@ -49,6 +49,8 @@ get_plugin :: () -> *Jai_To_Shader_Plugin {
   for get_build_options().compile_time_command_line {
     if it == "-timings" {
       p.timings_enabled = true;
+    } else if it == "-output_shaders" {
+      p.output_shaders = true;
     } else if begins_with(it, "-shader_entry_ids=") {
       filter: string;
       filter.data = it.data + 18;

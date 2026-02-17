@@ -43,23 +43,24 @@ time_scope :: (enabled: bool, label: string) #expand {
       }
     }
     
-    build("example/cpu_example.jai", "cpu_example", verbose_build_progress, timings);
-    build("example/vulkan_example.jai", "vulkan_example", verbose_build_progress, timings);
+    emit_shader_outputs := run_tests;
+    build("example/cpu_example.jai", "cpu_example", verbose_build_progress, timings, emit_shader_outputs);
+    build("example/vulkan_example.jai", "vulkan_example", verbose_build_progress, timings, emit_shader_outputs);
     //build("example/glsl_example.jai", "glsl_example", verbose_build_progress);
     //build("example/hlsl_example.jai", "hlsl_example", verbose_build_progress);
     #if OS == .MACOS {
-      build("example/metal_example.jai", "metal_example", verbose_build_progress, timings);
+      build("example/metal_example.jai", "metal_example", verbose_build_progress, timings, emit_shader_outputs);
     }
     if ir_case.count == 0 {
-      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress, timings);
-      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress, timings);
-      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress, timings);
+      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress, timings, emit_shader_outputs);
+      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress, timings, emit_shader_outputs);
+      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress, timings, emit_shader_outputs);
     } else if ir_case == "metal_pair" {
-      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress, timings);
+      build("example/ir_smoke_metal_pair.jai", "ir_smoke_metal_pair", verbose_build_progress, timings, emit_shader_outputs);
     } else if ir_case == "vk_compute" {
-      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress, timings);
+      build("example/ir_smoke_vk_compute.jai", "ir_smoke_vk_compute", verbose_build_progress, timings, emit_shader_outputs);
     } else if ir_case == "vk_bindless" {
-      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress, timings);
+      build("example/ir_smoke_vk_bindless.jai", "ir_smoke_vk_bindless", verbose_build_progress, timings, emit_shader_outputs);
     } else {
       compiler_report(tprint("Unknown -ir_case value '%'. Expected one of: metal_pair, vk_compute, vk_bindless.", ir_case));
     }
@@ -70,7 +71,7 @@ time_scope :: (enabled: bool, label: string) #expand {
     log("Running %...", TEST_RUNNER);
     {
       time_scope(timings, "Compile test_runner.jai");
-      build(TEST_RUNNER, "test_runner", verbose_build_progress, timings=false);
+      build(TEST_RUNNER, "test_runner", verbose_build_progress, timings=false, emit_shader_outputs=true);
     }
 
     run_args: [..] string;
@@ -95,7 +96,7 @@ time_scope :: (enabled: bool, label: string) #expand {
   }
 }
 
-build :: (build_file: string, output_exe_name: string, verbose_build_progress: bool=false, timings: bool=false) {
+build :: (build_file: string, output_exe_name: string, verbose_build_progress: bool=false, timings: bool=false, emit_shader_outputs: bool=false) {
   set_build_options_dc(.{do_output=false, write_added_strings=false});
 
   command_line_opts := get_build_options();
@@ -106,6 +107,12 @@ build :: (build_file: string, output_exe_name: string, verbose_build_progress: b
   options.output_executable_name = output_exe_name;
   options.text_output_flags = 0; // command_line_opts.text_output_flags;
   set_optimization(*options, .VERY_DEBUG);
+  if emit_shader_outputs {
+    compile_time_args: [..] string;
+    for options.compile_time_command_line array_add(*compile_time_args, it);
+    array_add(*compile_time_args, "-output_shaders");
+    options.compile_time_command_line = compile_time_args;
+  }
   if options.text_output_flags == 0 log("Building '%'...", output_exe_name);
   step_start_time := current_time_monotonic();
   if verbose_build_progress log("[build] start % (%).", output_exe_name, build_file);
