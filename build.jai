@@ -1,6 +1,6 @@
 #run,stallable {
+  start_time := current_time_monotonic();
   set_build_options_dc(.{do_output=false, write_added_strings=false});
-  
   command_line_opts := get_build_options();
   opts: Opts;
   run_tests := false;
@@ -15,11 +15,10 @@
     }
     else if it == "-verbose_build_progress" opts.verbose_build_progress = true;
     else if it == "-timings" opts.timings = true;
-    else compiler_report(tprint("Unrecognized argument '%'", it));
+    else fail("Unrecognized argument '%'", it);
   }
 
   {
-    start_time := current_time_monotonic();
     defer {
       if !single_build && opts.timings {
         elapsed_time := to_float64_seconds(current_time_monotonic() - start_time);
@@ -74,15 +73,11 @@
       time_scope(opts.timings, "Run test_runner.jai");
       result, output, error, timeout_reached = run_command(..run_args);
     }
-    if timeout_reached {
-      compiler_report(tprint("% timed out.", TEST_RUNNER));
-    }
-    if result.type == .FAILED_TO_LAUNCH {
-      compiler_report(tprint("Failed to launch %.", TEST_RUNNER));
-    }
-    if result.type != .EXITED || result.exit_code != 0 {
-      compiler_report(tprint("% failed with exit code %.", TEST_RUNNER, result.exit_code));
-    }
+    if timeout_reached fail("% timed out.", TEST_RUNNER);
+    if result.type == .FAILED_TO_LAUNCH fail("Failed to launch %.", TEST_RUNNER);
+    if result.type != .EXITED || result.exit_code != 0 fail("% failed with exit code %.", TEST_RUNNER, result.exit_code);
+    
+    log("Total time %s", FormatFloat.{value=to_float64_seconds(current_time_monotonic() - start_time), trailing_width=2});
   }
 }
 
@@ -94,23 +89,23 @@ Opts :: struct {
 
 build :: (build_file: string, using opts: Opts) {
   output_exe_name := path_strip_extension(path_filename(build_file));
-
   command_line_opts := get_build_options();
-
   w := compiler_create_workspace(output_exe_name);
-
   options := get_build_options(w);
-  options.intermediate_path = sprint(".build/%", output_exe_name);
-  options.output_executable_name = output_exe_name;
-  options.text_output_flags = 0; // command_line_opts.text_output_flags;
-  set_optimization(*options, .VERY_DEBUG);
-  if emit_shader_outputs {
-    compile_time_args: [..] string;
-    for options.compile_time_command_line array_add(*compile_time_args, it);
-    array_add(*compile_time_args, "-output_shaders");
-    options.compile_time_command_line = compile_time_args;
+  {
+    using options;
+    intermediate_path = sprint(".build/%", output_exe_name);
+    output_executable_name = output_exe_name;
+    text_output_flags = 0; // command_line_opts.text_output_flags;
+    set_optimization(*options, .VERY_DEBUG);
+    if emit_shader_outputs {
+      compile_time_args: [..] string;
+      for compile_time_command_line array_add(*compile_time_args, it);
+      array_add(*compile_time_args, "-output_shaders");
+      compile_time_command_line = compile_time_args;
+    }
+    if text_output_flags == 0 log("Building '%'...", output_exe_name);
   }
-  if options.text_output_flags == 0 log("Building '%'...", output_exe_name);
   step_start_time := current_time_monotonic();
   if verbose_build_progress log("[build] start % (%).", output_exe_name, build_file);
   defer {
@@ -181,13 +176,11 @@ time_scope :: (enabled: bool, label: string) #expand {
 }
 
 parallel_build :: (to_build: []string, extra_args: []string) {
-  
   parallel_fail :: (fmt: string, args: ..Any) #expand {
-    compiler_report(tprint(fmt, ..args));
     for * children if !it.done {
       kill_process(*it.proc);
     }
-    exit(1);
+    fail(fmt, ..args);
   }
   
   children: [..]struct { proc: Process; done: bool; };
@@ -256,3 +249,8 @@ parallel_build :: (to_build: []string, extra_args: []string) {
 #if OS == .MACOS jai_exe :: "jai-macos";
 else #if OS == .LINUX jai_exe :: "jai-linux";
 else jai_exe :: "jai";
+
+fail :: (fmt: string, args: ..Any) {
+  compiler_report(sprint(fmt, ..args));
+  exit(1);
+}

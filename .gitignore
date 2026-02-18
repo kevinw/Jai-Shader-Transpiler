@@ -23,3 +23,4 @@ spirv_backend/spirv_compute_branch_runner
 spirv_backend/comp.spv
 .generated_shaders
 headless_ir/ir_graphics_semantics_runner
+server/playwright-smoke.png
