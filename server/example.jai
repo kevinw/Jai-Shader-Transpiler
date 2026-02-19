@@ -1,7 +1,10 @@
+// codex resume 019c6dcf-c619-7c50-ba28-26b6b1fbd995
 #import,file "./module.jai";
+#load "shader_adapter.jai";
 
 j_ctx: *#Context;
 quit_requested := false;
+shader_compile_in_progress := false;
 
 File_Handler_Ctx :: struct {
   file_path: string;
@@ -81,11 +84,10 @@ start_server :: () -> bool {
     }
 
     backend: [64] u8;
-    entry: [128] u8;
     shader: [65536] u8;
     backend[0] = 0;
-    entry[0] = 0;
     shader[0] = 0;
+    shader_len: s32 = 0;
 
     push_context j_ctx {
       auto_release_temp();
@@ -112,7 +114,7 @@ start_server :: () -> bool {
 
       body[bytes_read_total] = 0;
 
-      shader_len := mg_get_var(body.data, cast(u64) bytes_read_total, temp_c_string("shader"), shader.data, cast(u64) shader.count);
+      shader_len = mg_get_var(body.data, cast(u64) bytes_read_total, temp_c_string("shader"), shader.data, cast(u64) shader.count);
       if shader_len < 0 {
         mg_send_http_error(conn, 400, "Missing 'shader' form field");
         return 1;
@@ -120,53 +122,37 @@ start_server :: () -> bool {
 
       backend_len := mg_get_var(body.data, cast(u64) bytes_read_total, temp_c_string("backend"), backend.data, cast(u64) backend.count);
       if backend_len < 0 {
-        backend[0] = #char "m";
-        backend[1] = #char "e";
-        backend[2] = #char "t";
-        backend[3] = #char "a";
-        backend[4] = #char "l";
-        backend[5] = 0;
-      }
-
-      entry_len := mg_get_var(body.data, cast(u64) bytes_read_total, temp_c_string("entry"), entry.data, cast(u64) entry.count);
-      if entry_len < 0 {
-        entry[0] = #char "m";
-        entry[1] = #char "a";
-        entry[2] = #char "i";
-        entry[3] = #char "n";
-        entry[4] = 0;
+        backend[0] = #char "m"; backend[1] = #char "e"; backend[2] = #char "t"; backend[3] = #char "a"; backend[4] = #char "l"; backend[5] = 0;
       }
     }
 
-    mg_printf_CFormat(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
-    mg_printf_CFormat(conn, "// backend=%s\n", backend.data);
-    mg_printf_CFormat(conn, "// entry=%s\n", entry.data);
-    mg_printf_CFormat(conn, "// shader_bytes=%d\n\n", c_style_strlen(shader.data));
-    mg_printf_CFormat(conn, "%s", "#include <metal_stdlib>\n");
-    mg_printf_CFormat(conn, "%s", "using namespace metal;\n\n");
-    mg_printf_CFormat(conn, "%s", "struct VertexOut {\n");
-    mg_printf_CFormat(conn, "%s", "    float4 position [[position]];\n");
-    mg_printf_CFormat(conn, "%s", "    float3 color;\n");
-    mg_printf_CFormat(conn, "%s", "};\n\n");
-    mg_printf_CFormat(conn, "%s", "vertex VertexOut vertex_main(uint vid [[vertex_id]]) {\n");
-    mg_printf_CFormat(conn, "%s", "    constexpr float2 positions[3] = {\n");
-    mg_printf_CFormat(conn, "%s", "        float2(-0.7, -0.7),\n");
-    mg_printf_CFormat(conn, "%s", "        float2( 0.7, -0.7),\n");
-    mg_printf_CFormat(conn, "%s", "        float2( 0.0,  0.7)\n");
-    mg_printf_CFormat(conn, "%s", "    };\n");
-    mg_printf_CFormat(conn, "%s", "    constexpr float3 colors[3] = {\n");
-    mg_printf_CFormat(conn, "%s", "        float3(1.0, 0.2, 0.3),\n");
-    mg_printf_CFormat(conn, "%s", "        float3(0.2, 1.0, 0.3),\n");
-    mg_printf_CFormat(conn, "%s", "        float3(0.2, 0.4, 1.0)\n");
-    mg_printf_CFormat(conn, "%s", "    };\n");
-    mg_printf_CFormat(conn, "%s", "    VertexOut out;\n");
-    mg_printf_CFormat(conn, "%s", "    out.position = float4(positions[vid], 0.0, 1.0);\n");
-    mg_printf_CFormat(conn, "%s", "    out.color = colors[vid];\n");
-    mg_printf_CFormat(conn, "%s", "    return out;\n");
-    mg_printf_CFormat(conn, "%s", "}\n\n");
-    mg_printf_CFormat(conn, "%s", "fragment float4 fragment_main(VertexOut in [[stage_in]]) {\n");
-    mg_printf_CFormat(conn, "%s", "    return float4(in.color, 1.0);\n");
-    mg_printf_CFormat(conn, "%s", "}\n");
+    if c_style_strlen(backend.data) != 5
+      || backend[0] != #char "m" || backend[1] != #char "e" || backend[2] != #char "t" || backend[3] != #char "a" || backend[4] != #char "l" {
+      mg_send_http_error_CFormat(conn, 400, "%s", "Only backend=metal is currently supported");
+      return 1;
+    }
+
+    if shader_compile_in_progress {
+      mg_send_http_error_CFormat(conn, 503, "%s", "A compile is already in progress");
+      return 1;
+    }
+
+    shader_compile_in_progress = true;
+    defer shader_compile_in_progress = false;
+
+    push_context j_ctx {
+      auto_release_temp();
+      shader_text := to_string(shader.data, cast(s64) shader_len);
+      result := compile_jai_to_metal(shader_text);
+      if result.status != 200 {
+        mg_send_http_error(conn, result.status, result.body);
+        return 1;
+      }
+
+      mg_printf(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+      mg_printf(conn, result.body);
+    }
+
     return 1;
   }
   

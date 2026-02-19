@@ -4,18 +4,27 @@ type Elements = {
   shaderOutput: HTMLElement;
   status: HTMLElement;
   backend: HTMLSelectElement;
-  entry: HTMLInputElement;
 };
 
 const DEFAULT_JAI = `// Jai shader source
-Shader_Params :: struct {
-    tint: [3]float;
+VertexShader_Uniforms :: struct {}
+
+VertexShader_In :: struct {
+  a_pos: Vector2;
 }
 
-vertex_main :: (vertex_id: s32, params: Shader_Params) -> [4]float {
-    x := cast(float)vertex_id * 0.5 - 0.5;
-    return .[x, 0.0, 0.0, 1.0];
+VertexShader_Out :: struct {
+  gl_Position: Vector4; @position
+  gl_FragCoord: Vector4; @frag_coord
 }
+
+tiles_vertex_shader :: (using in: VertexShader_In, using un: VertexShader_Uniforms) -> VertexShader_Out {
+  using out: VertexShader_Out;
+  gl_Position = Vector4.{ a_pos.x, a_pos.y, 0.0, 1.0 };
+  return out;
+} @vertex_shader
+
+shader_vs :: tiles_vertex_shader; @shader_to_metal
 `;
 
 const JAI_KEYWORDS = new Set([
@@ -54,7 +63,6 @@ els.jaiInput.addEventListener("input", () => {
 
 els.jaiInput.addEventListener("scroll", syncJaiScroll);
 els.backend.addEventListener("change", scheduleCompile);
-els.entry.addEventListener("input", scheduleCompile);
 
 function getElements(): Elements {
   return {
@@ -63,7 +71,6 @@ function getElements(): Elements {
     shaderOutput: query("#shaderOutput"),
     status: query("#status"),
     backend: query("#backend"),
-    entry: query("#entry"),
   };
 }
 
@@ -111,7 +118,6 @@ async function compileShader(): Promise<void> {
     const body = new URLSearchParams({
       shader: els.jaiInput.value,
       backend: els.backend.value,
-      entry: els.entry.value,
     });
 
     const resp = await fetch("/shader", {
