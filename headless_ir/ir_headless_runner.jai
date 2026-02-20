@@ -404,4 +404,4 @@ main :: () {}
 #import "File_Utilities";
 #import "String";
 #import,file "../module.jai";
-#load "../ir_pipeline/external_toolchain.jai";
+#import,dir "../modules/ir_pipe";

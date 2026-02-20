@@ -1,6 +1,7 @@
 // Canonicalize IR into a smaller set of control-flow shapes so backends need fewer special cases.
 #scope_export
 
+#program_export
 normalize_shader :: (shader: *IR_Shader) -> (ok: bool, diag: IR_Diagnostic) {
   assert(shader != null);
   diag: IR_Diagnostic;

@@ -1,232 +1,19 @@
 #scope_export
 
-IR_Type_Kind :: enum {
-  UNKNOWN;
-  BOOL;
-  I32;
-  U32;
-  I64;
-  U64;
-  F32;
-  F32x2;
-  F32x3;
-  F32x4;
-  F32x2x2;
-  STRUCT;
-  POINTER;
-  FIXED_ARRAY;
-}
+// TODO: condense ir_lower_xxx_from_shader context functions
 
-IR_Type_Flags :: enum_flags u32 {
-  PARAMETER_BLOCK :: 0x1;
-}
+#load "./public_structs.jai";
 
-IR_Type :: struct {
-  kind: IR_Type_Kind;
-  flags: IR_Type_Flags;
-  display_name: string;
-  struct_name: string;
-  element_kind: IR_Type_Kind;
-  element_display_name: string;
-  element_struct_name: string;
-  array_count: s64;
-  pointee_kind: IR_Type_Kind;
-  pointee_display_name: string;
-  pointee_struct_name: string;
-  pointee_is_struct: bool;
-}
 
-IR_Field :: struct {
-  name: string;
-  type: IR_Type;
-  type_name: string;
-  semantic: string;
-  original_type_name: string;
-  is_pointer: bool;
-  pointer_pointee_type_name: string;
-  pointer_pointee_is_struct: bool;
-}
-
-IR_Struct :: struct {
-  name: string;
-  fields: [..] IR_Field;
-}
-
-IR_Shader_Kind :: enum {
-  Vertex;
-  Fragment;
-  Compute;
-}
-
-IR_Shader :: struct {
-  source_name: string;
-  entry_name: string;
-  kind: IR_Shader_Kind;
-  extra_structs: [..] IR_Struct;
-  functions: [..] IR_Function;
-  body: IR_Block;
-}
-
-IR_Vertex_Shader :: struct {
-  using #as ir_shader: IR_Shader;
-  input: IR_Struct;
-  output: IR_Struct;
-  args: [..] IR_Function_Arg;
-}
-
-IR_Fragment_Shader :: struct {
-  using #as ir_shader: IR_Shader;
-  input: IR_Struct;
-  output: IR_Struct;
-  args: [..] IR_Function_Arg;
-}
-
-IR_Compute_Buffer :: struct {
-  name: string;
-  element_type: IR_Type;
-  element_type_name: string;
-  is_readonly: bool;
-}
-
-IR_Function_Arg :: struct {
-  name: string;
-  type: IR_Type;
-  type_name: string;
-  is_readonly: bool;
-  original_type_name: string;
-  is_pointer: bool;
-  pointer_pointee_type_name: string;
-  pointer_pointee_is_struct: bool;
-}
-
-IR_Function :: struct {
-  name: string;
-  return_type: IR_Type;
-  return_type_name: string;
-  args: [..] IR_Function_Arg;
-  body: IR_Block;
-}
-
-IR_Compute_Shader :: struct {
-  using #as ir_shader: IR_Shader;
-  input: IR_Struct;
-  buffers: [..] IR_Compute_Buffer;
-}
-
-IR_Using_Source :: struct {
-  expression_node: *Code_Node;
-  source_text: string;
-  field_names: [..] string;
-}
-
-IR_Decl_Alias :: struct {
-  declaration: *Code_Declaration;
-  member_name: string;
-  replacement_text: string;
-}
-
-IR_Expr_Kind :: enum {
-  IDENT;
-  LITERAL;
-  ARRAY_LITERAL;
-  UNARY;
-  BINARY;
-  SELECT;
-  MEMBER;
-  SUBSCRIPT;
-  CALL;
-  CAST;
-  CONSTRUCTOR;
-}
-
-IR_Expr :: struct {
-  kind: IR_Expr_Kind;
-  text: string;
-  left: *IR_Expr;
-  right: *IR_Expr;
-  args: [..] *IR_Expr;
-}
-
-IR_Stmt_Kind :: enum {
-  DECL;
-  BINARY;
-  IF;
-  SWITCH;
-  FOR;
-  WHILE;
-  BREAK;
-  CONTINUE;
-  CALL;
-  RETURN;
-}
-
-IR_Switch_Case :: struct {
-  condition: *IR_Expr;
-  body: *IR_Block;
-  falls_through: bool;
-}
-
-IR_Stmt :: struct {
-  kind: IR_Stmt_Kind;
-
-  // DECL
-  decl_type: IR_Type;
-  decl_type_name: string;
-  decl_name: string;
-  decl_init: *IR_Expr;
-
-  // BINARY
-  binary_left: *IR_Expr;
-  binary_op: string;
-  binary_right: *IR_Expr;
-
-  // IF
-  if_condition: *IR_Expr;
-  if_then: *IR_Block;
-  if_else: *IR_Block;
-
-  // SWITCH
-  switch_condition: *IR_Expr;
-  switch_cases: [..] IR_Switch_Case;
-
-  // FOR
-  for_loop_name: string;
-  for_start: *IR_Expr;
-  for_end: *IR_Expr;
-  for_cmp: string;
-  for_step: string;
-  for_body: *IR_Block;
-
-  // WHILE
-  while_condition: *IR_Expr;
-  while_body: *IR_Block;
-
-  // CALL
-  call_expr: *IR_Expr;
-
-  // RETURN
-  return_expr: *IR_Expr;
-}
-
-IR_Block :: struct {
-  statements: [..] IR_Stmt;
-}
-
-IR_Diagnostic :: struct {
-  message: string;
-  location: Source_Code_Location;
-  has_location: bool;
-}
-
-IR_Lowering_State :: struct {
-  first_error: IR_Diagnostic;
-}
-
-ir_reset_diagnostic :: (using state: *IR_Lowering_State) {
+#program_export
+ir_reset_diagnostic :: (using state: *IR_Lowering_State) #no_context {
+    push_context,defer_pop;
   first_error = .{};
 }
 
-ir_set_diagnostic :: (using state: *IR_Lowering_State, message: string, node: *Code_Node = null) {
+#program_export
+ir_set_diagnostic :: (using state: *IR_Lowering_State, message: string, node: *Code_Node = null) #no_context {
+    push_context,defer_pop;
   if first_error.message.count != 0 return; // Preserve first failure.
   first_error.message = message;
   if node {
@@ -235,7 +22,9 @@ ir_set_diagnostic :: (using state: *IR_Lowering_State, message: string, node: *C
   }
 }
 
-ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
+#program_export
+ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic #no_context {
+    push_context,defer_pop;
   return state.first_error;
 }
 
@@ -1562,14 +1351,11 @@ ir_collect_compute_declared_structs_in_block :: (block: *Code_Block, out_extra_s
 
 // Shared lowering functions moved to ir_pipeline/ir_shared.jai.
 
-IR_Shader_Header_Context :: struct {
-  name: string;
-  header: *Code_Procedure_Header;
-}
-
 #scope_export
 
-ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Vertex_Shader, bool, IR_Diagnostic) {
+#program_export
+ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Vertex_Shader, bool, IR_Diagnostic) #no_context {
+    push_context,defer_pop;
   out: IR_Vertex_Shader;
   state: IR_Lowering_State;
   ir_reset_diagnostic(*state);
@@ -1669,7 +1455,10 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Ve
   return out, true, ir_get_diagnostic(*state);
 }
 
-ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Fragment_Shader, bool, IR_Diagnostic) {
+
+#program_export
+ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Fragment_Shader, bool, IR_Diagnostic) #no_context {
+    push_context,defer_pop;
   out: IR_Fragment_Shader;
   state: IR_Lowering_State;
   ir_reset_diagnostic(*state);
@@ -1824,7 +1613,9 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_
   return out, true, ir_get_diagnostic(*state);
 }
 
-ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Compute_Shader, bool, IR_Diagnostic) {
+#program_export
+ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> (IR_Compute_Shader, bool, IR_Diagnostic) #no_context {
+    push_context,defer_pop;
   out: IR_Compute_Shader;
   state: IR_Lowering_State;
   ir_reset_diagnostic(*state);

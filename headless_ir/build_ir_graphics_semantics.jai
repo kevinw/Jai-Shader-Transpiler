@@ -15,7 +15,7 @@ Proc :: #import "Process";
   set_optimization(*options, .VERY_DEBUG);
   options.text_output_flags = command_line_opts.text_output_flags;
   explicit_import_paths: [..] string;
-  array_add(*explicit_import_paths, "/Users/kev/src/peel/modules");
+  array_add(*explicit_import_paths, "/Users/kev/src/peel/modules"); // TODO
   array_add(*explicit_import_paths, ..options.import_path);
   options.import_path = explicit_import_paths;
   set_build_options(options, w);

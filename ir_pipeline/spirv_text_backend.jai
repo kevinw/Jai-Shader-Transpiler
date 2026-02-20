@@ -2,36 +2,29 @@
 // Jai IR -> SPIR-V text
 // 
 
-emit_ir_compute_to_spirv_text_branch :: (shader: IR_Compute_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
-  diag: IR_Diagnostic;
-  generic_out, generic_ok, generic_diag := emit_compute_generic_uint_buffer(shader);
-  if generic_ok return generic_out, true, diag;
-  if generic_diag.message.count == 0 {
-    generic_diag.message = tprint("SPIR-V generic backend: unsupported compute shader '%'.", shader.source_name);
-  }
-  return "", false, generic_diag;
+#program_export
+to_spvasm :: (shader: *IR_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) #no_context {
+    push_context,defer_pop;
+    
+    if #complete shader.kind == {
+    case .Vertex;
+        using cast(*IR_Vertex_Shader)shader;
+        spvasm, ok, diag := emit_graphics_generic(.VERTEX, source_name, input, output, args, *body, functions, extra_structs);
+        return spvasm, ok, diag;
+    case .Fragment;
+        using cast(*IR_Fragment_Shader)shader;
+        spvasm, ok, diag := emit_graphics_generic(.FRAGMENT, source_name, input, output, args, *body, functions, extra_structs);
+        return spvasm, ok, diag;
+    case .Compute;
+        generic_out, generic_ok, generic_diag := emit_compute_generic_uint_buffer(cast(*IR_Compute_Shader)shader);
+        if generic_ok return generic_out, true, {};
+        if generic_diag.message.count == 0 {
+            generic_diag.message = tprint("SPIR-V generic backend: unsupported compute shader '%'.", shader.source_name);
+        }
+        return "", false, generic_diag;
+    }
 }
 
-emit_ir_graphics_pair_to_spirv_text_branch :: (vertex: IR_Vertex_Shader, fragment: IR_Fragment_Shader) -> (vertex_spvasm: string, fragment_spvasm: string, ok: bool, diag: IR_Diagnostic) {
-  diag: IR_Diagnostic;
-  assert(vertex.entry_name.count != 0);
-  assert(fragment.entry_name.count != 0);
-  vertex_spv, vertex_ok, vertex_diag := emit_ir_vertex_to_spirv_text_branch(vertex);
-  if !vertex_ok return "", "", false, vertex_diag;
-  fragment_spv, fragment_ok, fragment_diag := emit_ir_fragment_to_spirv_text_branch(fragment);
-  if !fragment_ok return "", "", false, fragment_diag;
-  return vertex_spv, fragment_spv, true, diag;
-}
-
-emit_ir_vertex_to_spirv_text_branch :: (shader: IR_Vertex_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
-  spvasm, ok, diag := emit_graphics_generic(.VERTEX, shader.source_name, shader.input, shader.output, shader.args, *shader.body, shader.functions, shader.extra_structs);
-  return spvasm, ok, diag;
-}
-
-emit_ir_fragment_to_spirv_text_branch :: (shader: IR_Fragment_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
-  spvasm, ok, diag := emit_graphics_generic(.FRAGMENT, shader.source_name, shader.input, shader.output, shader.args, *shader.body, shader.functions, shader.extra_structs);
-  return spvasm, ok, diag;
-}
 
 // -----------------------------------------------------------------------------
 // Parsing / Text Helpers

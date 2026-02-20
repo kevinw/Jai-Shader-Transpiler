@@ -1,13 +1,12 @@
 // Functions for running external shader compilation tools
 
-Slang_Target :: enum { METAL; VULKAN_GLSL; }
-Slang_Stage  :: enum { VERTEX; FRAGMENT; COMPUTE; }
-
-ir_run_command_checked :: (description: string, args: [] string) -> bool {
-  result, output, error, timeout_reached := P.run_command(..args, timeout_ms=SLANG_TIMEOUT_MS);
+#program_export
+ir_run_command_checked :: (description: string, args: [] string) -> bool #no_context {
+    push_context,defer_pop;
+  result, output, error, timeout_reached := P.run_command(..args, timeout_ms=EXTERNAL_TOOL_TIMEOUT_MS);
 
   if timeout_reached {
-    log_error("% timed out after %ms: %", description, SLANG_TIMEOUT_MS, P.get_quoted_command_string(args));
+    log_error("% timed out after %ms: %", description, EXTERNAL_TOOL_TIMEOUT_MS, P.get_quoted_command_string(args));
     return false;
   }
 
@@ -26,31 +25,41 @@ ir_run_command_checked :: (description: string, args: [] string) -> bool {
   return true;
 }
 
-assemble_spirv_text :: (spvasm_path: string, output_spv: string) -> bool {
+#program_export
+assemble_spirv_text :: (spvasm_path: string, output_spv: string) -> bool #no_context {
+  push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-as %", spvasm_path),
     .["spirv-as", spvasm_path, "--target-env", "vulkan1.2", "-o", output_spv]);
 }
 
-validate_spirv_binary :: (spv_path: string) -> bool {
+#program_export
+validate_spirv_binary :: (spv_path: string) -> bool #no_context {
+    push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-val %", spv_path),
     .["spirv-val", "--target-env", "vulkan1.2", spv_path]);
 }
 
-optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool {
+#program_export
+optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool #no_context {
+    push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-opt %", input_spv),
     .["spirv-opt", "-O", input_spv, "-o", output_spv]);
 }
 
-disassemble_spirv_binary :: (input_spv: string, output_spvasm: string) -> bool {
+#program_export
+disassemble_spirv_binary :: (input_spv: string, output_spvasm: string) -> bool #no_context {
+    push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-dis %", input_spv),
     .["spirv-dis", input_spv, "-o", output_spvasm]);
 }
 
-link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool {
+#program_export
+link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool #no_context {
+    push_context,defer_pop;
   if inputs.count == 0 {
     log_error("SPIR-V link requires at least one input.");
     return false;
@@ -65,9 +74,11 @@ link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool {
     args);
 }
 
-emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: Slang_Stage, target: Slang_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool {
+#program_export
+emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: IR_Shader_Kind, target: Toolchain_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool #no_context {
+    push_context,defer_pop;
   if target == .METAL {
-    if use_metal_argument_buffers && (stage == .VERTEX || stage == .FRAGMENT) {
+    if use_metal_argument_buffers && (stage == .Vertex || stage == .Fragment) {
       return ir_run_command_checked(
         tprint("spirv-cross metal %", entry_name),
         .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--entry", source_entry_name, "--stage", spirv_cross_stage_name(stage), "--msl-argument-buffers", "--msl-force-active-argument-buffer-resources", "--msl-decoration-binding",
@@ -93,12 +104,15 @@ emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: 
 
 #scope_file
 
-spirv_cross_stage_name :: (stage: Slang_Stage) -> string {
-  if stage == .VERTEX return "vert";
-  if stage == .FRAGMENT return "frag";
-  return "comp";
+spirv_cross_stage_name :: (stage: IR_Shader_Kind) -> string {
+    if #complete stage == {
+        case .Vertex;   return "vert";
+        case .Fragment; return "frag";
+        case .Compute;  return "comp";
+    }
+    return "";
 }
 
 #import "Basic";
 P :: #import "Process";
-SLANG_TIMEOUT_MS :: 15_000;
+EXTERNAL_TOOL_TIMEOUT_MS :: 15_000;

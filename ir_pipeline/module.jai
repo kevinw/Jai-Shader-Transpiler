@@ -17,5 +17,3 @@ append :: inline (builder: *String_Builder, strings: ..string) {
 #load "ir_normalize.jai";
 #load "spirv_text_backend.jai";
 #load "spv_types.jai";
-
-#scope_file

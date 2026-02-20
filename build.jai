@@ -1,6 +1,9 @@
+BUILD_IS_FOR_IDE :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is for the IDE's error display. (Jails language server runs the build to check for errors.)
+
 #run,stallable {
+    set_build_options_dc(.{do_output=false, write_added_strings=false});
+    
   start_time := current_time_monotonic();
-  set_build_options_dc(.{do_output=false, write_added_strings=false});
   command_line_opts := get_build_options();
   opts: Opts;
   run_tests := false;
@@ -130,7 +133,7 @@ build :: (build_file: string, using opts: Opts) {
   compile_ok: bool;
   {
     time_scope(timings, tprint("Compile %", output_exe_name));
-    compile_ok = message_loop(w, jai_to_shader_plugin, verbose_build_progress);
+    compile_ok = message_loop(w, .[jai_to_shader_plugin], verbose_build_progress);
   }
   if !compile_ok {
     exit(1);
@@ -138,30 +141,6 @@ build :: (build_file: string, using opts: Opts) {
   if autorun {
     run_command(output_exe_name);
   }
-}
-
-message_loop :: (w: Workspace, plugin: *Metaprogram_Plugin, verbose_build_progress: bool=false) -> bool {
-  ok := false;
-  message_count: s64 = 0;
-  last_progress_log_time := current_time_monotonic();
-  while true {
-    message := compiler_wait_for_message();
-    message_count += 1;
-    plugin.message(plugin, message);
-    if verbose_build_progress {
-      now := current_time_monotonic();
-      elapsed_since_log := to_float64_seconds(now - last_progress_log_time);
-      if elapsed_since_log >= 0.5 {
-        log("[build] workspace % progress: % messages, last kind=%", w, message_count, message.kind);
-        last_progress_log_time = now;
-      }
-    }
-    if message.kind == .COMPLETE {
-      ok = message.(*Message_Complete).error_code == 0;
-      break;
-    }
-  }
-  return ok;
 }
 
 time_scope :: (enabled: bool, label: string) #expand {
@@ -238,14 +217,6 @@ parallel_build :: (to_build: []string, extra_args: []string) {
   }
 }
 
-#import "Basic";
-#import "Compiler";
-#import "String";
-#import "Hash_Table";
-#import "Process";
-#import "Metaprogram_Plugins";
-#import,file "./module.jai"; // #import "Jai-Shader-Transpiler" in your code.
-
 #if OS == .MACOS jai_exe :: "jai-macos";
 else #if OS == .LINUX jai_exe :: "jai-linux";
 else jai_exe :: "jai";
@@ -254,3 +225,14 @@ fail :: (fmt: string, args: ..Any) {
   compiler_report(sprint(fmt, ..args));
   exit(1);
 }
+
+
+#scope_file
+#load "build_common.jai";
+#import "Basic";
+#import "Compiler";
+#import "String";
+#import "Hash_Table";
+#import "Process";
+#import "Metaprogram_Plugins";
+#import,file "./module.jai"; // #import "Jai-Shader-Transpiler" in your code.

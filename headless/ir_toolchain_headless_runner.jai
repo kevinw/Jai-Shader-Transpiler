@@ -2,7 +2,7 @@
 #import "File";
 #import "File_Utilities";
 String :: #import "String";
-#import,file "../ir_pipeline/external_toolchain.jai";
+#import,dir "../modules/ir_pipe";
 
 HEADLESS_DIR :: ".build/headless_ir_toolchain";
 

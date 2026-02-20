@@ -1,6 +1,6 @@
 VERBOSE      :: false;
 DEBUG_OUTDIR :: ".generated_shaders";
-USE_SPIRV_OPT :: true;
+USE_SPIRV_OPT :: false;
 IR_INTERMEDIATE_DIR :: ".build/ir_intermediate";
 
 Transpiled_Target :: enum {
@@ -12,14 +12,14 @@ Transpiled_Target :: enum {
 
 Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
-    
-    message = convert_procs;
+    message = convert_procs; // the Compiler message handler
     
     // options
     output_shaders: bool;
     shader_entry_ids_filter: string;
     timings_enabled: bool;
     
+    // internal
     using impl: struct {
       currently_waiting_contexts: [..] Shader_Write_Context;
       currently_waiting_pair_contexts: [..] Shader_Write_Pair_Context;
@@ -430,14 +430,12 @@ ir_entry_name_from_context :: (ctx: *Shader_Write_Context) -> string {
   return "";
 }
 
-ir_stage_from_context :: (ctx: *Shader_Write_Context) -> (Slang_Stage, bool) {
-  if ctx.type == .Vertex return .VERTEX, true;
-  if ctx.type == .Fragment return .FRAGMENT, true;
-  if ctx.type == .Compute return .COMPUTE, true;
-  return .VERTEX, false;
+// TODO: remove me
+ir_stage_from_context :: (ctx: *Shader_Write_Context) -> (IR_Shader_Kind, bool) {
+    return ctx.type, true;
 }
 
-ir_target_from_context :: (ctx: *Shader_Write_Context) -> (Slang_Target, bool) {
+ir_target_from_context :: (ctx: *Shader_Write_Context) -> (Toolchain_Target, bool) {
   if ctx.language == .METAL return .METAL, true;
   if ctx.language == .GLSL && ctx.glsl_target == .VULKAN return .VULKAN_GLSL, true;
   return .METAL, false;
@@ -493,7 +491,7 @@ ir_source_file_from_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> st
   return tprint("% | %", vertex_file, fragment_file);
 }
 
-ir_pipeline_label_spirv :: (target: Slang_Target) -> string {
+ir_pipeline_label_spirv :: (target: Toolchain_Target) -> string {
   if target == .METAL return "Jai -> IR -> SPIRV -> SPIRV-Cross -> Metal";
   return "Jai -> IR -> SPIRV -> SPIRV-Cross -> GLSL";
 }
@@ -502,27 +500,6 @@ ir_prepend_generated_comment :: (target_source: string, source_jai_file: string,
   jai_file := source_jai_file;
   if jai_file.count == 0 jai_file = "<unknown>";
   return tprint("// Generated from % with (<<%>>)\n%", jai_file, pipeline_label, target_source);
-}
-
-normalize_vertex_ir :: (shader: *IR_Vertex_Shader) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(shader != null);
-  base := cast(*IR_Shader) shader;
-  ok, diag := normalize_shader(base);
-  return ok, diag;
-}
-
-normalize_fragment_ir :: (shader: *IR_Fragment_Shader) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(shader != null);
-  base := cast(*IR_Shader) shader;
-  ok, diag := normalize_shader(base);
-  return ok, diag;
-}
-
-normalize_compute_ir :: (shader: *IR_Compute_Shader) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(shader != null);
-  base := cast(*IR_Shader) shader;
-  ok, diag := normalize_shader(base);
-  return ok, diag;
 }
 
 ir_spirv_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
@@ -583,8 +560,8 @@ SPV_External_Single_Job :: struct {
   ctx: *Shader_Write_Context;
   started: Apollo_Time;
   validate_before_opt: bool;
-  stage: Slang_Stage;
-  target: Slang_Target;
+  stage: IR_Shader_Kind;
+  target: Toolchain_Target;
   entry_name: string;
   use_metal_argument_buffers: bool;
   spvasm_path: string;
@@ -595,47 +572,40 @@ SPV_External_Single_Job :: struct {
   ok: bool;
   error_message: string;
 
-  assemble_s: float64;
-  optimize_s: float64;
-  validate_s: float64;
-  cross_s: float64;
+  using _timings: struct {
+    assemble_s: float64;
+    optimize_s: float64;
+    validate_s: float64;
+    cross_s: float64;
+  }
 }
 
 prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
                                       job: *SPV_External_Single_Job,
-                                      timings_totals: *Build_Timing_Totals = null) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(ctx != null);
-  assert(job != null);
+                                      timings_totals: *Build_Timing_Totals = null) -> (ok: bool, diag: IR_Diagnostic)
+{
+  assert(ctx != null && job != null);
+  
+  return_err :: (msg: string) #expand {
+      diag: IR_Diagnostic = { message = msg };
+      if ctx.main_fn && ctx.main_fn.header {
+        diag.location = make_location(ctx.main_fn.header);
+        diag.has_location = true;
+      }
+      `return false, diag;
+  }
 
   diag: IR_Diagnostic;
-  if !ir_spirv_supports_single_context(ctx) {
-    diag.message = "SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only.";
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return false, diag;
-  }
+  if !ir_spirv_supports_single_context(ctx)
+      return_err("SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only.");
 
   stage, stage_ok := ir_stage_from_context(ctx);
-  if !stage_ok {
-    diag.message = "SPIR-V backend: unsupported shader stage.";
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return false, diag;
-  }
+  if !stage_ok 
+      return_err("SPIR-V backend: unsupported shader stage.");
 
   target, target_ok := ir_target_from_context(ctx);
-  if !target_ok {
-    diag.message = "SPIR-V backend: unsupported target for context.";
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return false, diag;
-  }
+  if !target_ok
+      return_err("SPIR-V backend: unsupported target for context.");
 
   spvasm_source: string;
   spvasm_ok := false;
@@ -649,12 +619,12 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
     if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
     if !lowered return false, lowered_diag;
     t0 = current_time_monotonic();
-    normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
+    normalized, normalize_diag := normalize_shader(*ir_vertex);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return false, normalize_diag;
     entry_name = ir_vertex.entry_name;
     t0 = current_time_monotonic();
-    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
+    spvasm_source, spvasm_ok, spvasm_diag = to_spvasm(*ir_vertex);
     if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
   } else if ctx.type == .Fragment {
@@ -663,12 +633,12 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
     if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
     if !lowered return false, lowered_diag;
     t0 = current_time_monotonic();
-    normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
+    normalized, normalize_diag := normalize_shader(*ir_fragment);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return false, normalize_diag;
     entry_name = ir_fragment.entry_name;
     t0 = current_time_monotonic();
-    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
+    spvasm_source, spvasm_ok, spvasm_diag = to_spvasm(*ir_fragment);
     if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
   } else {
@@ -677,23 +647,17 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
     if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
     if !lowered return false, lowered_diag;
     t0 = current_time_monotonic();
-    normalized, normalize_diag := normalize_compute_ir(*ir_compute);
+    normalized, normalize_diag := normalize_shader(*ir_compute);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return false, normalize_diag;
     entry_name = ir_compute.entry_name;
     t0 = current_time_monotonic();
-    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
+    spvasm_source, spvasm_ok, spvasm_diag = to_spvasm(*ir_compute);
     if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
   }
 
-  if entry_name.count == 0 {
-    diag.message = "SPIR-V backend: empty entry name.";
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return false, diag;
-  }
+  if entry_name.count == 0
+      return_err("SPIR-V backend: empty entry name.");
 
   if !spvasm_ok {
     if spvasm_diag.message.count == 0 spvasm_diag.message = tprint("SPIR-V text backend: failed to emit SPIR-V assembly for '%'.", ctx.name);
@@ -716,10 +680,10 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
   job.target = target;
   job.entry_name = copy_string(entry_name);
   job.use_metal_argument_buffers = use_metal_argument_buffers;
-  job.spvasm_path = copy_string(tprint("%/%_%.spvasm", build_dir, ctx.name, stage_short));
-  job.spv_path = copy_string(tprint("%/%_%.spv", build_dir, ctx.name, stage_short));
-  job.spv_opt_path = copy_string(tprint("%/%_%.opt.spv", build_dir, ctx.name, stage_short));
-  job.output_path = copy_string(tprint("%/%_%.%", build_dir, ctx.name, stage_short, output_ext));
+  job.spvasm_path = sprint("%/%_%.spvasm", build_dir, ctx.name, stage_short);
+  job.spv_path = sprint("%/%_%.spv", build_dir, ctx.name, stage_short);
+  job.spv_opt_path = sprint("%/%_%.opt.spv", build_dir, ctx.name, stage_short);
+  job.output_path = sprint("%/%_%.%", build_dir, ctx.name, stage_short, output_ext);
   job.ok = false;
   job.error_message = "";
 
@@ -910,7 +874,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
     if !lowered return "", "", false, lowered_diag;
     t0 = current_time_monotonic();
-    normalized, normalize_diag := normalize_fragment_ir(*ir_fragment);
+    normalized, normalize_diag := normalize_shader(*ir_fragment);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
     if !normalized return "", "", false, normalize_diag;
     entry_name = ir_fragment.entry_name;
@@ -1318,7 +1282,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
     return "", false, vertex_diag;
   }
   t0 = current_time_monotonic();
-  vertex_normalized, vertex_normalize_diag := normalize_vertex_ir(*ir_vertex);
+  vertex_normalized, vertex_normalize_diag := normalize_shader(*ir_vertex);
   if timings_totals timings_totals.spv_normalize_s += since(t0);
   if !vertex_normalized return "", false, vertex_normalize_diag;
 
@@ -1333,7 +1297,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
     return "", false, fragment_diag;
   }
   t0 = current_time_monotonic();
-  fragment_normalized, fragment_normalize_diag := normalize_fragment_ir(*ir_fragment);
+  fragment_normalized, fragment_normalize_diag := normalize_shader(*ir_fragment);
   if timings_totals timings_totals.spv_normalize_s += since(t0);
   if !fragment_normalized return "", false, fragment_normalize_diag;
 
@@ -1361,7 +1325,19 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
   // Keep direct bindings by default for pair shaders, but switch to argument buffers when
   // bindless globals are present in SPIR-V text (required for large bindless arrays on Metal).
   use_metal_argument_buffers := false;
-
+  
+  
+  // TODO: remove this
+  emit_ir_graphics_pair_to_spirv_text_branch :: (vertex: IR_Vertex_Shader, fragment: IR_Fragment_Shader) -> (vertex_spvasm: string, fragment_spvasm: string, ok: bool, diag: IR_Diagnostic) {
+    diag: IR_Diagnostic;
+    assert(vertex.entry_name.count != 0);
+    assert(fragment.entry_name.count != 0);
+    vertex_spv, vertex_ok, vertex_diag := to_spvasm(*vertex);
+    if !vertex_ok return "", "", false, vertex_diag;
+    fragment_spv, fragment_ok, fragment_diag := to_spvasm(*fragment);
+    if !fragment_ok return "", "", false, fragment_diag;
+    return vertex_spv, fragment_spv, true, diag;
+  }
 
   t0 = current_time_monotonic();
   vertex_spvasm, fragment_spvasm, pair_spvasm_ok, pair_spvasm_diag := emit_ir_graphics_pair_to_spirv_text_branch(ir_vertex, ir_fragment);
@@ -1427,11 +1403,11 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
   }
   if timings_totals timings_totals.spv_emit_text_s += since(t0);
   t0 = current_time_monotonic();
-  if !emit_spirv_cross_target_source(pair_opt_spv_path, "VertexMain", .VERTEX, .METAL, vertex_output_path, use_metal_argument_buffers, source_entry_name="VertexMain") {
+  if !emit_spirv_cross_target_source(pair_opt_spv_path, "VertexMain", .Vertex, .METAL, vertex_output_path, use_metal_argument_buffers, source_entry_name="VertexMain") {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
   }
-  if !emit_spirv_cross_target_source(pair_opt_spv_path, "FragmentMain", .FRAGMENT, .METAL, fragment_output_path, use_metal_argument_buffers, source_entry_name="FragmentMain") {
+  if !emit_spirv_cross_target_source(pair_opt_spv_path, "FragmentMain", .Fragment, .METAL, fragment_output_path, use_metal_argument_buffers, source_entry_name="FragmentMain") {
     diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
     return "", false, diag;
   }
@@ -1826,11 +1802,7 @@ operator_string :: (op: Operator_Type) -> string {
   }
 }
 
-Shader_Type :: enum {
-  Vertex;
-  Fragment;
-  Compute;
-}
+Shader_Type :: IR_Shader_Kind;
 
 Shader_Language :: enum {
   NONE;
@@ -1890,24 +1862,6 @@ member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
   return false;
 }
 
-declaration_get_note_suffix :: (decl: *Code_Declaration, prefix_check: string) -> (string, bool) {
-  for decl.notes if begins_with(it.text, prefix_check) {
-    ret: string = { it.text.count - prefix_check.count, it.text.data + prefix_check.count };
-    return ret, true;
-  }
-  return "", false;
-}
-
-declaration_is_parameter_using :: (header: *Code_Procedure_Header, decl: *Code_Declaration) -> bool {
-  for header.parameter_usings {
-    if !it.expression || it.expression.kind != .IDENT continue;
-    ident := cast(*Code_Ident) it.expression;
-    if ident.resolved_declaration == decl return true;
-    if ident.name == decl.name return true;
-  }
-  return false;
-}
-
 #scope_file
 
 #import "Basic";
@@ -1920,7 +1874,9 @@ PP :: #import "Program_Print";
 #import "System";
 #import "File";
 
-#import,dir "ir_pipeline";
+#if 1 #import,dir "ir_pipeline";
+else #import,dir "./modules/ir_pipe";
+
 #load "build_timings.jai";
 #load "string_builder_util.jai";
 

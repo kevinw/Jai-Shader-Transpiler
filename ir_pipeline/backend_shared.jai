@@ -157,8 +157,8 @@ bindless_struct_type_from_decl :: (decl: *Code_Declaration) -> (*Type_Info_Struc
   if !type return null, false;
   if type.type == .STRUCT return cast(*Type_Info_Struct) type, true;
   if type.type == .POINTER {
-    pointer := cast(*Type_Info_Pointer) type;
-    if pointer.pointer_to && pointer.pointer_to.type == .STRUCT return cast(*Type_Info_Struct) pointer.pointer_to, true;
+    using pointer := cast(*Type_Info_Pointer) type;
+    if pointer_to && pointer_to.type == .STRUCT return cast(*Type_Info_Struct) pointer_to, true;
   }
   return null, false;
 }
@@ -168,4 +168,22 @@ find_bindless_param :: (header: *Code_Procedure_Header) -> (*Code_Declaration, s
   if found return decl, binding, true;
   decl2, binding2, found2 := find_implicit_bindless_param(header);
   return decl2, binding2, found2;
+}
+
+declaration_is_parameter_using :: (header: *Code_Procedure_Header, decl: *Code_Declaration) -> bool {
+  for header.parameter_usings {
+    if !it.expression || it.expression.kind != .IDENT continue;
+    using ident := cast(*Code_Ident) it.expression;
+    if resolved_declaration == decl return true;
+    if name == decl.name return true;
+  }
+  return false;
+}
+
+declaration_get_note_suffix :: (decl: *Code_Declaration, prefix_check: string) -> (string, bool) {
+  for decl.notes if begins_with(it.text, prefix_check) {
+    ret: string = { it.text.count - prefix_check.count, it.text.data + prefix_check.count };
+    return ret, true;
+  }
+  return "", false;
 }
