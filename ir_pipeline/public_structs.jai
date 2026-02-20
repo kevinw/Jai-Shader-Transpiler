@@ -232,5 +232,12 @@ IR_Lowering_State :: struct {
 
 Toolchain_Target :: enum { METAL; VULKAN_GLSL; }
 
+IR_Result :: struct ($R: Type) {
+    value: R;
+    ok: bool;
+    diag: IR_Diagnostic;
+}
+
+
 #scope_file
 #import "Compiler";

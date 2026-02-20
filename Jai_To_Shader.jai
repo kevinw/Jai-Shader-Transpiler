@@ -1,6 +1,6 @@
 VERBOSE      :: false;
 DEBUG_OUTDIR :: ".generated_shaders";
-USE_SPIRV_OPT :: false;
+USE_SPIRV_OPT :: true;
 IR_INTERMEDIATE_DIR :: ".build/ir_intermediate";
 
 Transpiled_Target :: enum {
@@ -615,44 +615,48 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
 
   if ctx.type == .Vertex {
     t0 := current_time_monotonic();
-    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    vert_result := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    ir_vertex, lowered, lowered_diag := unpack_result(vert_result);
     if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
     if !lowered return false, lowered_diag;
     t0 = current_time_monotonic();
-    normalized, normalize_diag := normalize_shader(*ir_vertex);
+    normalize_shader(*ir_vertex);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !normalized return false, normalize_diag;
     entry_name = ir_vertex.entry_name;
     t0 = current_time_monotonic();
-    spvasm_source, spvasm_ok, spvasm_diag = to_spvasm(*ir_vertex);
+    vert_spvasm_res := to_spvasm(*ir_vertex);
+    spvasm_source, spvasm_ok, spvasm_diag = unpack_result(vert_spvasm_res);
     if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
   } else if ctx.type == .Fragment {
     t0 := current_time_monotonic();
-    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    frag_lower_res := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    ir_fragment, lowered, lowered_diag := unpack_result(frag_lower_res);
     if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
     if !lowered return false, lowered_diag;
     t0 = current_time_monotonic();
-    normalized, normalize_diag := normalize_shader(*ir_fragment);
+    normalize_shader(*ir_fragment);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !normalized return false, normalize_diag;
     entry_name = ir_fragment.entry_name;
     t0 = current_time_monotonic();
-    spvasm_source, spvasm_ok, spvasm_diag = to_spvasm(*ir_fragment);
+    
+    frag_spvasm_res := to_spvasm(*ir_fragment);
+    spvasm_source, spvasm_ok, spvasm_diag = unpack_result(frag_spvasm_res);
     if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
   } else {
     t0 := current_time_monotonic();
-    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    lower_compute_res := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
+    ir_compute, lowered, lowered_diag := unpack_result(lower_compute_res);
     if timings_totals timings_totals.spv_lower_s += to_float64_seconds(current_time_monotonic() - t0);
     if !lowered return false, lowered_diag;
     t0 = current_time_monotonic();
-    normalized, normalize_diag := normalize_shader(*ir_compute);
+    normalize_shader(*ir_compute);
     if timings_totals timings_totals.spv_normalize_s += to_float64_seconds(current_time_monotonic() - t0);
-    if !normalized return false, normalize_diag;
     entry_name = ir_compute.entry_name;
     t0 = current_time_monotonic();
-    spvasm_source, spvasm_ok, spvasm_diag = to_spvasm(*ir_compute);
+    compute_spvasm_res := to_spvasm(*ir_compute);
+    spvasm_source, spvasm_ok, spvasm_diag = unpack_result(compute_spvasm_res);
     if timings_totals timings_totals.spv_emit_text_s += to_float64_seconds(current_time_monotonic() - t0);
   }
 
@@ -1176,9 +1180,9 @@ ir_struct_has_pointer_fields_recursive_local :: (extra_structs: [] IR_Struct, na
 
 ir_uses_pointer_abi_local :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct) -> bool {
   for args {
-    arg := it;
-    if !arg.is_pointer || !arg.pointer_pointee_is_struct || arg.pointer_pointee_type_name.count == 0 continue;
-    if ir_struct_has_pointer_fields_recursive_local(extra_structs, arg.pointer_pointee_type_name) return true;
+    using it;
+    if !is_pointer || !pointer_pointee_is_struct || pointer_pointee_type_name.count == 0 continue;
+    if ir_struct_has_pointer_fields_recursive_local(extra_structs, pointer_pointee_type_name) return true;
   }
   return false;
 }
@@ -1221,11 +1225,15 @@ ir_pair_varyings_match_local :: (vertex_field: *IR_Field, fragment_field: *IR_Fi
 }
 
 ir_validate_pair_stage_interface_local :: (pair_name: string, vertex: *IR_Vertex_Shader, fragment: *IR_Fragment_Shader) -> (bool, string) {
-  assert(vertex != null);
-  assert(fragment != null);
+    auto_release_temp();
+  assert(vertex != null && fragment != null);
 
-  vertex_varyings: [..] IR_Field;
+  vertex_varyings:   [..] IR_Field;
+  vertex_varyings.allocator = temp;
+  
   fragment_varyings: [..] IR_Field;
+  fragment_varyings.allocator = temp;
+  
   for vertex.output.fields {
     if ir_vertex_output_field_is_builtin_local(*it) continue;
     array_add(*vertex_varyings, it);
@@ -1236,17 +1244,17 @@ ir_validate_pair_stage_interface_local :: (pair_name: string, vertex: *IR_Vertex
   }
 
   if vertex_varyings.count != fragment_varyings.count {
-    return false, tprint("SPIR-V backend: pair '%': stage interface mismatch: vertex exports % user varyings but fragment consumes %.", pair_name, vertex_varyings.count, fragment_varyings.count);
+    return false, sprint("SPIR-V backend: pair '%': stage interface mismatch: vertex exports % user varyings but fragment consumes %.", pair_name, vertex_varyings.count, fragment_varyings.count);
   }
 
   for i: 0..fragment_varyings.count-1 {
     v := vertex_varyings[i];
     f := fragment_varyings[i];
     if v.type_name != f.type_name {
-      return false, tprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' has type '%', fragment '%' has type '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), v.type_name, ir_pair_varying_field_label_local(*f), f.type_name);
+      return false, sprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' has type '%', fragment '%' has type '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), v.type_name, ir_pair_varying_field_label_local(*f), f.type_name);
     }
     if !ir_pair_varyings_match_local(*v, *f) {
-      return false, tprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' does not match fragment '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), ir_pair_varying_field_label_local(*f));
+      return false, sprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' does not match fragment '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), ir_pair_varying_field_label_local(*f));
     }
   }
 
@@ -1272,7 +1280,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
   fragment_ctx := create_shader_write_context(.METAL, pair_ctx.fragment_fn, pair_ctx.glsl_target);
 
   t0 := current_time_monotonic();
-  ir_vertex, vertex_ok, vertex_diag := ir_lower_vertex_from_shader_context(.{name=vertex_ctx.name, header=vertex_ctx.main_fn.header});
+  vert_result := ir_lower_vertex_from_shader_context(.{name=vertex_ctx.name, header=vertex_ctx.main_fn.header});
+  ir_vertex, vertex_ok, vertex_diag := unpack_result(vert_result);
   if timings_totals timings_totals.spv_lower_s += since(t0);
   if !vertex_ok {
     if !vertex_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
@@ -1282,13 +1291,14 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
     return "", false, vertex_diag;
   }
   t0 = current_time_monotonic();
-  vertex_normalized, vertex_normalize_diag := normalize_shader(*ir_vertex);
+  normalize_shader(*ir_vertex);
   if timings_totals timings_totals.spv_normalize_s += since(t0);
-  if !vertex_normalized return "", false, vertex_normalize_diag;
 
   t0 = current_time_monotonic();
-  ir_fragment, fragment_ok, fragment_diag := ir_lower_fragment_from_shader_context(.{name=fragment_ctx.name, header=fragment_ctx.main_fn.header});
+  frag_result := ir_lower_fragment_from_shader_context(.{name=fragment_ctx.name, header=fragment_ctx.main_fn.header});
+  ir_fragment, fragment_ok, fragment_diag := unpack_result(frag_result);
   if timings_totals timings_totals.spv_lower_s += since(t0);
+  
   if !fragment_ok {
     if !fragment_diag.has_location && pair_ctx.fragment_fn && pair_ctx.fragment_fn.header {
       fragment_diag.location = make_location(pair_ctx.fragment_fn.header);
@@ -1296,13 +1306,13 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
     }
     return "", false, fragment_diag;
   }
-  t0 = current_time_monotonic();
-  fragment_normalized, fragment_normalize_diag := normalize_shader(*ir_fragment);
-  if timings_totals timings_totals.spv_normalize_s += since(t0);
-  if !fragment_normalized return "", false, fragment_normalize_diag;
+  timed(ifx timings_totals then *timings_totals.spv_normalize_s, #code {
+    normalize_shader(*ir_fragment);
+  });
 
-  vertex_uses_pointer_abi := ir_uses_pointer_abi_local(ir_vertex.args, ir_vertex.extra_structs);
+  vertex_uses_pointer_abi   := ir_uses_pointer_abi_local(ir_vertex.args, ir_vertex.extra_structs);
   fragment_uses_pointer_abi := ir_uses_pointer_abi_local(ir_fragment.args, ir_fragment.extra_structs);
+  
   if vertex_uses_pointer_abi != fragment_uses_pointer_abi {
     diag.message = tprint("SPIR-V backend: pair '%': vertex and fragment use incompatible resource ABI styles (vertex pointer-ABI=%; fragment pointer-ABI=%). Pair shaders must agree on resource ABI.", pair_ctx.name, vertex_uses_pointer_abi, fragment_uses_pointer_abi);
     if pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
@@ -1332,10 +1342,15 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
     diag: IR_Diagnostic;
     assert(vertex.entry_name.count != 0);
     assert(fragment.entry_name.count != 0);
-    vertex_spv, vertex_ok, vertex_diag := to_spvasm(*vertex);
+    
+    vert_spvasm_res := to_spvasm(*vertex);
+    vertex_spv, vertex_ok, vertex_diag := unpack_result(vert_spvasm_res);
     if !vertex_ok return "", "", false, vertex_diag;
-    fragment_spv, fragment_ok, fragment_diag := to_spvasm(*fragment);
+    
+    frag_spvasm_res := to_spvasm(*fragment);
+    fragment_spv, fragment_ok, fragment_diag := unpack_result(frag_spvasm_res);
     if !fragment_ok return "", "", false, fragment_diag;
+    
     return vertex_spv, fragment_spv, true, diag;
   }
 
@@ -1456,9 +1471,9 @@ ir_supports_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> bool {
 
 shader_request_name_to_language :: (name: string) -> (Shader_Language, GLSL_Target, bool) {
   if name == {
-    case "shader_to_glsl";   return .GLSL, .OPENGL, true;
-    case "shader_to_vulkan"; return .GLSL, .VULKAN, true;
-    case "shader_to_hlsl";   return .HLSL, .OPENGL, true;
+    case "shader_to_glsl";   return .GLSL,  .OPENGL, true;
+    case "shader_to_vulkan"; return .GLSL,  .VULKAN, true;
+    case "shader_to_hlsl";   return .HLSL,  .OPENGL, true;
     case "shader_to_metal";  return .METAL, .OPENGL, true;
     case; return .NONE, .OPENGL, false;
   }
@@ -1630,9 +1645,7 @@ resolve_shader_request_target :: (arg: *Code_Node, procedure_bodies: [] *Code_Pr
 }
 
 resolve_shader_request_target_by_name :: (name: string, procedure_bodies: [] *Code_Procedure_Body) -> *Code_Procedure_Body {
-  for procedure_bodies {
-    if it.header.name == name return it;
-  }
+  for procedure_bodies if it.header.name == name return it;
   return null;
 }
 
@@ -1874,9 +1887,7 @@ PP :: #import "Program_Print";
 #import "System";
 #import "File";
 
-#if 1 #import,dir "ir_pipeline";
-else #import,dir "./modules/ir_pipe";
-
+#load "ir.jai";
 #load "build_timings.jai";
 #load "string_builder_util.jai";
 
@@ -1906,3 +1917,7 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
 }
 
 since :: inline (start_time: Apollo_Time) -> float64 { return to_float64_seconds(current_time_monotonic() - start_time); }
+
+unpack_result :: (result: IR_Result($R)) -> (R, bool, IR_Diagnostic) {
+    return result.value, result.ok, result.diag;
+}

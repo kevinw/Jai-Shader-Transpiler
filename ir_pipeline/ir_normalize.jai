@@ -2,21 +2,22 @@
 #scope_export
 
 #program_export
-normalize_shader :: (shader: *IR_Shader) -> (ok: bool, diag: IR_Diagnostic) {
+normalize_shader :: (shader: *IR_Shader) #c_call {
+  push_context,defer_pop;
   assert(shader != null);
-  diag: IR_Diagnostic;
 
   for *shader.functions {
     normalize_value_return_if_chains_in_block(*it.body);
     normalize_function_struct_returns_to_temp(it);
+    
     // Struct-return normalization can turn `return Struct.{...}` into
     // `tmp := Struct.{...}; return tmp;`, so run return-if canonicalization
     // again to catch newly multi-statement returning branches.
     normalize_value_return_if_chains_in_block(*it.body);
   }
   normalize_value_return_if_chains_in_block(*shader.body);
-  return true, diag;
 }
+
 
 #scope_module
 

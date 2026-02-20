@@ -1,4 +1,6 @@
+#scope_file
 BUILD_IS_FOR_IDE :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is for the IDE's error display. (Jails language server runs the build to check for errors.)
+OPTIMIZATION_TYPE :: Optimization_Type.VERY_OPTIMIZED; // .VERY_DEBUG
 
 #run,stallable {
     set_build_options_dc(.{do_output=false, write_added_strings=false});
@@ -22,9 +24,7 @@ build_ir_pipeline_dll :: () {
         cpu_target  = CPU;
         backend = .LLVM;
         #if BUILD_IS_FOR_IDE output_type = .NO_OUTPUT;
-        set_optimization(*options, 
-            //.VERY_DEBUG);
-            .VERY_OPTIMIZED);
+        set_optimization(*options,  OPTIMIZATION_TYPE);
         array_bounds_check = .OFF;
         stack_trace = false;
         text_output_flags = 0;

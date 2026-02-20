@@ -1,7 +1,7 @@
 // Functions for running external shader compilation tools
 
 #program_export
-ir_run_command_checked :: (description: string, args: [] string) -> bool #no_context {
+ir_run_command_checked :: (description: string, args: [] string) -> bool #c_call {
     push_context,defer_pop;
   result, output, error, timeout_reached := P.run_command(..args, timeout_ms=EXTERNAL_TOOL_TIMEOUT_MS);
 
@@ -26,7 +26,7 @@ ir_run_command_checked :: (description: string, args: [] string) -> bool #no_con
 }
 
 #program_export
-assemble_spirv_text :: (spvasm_path: string, output_spv: string) -> bool #no_context {
+assemble_spirv_text :: (spvasm_path: string, output_spv: string) -> bool #c_call {
   push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-as %", spvasm_path),
@@ -34,7 +34,7 @@ assemble_spirv_text :: (spvasm_path: string, output_spv: string) -> bool #no_con
 }
 
 #program_export
-validate_spirv_binary :: (spv_path: string) -> bool #no_context {
+validate_spirv_binary :: (spv_path: string) -> bool #c_call {
     push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-val %", spv_path),
@@ -42,7 +42,7 @@ validate_spirv_binary :: (spv_path: string) -> bool #no_context {
 }
 
 #program_export
-optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool #no_context {
+optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool #c_call {
     push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-opt %", input_spv),
@@ -50,7 +50,7 @@ optimize_spirv_binary :: (input_spv: string, output_spv: string) -> bool #no_con
 }
 
 #program_export
-disassemble_spirv_binary :: (input_spv: string, output_spvasm: string) -> bool #no_context {
+disassemble_spirv_binary :: (input_spv: string, output_spvasm: string) -> bool #c_call {
     push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-dis %", input_spv),
@@ -58,7 +58,7 @@ disassemble_spirv_binary :: (input_spv: string, output_spvasm: string) -> bool #
 }
 
 #program_export
-link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool #no_context {
+link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool #c_call {
     push_context,defer_pop;
   if inputs.count == 0 {
     log_error("SPIR-V link requires at least one input.");
@@ -75,7 +75,7 @@ link_spirv_binaries :: (inputs: [] string, output_spv: string) -> bool #no_conte
 }
 
 #program_export
-emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: IR_Shader_Kind, target: Toolchain_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool #no_context {
+emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: IR_Shader_Kind, target: Toolchain_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool #c_call {
     push_context,defer_pop;
   if target == .METAL {
     if use_metal_argument_buffers && (stage == .Vertex || stage == .Fragment) {

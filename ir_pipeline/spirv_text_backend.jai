@@ -3,25 +3,25 @@
 // 
 
 #program_export
-to_spvasm :: (shader: *IR_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) #no_context {
+to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) #c_call {
     push_context,defer_pop;
     
     if #complete shader.kind == {
     case .Vertex;
         using cast(*IR_Vertex_Shader)shader;
         spvasm, ok, diag := emit_graphics_generic(.VERTEX, source_name, input, output, args, *body, functions, extra_structs);
-        return spvasm, ok, diag;
+        return {spvasm, ok, diag};
     case .Fragment;
         using cast(*IR_Fragment_Shader)shader;
         spvasm, ok, diag := emit_graphics_generic(.FRAGMENT, source_name, input, output, args, *body, functions, extra_structs);
-        return spvasm, ok, diag;
+        return {spvasm, ok, diag};
     case .Compute;
         generic_out, generic_ok, generic_diag := emit_compute_generic_uint_buffer(cast(*IR_Compute_Shader)shader);
-        if generic_ok return generic_out, true, {};
+        if generic_ok return {generic_out, true, {}};
         if generic_diag.message.count == 0 {
             generic_diag.message = tprint("SPIR-V generic backend: unsupported compute shader '%'.", shader.source_name);
         }
-        return "", false, generic_diag;
+        return {"", false, generic_diag};
     }
 }
 
