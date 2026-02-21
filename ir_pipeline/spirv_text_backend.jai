@@ -2,10 +2,7 @@
 // Jai IR -> SPIR-V text
 // 
 
-#program_export
-to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) #c_call {
-    push_context,defer_pop;
-    
+to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) {
     if #complete shader.kind == {
     case .Vertex;
         using cast(*IR_Vertex_Shader)shader;
@@ -23,7 +20,7 @@ to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) #c_call {
         }
         return {"", false, generic_diag};
     }
-}
+} @jdll_export
 
 
 // -----------------------------------------------------------------------------

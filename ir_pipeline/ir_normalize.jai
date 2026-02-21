@@ -1,9 +1,7 @@
 // Canonicalize IR into a smaller set of control-flow shapes so backends need fewer special cases.
 #scope_export
 
-#program_export
-normalize_shader :: (shader: *IR_Shader) #c_call {
-  push_context,defer_pop;
+normalize_shader :: (shader: *IR_Shader) {
   assert(shader != null);
 
   for *shader.functions {
@@ -16,7 +14,7 @@ normalize_shader :: (shader: *IR_Shader) #c_call {
     normalize_value_return_if_chains_in_block(*it.body);
   }
   normalize_value_return_if_chains_in_block(*shader.body);
-}
+} @jdll_export
 
 
 #scope_module

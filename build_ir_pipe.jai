@@ -61,4 +61,4 @@ build_ir_pipeline_dll :: () {
 #import "Compiler";
 #import "String";
 File :: #import "File";
-JDLL :: #import,file "../JDLL.jai";
+JDLL :: #import,dir "../JDLL";

@@ -5,13 +5,10 @@
 #load "./public_structs.jai";
 
 
-#program_export
-ir_reset_diagnostic :: (using state: *IR_Lowering_State) #c_call {
-    push_context,defer_pop;
+ir_reset_diagnostic :: (using state: *IR_Lowering_State) {
     first_error = .{};
-}
+} @jdll_export
 
-#program_export
 ir_set_diagnostic :: (using state: *IR_Lowering_State, message: string, node: *Code_Node = null) #c_call {
     push_context,defer_pop;
     
@@ -25,13 +22,11 @@ ir_set_diagnostic :: (using state: *IR_Lowering_State, message: string, node: *C
     first_error.location = make_location(node);
     first_error.has_location = true;
   }
-}
+} @jdll_export
 
-#program_export
-ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic #c_call {
-    push_context,defer_pop;
+ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
     return state.first_error;
-}
+} @jdll_export
 
 #scope_module
 
@@ -1359,13 +1354,11 @@ ir_collect_compute_declared_structs_in_block :: (block: *Code_Block, out_extra_s
 
 #scope_export
 
-#program_export
-ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Vertex_Shader) #c_call {
+ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Vertex_Shader) {
     return_err :: (msg: string, args: ..Any) #expand {
         ir_set_diagnostic(*state, sprint(join("IR lowering(vertex): ", msg), ..args), ctx.header);
         `return { {}, false, ir_get_diagnostic(*state) };
     }
-    push_context,defer_pop;
   out: IR_Vertex_Shader;
   state: IR_Lowering_State;
   ir_reset_diagnostic(*state);
@@ -1437,13 +1430,10 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
       return_err("failed while lowering function body");
   }
   return {out, true, ir_get_diagnostic(*state)};
-}
+} @jdll_export
 
 
-#program_export
-ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Fragment_Shader) #c_call {
-    push_context,defer_pop;
-    
+ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Fragment_Shader) {
     return_err :: (msg: string, args: ..Any, node: *Code_Node = null) #expand {
         ir_set_diagnostic(*state, sprint(join("IR lowering(fragment): ", msg), ..args), ctx.header);
         `return { {}, false, ir_get_diagnostic(*state) };
@@ -1576,16 +1566,14 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   }
 
   return { out, true, ir_get_diagnostic(*state) };
-}
+} @jdll_export
 
-#program_export
-ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Compute_Shader) #c_call {
+ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Compute_Shader) {
     return_err :: (msg: string, args: ..Any, node: *Code_Node = null) #expand {
         ir_set_diagnostic(*state, sprint(join("IR lowering(compute): ", msg), ..args), ctx.header);
         `return { {}, false, ir_get_diagnostic(*state) };
     }
     
-    push_context,defer_pop;
   out: IR_Compute_Shader;
   state: IR_Lowering_State;
   ir_reset_diagnostic(*state);
@@ -1693,7 +1681,7 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
   return {out, true, ir_get_diagnostic(*state)};
-}
+} @jdll_export
 
 #scope_file
 
