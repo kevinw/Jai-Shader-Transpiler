@@ -136,6 +136,13 @@ canonical_callee_name :: (name: string) -> string {
   return name;
 }
 
+callee_matches_builtin :: (callee: string, builtin: string) -> bool {
+  if callee == builtin return true;
+  if callee.count <= builtin.count return false;
+  if !begins_with(callee, builtin) return false;
+  return callee[builtin.count] == #char "_";
+}
+
 compact_text :: (in: string) -> string {
   out: [..] u8;
   for in {
@@ -2820,11 +2827,11 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       else if expr.left.kind == .MEMBER callee = expr.left.text;
       if callee.count == 0 return_err("unsupported call target expression.");
       callee = canonical_callee_name(callee);
-      if callee == "sample_2d" {
+      if callee_matches_builtin(callee, "sample_2d") {
         sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_2d_call(s, expr.args);
         return sampled_id, sampled_type, sampled_ok, sampled_diag;
       }
-      if callee == "write_2d" {
+      if callee_matches_builtin(callee, "write_2d") {
         return_err("write_2d has no return value and must be used as a statement.");
       }
       if callee == "radians" {
@@ -2890,23 +2897,51 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, out, "OpFRem", s.id_float, af, bf);
         return out, .FLOAT, true, diag;
       }
-      if callee == "saturate" {
+      if callee_matches_builtin(callee, "saturate") {
         if expr.args.count != 1 return_err("saturate expects 1 arg.");
         v_id, v_type, v_ok, v_diag := emit_expr(s, expr.args[0]);
         if !v_ok return 0, .UNKNOWN, false, v_diag;
-        vf, vf_ok, vf_diag := coerce_to_float(s, v_id, v_type);
-        if !vf_ok return 0, .UNKNOWN, false, vf_diag;
         zero := get_f32_const(s, "0.0");
         one := get_f32_const(s, "1.0");
+        if v_type == .FLOAT2 {
+          v2, v2_ok, v2_diag := coerce_to_float2(s, v_id, v_type);
+          if !v2_ok return 0, .UNKNOWN, false, v2_diag;
+          lo2 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float2, zero, zero);
+          hi2 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float2, one, one);
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %",
+                           id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "FClamp",
+                           id_text(v2), id_text(lo2), id_text(hi2)));
+          return out, .FLOAT2, true, diag;
+        }
+        if v_type == .FLOAT3 {
+          v3, v3_ok, v3_diag := coerce_to_float3(s, v_id, v_type);
+          if !v3_ok return 0, .UNKNOWN, false, v3_diag;
+          lo3 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float3, zero, zero, zero);
+          hi3 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float3, one, one, one);
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %",
+                           id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "FClamp",
+                           id_text(v3), id_text(lo3), id_text(hi3)));
+          return out, .FLOAT3, true, diag;
+        }
+        if v_type == .FLOAT4 {
+          v4, v4_ok, v4_diag := coerce_to_float4(s, v_id, v_type);
+          if !v4_ok return 0, .UNKNOWN, false, v4_diag;
+          lo4 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float4, zero, zero, zero, zero);
+          hi4 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float4, one, one, one, one);
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % % %",
+                           id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "FClamp",
+                           id_text(v4), id_text(lo4), id_text(hi4)));
+          return out, .FLOAT4, true, diag;
+        }
+        vf, vf_ok, vf_diag := coerce_to_float(s, v_id, v_type);
+        if !vf_ok return 0, .UNKNOWN, false, vf_diag;
         out := new_id(s);
         add_op(s, tprint("         % = OpExtInst % % % % % %",
-                         id_text(out),
-                         id_text(s.id_float),
-                         id_text(s.id_extinst),
-                         "FClamp",
-                         id_text(vf),
-                         id_text(zero),
-                         id_text(one)));
+                         id_text(out), id_text(s.id_float), id_text(s.id_extinst), "FClamp",
+                         id_text(vf), id_text(zero), id_text(one)));
         return out, .FLOAT, true, diag;
       }
       if callee == "clamp" {
@@ -3013,8 +3048,8 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, out, "OpSelect", s.id_float, cond, zero, one);
         return out, .FLOAT, true, diag;
       }
-      if callee == "mix" {
-        if expr.args.count != 3 return_err("mix expects 3 args.");
+      if callee_matches_builtin(callee, "mix") || callee_matches_builtin(callee, "lerp") {
+        if expr.args.count != 3 return_err("% expects 3 args.", callee);
         x_id, x_type, x_ok, x_diag := emit_expr(s, expr.args[0]);
         if !x_ok return 0, .UNKNOWN, false, x_diag;
         y_id, y_type, y_ok, y_diag := emit_expr(s, expr.args[1]);
@@ -3060,13 +3095,52 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !yf_ok return 0, .UNKNOWN, false, yf_diag;
         af, af_ok, af_diag := coerce_to_float(s, a_id, a_type);
         if !af_ok return 0, .UNKNOWN, false, af_diag;
-        y_minus_x := new_id(s);
-        add_op(s, y_minus_x, "OpFSub", s.id_float, yf, xf);
-        scaled := new_id(s);
-        add_op(s, scaled, "OpFMul", s.id_float, af, y_minus_x);
         out := new_id(s);
-        add_op(s, out, "OpFAdd", s.id_float, xf, scaled);
+        add_op(s, tprint("         % = OpExtInst % % % % % %",
+                         id_text(out), id_text(s.id_float), id_text(s.id_extinst), "FMix",
+                         id_text(xf), id_text(yf), id_text(af)));
         return out, .FLOAT, true, diag;
+      }
+      if callee_matches_builtin(callee, "reflect") {
+        if expr.args.count != 2 return_err("reflect expects 2 args.");
+        i_id, i_type, i_ok, i_diag := emit_expr(s, expr.args[0]);
+        if !i_ok return 0, .UNKNOWN, false, i_diag;
+        n_id, n_type, n_ok, n_diag := emit_expr(s, expr.args[1]);
+        if !n_ok return 0, .UNKNOWN, false, n_diag;
+        if i_type == .FLOAT2 || n_type == .FLOAT2 {
+          iv, iv_ok, iv_diag := coerce_to_float2(s, i_id, i_type);
+          if !iv_ok return 0, .UNKNOWN, false, iv_diag;
+          nv, nv_ok, nv_diag := coerce_to_float2(s, n_id, n_type);
+          if !nv_ok return 0, .UNKNOWN, false, nv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % %",
+                           id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "Reflect",
+                           id_text(iv), id_text(nv)));
+          return out, .FLOAT2, true, diag;
+        }
+        if i_type == .FLOAT3 || n_type == .FLOAT3 {
+          iv, iv_ok, iv_diag := coerce_to_float3(s, i_id, i_type);
+          if !iv_ok return 0, .UNKNOWN, false, iv_diag;
+          nv, nv_ok, nv_diag := coerce_to_float3(s, n_id, n_type);
+          if !nv_ok return 0, .UNKNOWN, false, nv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % %",
+                           id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "Reflect",
+                           id_text(iv), id_text(nv)));
+          return out, .FLOAT3, true, diag;
+        }
+        if i_type == .FLOAT4 || n_type == .FLOAT4 {
+          iv, iv_ok, iv_diag := coerce_to_float4(s, i_id, i_type);
+          if !iv_ok return 0, .UNKNOWN, false, iv_diag;
+          nv, nv_ok, nv_diag := coerce_to_float4(s, n_id, n_type);
+          if !nv_ok return 0, .UNKNOWN, false, nv_diag;
+          out := new_id(s);
+          add_op(s, tprint("         % = OpExtInst % % % % %",
+                           id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "Reflect",
+                           id_text(iv), id_text(nv)));
+          return out, .FLOAT4, true, diag;
+        }
+        return_err("reflect requires float2/float3/float4 args, got (%, %).", i_type, n_type);
       }
       if callee == "pow" {
         if expr.args.count != 2 return_err("pow expects 2 args.");

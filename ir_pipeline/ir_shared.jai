@@ -439,30 +439,137 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
 
     case .FOR; {
       op := cast(*Code_For) stmt;
-      if op.macro_expansion_procedure_call || !op.iteration_expression_right {
-        return_err("IR lowering: unsupported for-loop form (expected numeric range)", stmt);
-      }
       if op.for_flags & .POINTER {
         return_err("IR lowering: pointer-iteration for-loop is unsupported", stmt);
       }
 
-      start_expr, start_ok := ir_lower_expr(op.iteration_expression, input_fields, output_fields, active_usings.*, active_aliases.*, state);
-      if !start_ok return false;
-      end_expr, end_ok := ir_lower_expr(op.iteration_expression_right, input_fields, output_fields, active_usings.*, active_aliases.*, state);
-      if !end_ok return false;
-
       out_stmt: IR_Stmt;
       out_stmt.kind = .FOR;
-      out_stmt.for_loop_name = op.ident_decl.name;
-      out_stmt.for_start = start_expr;
-      out_stmt.for_end = end_expr;
       out_stmt.for_cmp = "<=";
       out_stmt.for_step = "+= 1";
-      if op.for_flags & .REVERSE {
-        out_stmt.for_cmp = ">=";
-        out_stmt.for_step = "-= 1";
+      iterable_element_type: *Type_Info = null;
+      iterable_source_type: *Type_Info = null;
+
+      if op.iteration_expression_right {
+        if op.macro_expansion_procedure_call {
+          return_err("IR lowering: unsupported for-loop expansion with numeric range", stmt);
+        }
+        start_expr, start_ok := ir_lower_expr(op.iteration_expression, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        if !start_ok return false;
+        end_expr, end_ok := ir_lower_expr(op.iteration_expression_right, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        if !end_ok return false;
+
+        if !op.ident_decl || op.ident_decl.name.count == 0 {
+          return_err("IR lowering: numeric range for-loop is missing iterator declaration", stmt);
+        }
+        out_stmt.for_loop_name = op.ident_decl.name;
+        out_stmt.for_start = start_expr;
+        out_stmt.for_end = end_expr;
+        if op.for_flags & .REVERSE {
+          out_stmt.for_cmp = ">=";
+          out_stmt.for_step = "-= 1";
+        }
+      } else {
+        if !op.iteration_expression {
+          return_err("IR lowering: iterable for-loop is missing source expression", stmt);
+        }
+        if !op.ident_decl || op.ident_decl.name.count == 0 {
+          return_err("IR lowering: iterable for-loop is missing value iterator declaration", stmt);
+        }
+        iter_source_type := op.iteration_expression.type;
+        if !iter_source_type || iter_source_type.type != .ARRAY {
+          return_err("IR lowering: iterable for-loop source must be a fixed array", stmt);
+        }
+        iterable_source_type = iter_source_type;
+        arr_type := cast(*Type_Info_Array) iter_source_type;
+        iterable_element_type = arr_type.element_type;
+        if arr_type.array_count < 0 {
+          return_err("IR lowering: iterable for-loop source has invalid array count", stmt);
+        }
+
+        loop_index_name := "__for_index";
+        if op.index_decl && op.index_decl.name.count != 0 {
+          loop_index_name = op.index_decl.name;
+        } else if op.ident_it_index && op.ident_it_index.name.count != 0 {
+          loop_index_name = op.ident_it_index.name;
+        } else if op.ident_it && op.ident_it.name.count != 0 {
+          loop_index_name = tprint("__for_index_%", op.ident_it.name);
+        }
+        out_stmt.for_loop_name = loop_index_name;
+
+        start_lit := ir_expr_new(.LITERAL);
+        end_lit := ir_expr_new(.LITERAL);
+        if arr_type.array_count == 0 {
+          // Force a no-iteration range regardless of signedness.
+          start_lit.text = "1";
+          end_lit.text = "0";
+        } else {
+          start_lit.text = "0";
+          end_lit.text = tprint("%", arr_type.array_count - 1);
+        }
+        out_stmt.for_start = start_lit;
+        out_stmt.for_end = end_lit;
       }
+
       out_stmt.for_body = New(IR_Block);
+
+      if !op.iteration_expression_right {
+        iter_source, iter_source_ok := ir_lower_expr(op.iteration_expression, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        if !iter_source_ok return false;
+        if iter_source.kind != .IDENT && iter_source.kind != .MEMBER {
+          if !iterable_source_type {
+            return_err("IR lowering: iterable for-loop source type was not captured", stmt);
+          }
+          source_decl_type, source_decl_type_ok := ir_type_from_type_info(iterable_source_type);
+          if !source_decl_type_ok {
+            return_err("IR lowering: iterable for-loop source has unsupported type", stmt);
+          }
+          source_decl_type_name, source_decl_type_name_ok := ir_type_to_shader_name(iterable_source_type);
+          if !source_decl_type_name_ok {
+            return_err("IR lowering: iterable for-loop source type name lowering failed", stmt);
+          }
+          source_decl_name := tprint("__for_source_%_%", out_stmt.for_loop_name, out_block.statements.count);
+          array_add(*out_block.statements, {
+            kind = .DECL,
+            decl_type = source_decl_type,
+            decl_type_name = source_decl_type_name,
+            decl_name = source_decl_name,
+            decl_init = iter_source,
+          });
+          
+          iter_source = ir_expr_new(.IDENT);
+          iter_source.text = source_decl_name;
+        }
+
+        loop_index_expr := ir_expr_new(.IDENT);
+        loop_index_expr.text = out_stmt.for_loop_name;
+        iter_value_expr := ir_expr_new(.SUBSCRIPT);
+        iter_value_expr.left = iter_source;
+        iter_value_expr.right = loop_index_expr;
+
+        iter_decl_type := ifx op.ident_decl.type_inst then op.ident_decl.type_inst.result else ifx op.ident_decl.expression then op.ident_decl.expression.type else null;
+        if !iter_decl_type iter_decl_type = iterable_element_type;
+        if !iter_decl_type {
+          return_err(tprint("IR lowering: iterable for-loop iterator '%' has no type information", op.ident_decl.name), stmt);
+        }
+        iter_decl_ir_type, iter_decl_ir_type_ok := ir_type_from_type_info(iter_decl_type);
+        if !iter_decl_ir_type_ok {
+          return_err(tprint("IR lowering: iterable for-loop iterator '%' has unsupported type", op.ident_decl.name), stmt);
+        }
+        iter_decl_type_name, iter_decl_type_name_ok := ir_type_to_shader_name(iter_decl_type);
+        if !iter_decl_type_name_ok {
+          return_err(tprint("IR lowering: iterable for-loop iterator '%' could not be lowered to shader type", op.ident_decl.name), stmt);
+        }
+
+        array_add(*out_stmt.for_body.statements, {
+          kind = .DECL,
+          decl_type = iter_decl_ir_type,
+          decl_type_name = iter_decl_type_name,
+          decl_name = op.ident_decl.name,
+          decl_init = iter_value_expr,
+        });
+      }
+
       if !ir_shared_lower_block(op.block, out_stmt.for_body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, scope_depth + 1) return false;
       array_add(*out_block.statements, out_stmt);
       return true;
@@ -726,6 +833,13 @@ ir_shared_header_in_list :: (headers: *[..] *Code_Procedure_Header, header: *Cod
   return false;
 }
 
+ir_shared_name_matches_builtin :: (name: string, builtin: string) -> bool {
+  if name == builtin return true;
+  if name.count <= builtin.count return false;
+  if !begins_with(name, builtin) return false;
+  return name[builtin.count] == #char "_";
+}
+
 ir_shared_is_slang_builtin_name :: (name: string) -> bool {
   if name == "floor" return true;
   if name == "ceil" return true;
@@ -751,6 +865,9 @@ ir_shared_is_slang_builtin_name :: (name: string) -> bool {
   if name == "dot" return true;
   if name == "cross" return true;
   if name == "mix" return true;
+  if ir_shared_name_matches_builtin(name, "lerp") return true;
+  if ir_shared_name_matches_builtin(name, "saturate") return true;
+  if ir_shared_name_matches_builtin(name, "reflect") return true;
   if name == "sample_2d" return true;
   if name == "write_2d" return true;
   has_sample_2d, _ := contains(name, "sample_2d");

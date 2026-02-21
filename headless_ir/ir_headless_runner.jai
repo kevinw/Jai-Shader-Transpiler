@@ -32,6 +32,7 @@ write_and_compile_metal_if_macos :: (path: string, source: string) {
 }
 
 Vector2 :: struct { x, y: float; }
+Vector3 :: struct { x, y, z: float; }
 Vector4 :: struct { x, y, z, w: float; }
 
 sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 {
@@ -93,6 +94,11 @@ IR_Headless_Fragment_Out :: struct {
 IR_Headless_Bindless_Params :: struct {
   texture_index: u32;
   sampler_index: u32;
+}
+
+IR_Headless_Fragment_Vec3_Params :: struct {
+  bias: Vector3;
+  intensity: float;
 }
 
 IR_Headless_Position_Semantic_Vertex_Out :: struct {
@@ -178,6 +184,17 @@ ir_headless_fragment_bindless_main :: (using input: IR_Headless_Vertex_Out, para
   return out;
 } @fragment_shader
 
+ir_headless_fragment_vec3_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Vec3_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  out_color = Vector4.{
+    input.color.x * params.intensity + params.bias.x,
+    input.color.y * params.intensity + params.bias.y,
+    input.color.z * params.intensity + params.bias.z,
+    1.0
+  };
+  return out;
+} @fragment_shader
+
 ir_headless_fragment_helpers_main :: (using input: IR_Headless_Vertex_Out) -> IR_Headless_Fragment_Out {
   using out: IR_Headless_Fragment_Out;
   out_color = Vector4.{ir_headless_fragment_boost(input.color.x), input.color.y, input.color.z, input.color.w};
@@ -207,7 +224,6 @@ ir_headless_fragment_position_semantic_main :: (using input: IR_Headless_Positio
   out_color = input.color;
   return out;
 } @fragment_shader
-
 
 ir_headless_compute_root_struct_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_Root) {
   if thread_id.x < 64 {
@@ -392,6 +408,11 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(boids_pair, "[[instance_id]]", "boids-like pair metal output");
   boids_pair_path := tprint("%/ir_boids_like_pair.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(boids_pair_path, boids_pair);
+
+  _ = get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_vec3_params_main);
+  vec3_params_pair_path := tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_vec3_params_main_pair.metal", HEADLESS_IR_INTERMEDIATE_DIR);
+  check_generated_file_contains(vec3_params_pair_path, "fragment", "vec3 fragment-params pair metal output");
+  #if OS == .MACOS compile_metal(vec3_params_pair_path);
 
   log("IR headless runner passed. Outputs in %", HEADLESS_IR_DIR);
 }

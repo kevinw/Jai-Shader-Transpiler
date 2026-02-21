@@ -109,6 +109,8 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"table_dynamic_index_chain", .Table},
   {"helper_matrix_vector_chain", .Bare},
   {"for_switch_break_continue_mix", .Bare},
+  {"for_local_array_iteration_value", .Bare},
+  {"for_local_array_it", .Bare},
   {"struct_of_array_roundtrip", .Bare},
   {"table_rotate_sum", .Table},
   {"boid_pairwise_mix", .Boids},
@@ -125,6 +127,9 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"scalar_helper_if_return_chain", .Bare},
   {"pointer_alias_from_member_expr", .Bare},
   {"shaderfuncs_normalize_mix_clamp", .Bare},
+  {"shaderfuncs_saturate", .Bare},
+  {"shaderfuncs_lerp", .Bare},
+  {"shaderfuncs_reflect", .Bare},
   {"shaderfuncs_step_smoothstep_mod_fract", .Bare},
   {"shaderfuncs_degrees_radians_chain", .Bare},
   {"tuple_destructure_compound_decl", .Bare},
@@ -745,6 +750,23 @@ for_descending :: (using in: Compute_Semantics_In, values: *u32) {
     i -= 1;
   }
   values[idx] += acc;
+} @compute_shader
+
+for_local_array_it :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  acc: u32 = 99;
+  for u32.[1, 2, 3, 4, thread_id.x] acc += it;
+} @compute_shader
+
+for_local_array_iteration_value :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  lut: [4]u32 = .[idx + 1, idx + 2, idx + 3, idx + 4];
+  acc: u32 = 0;
+  for v: lut {
+    acc += v;
+  }
+  values[idx] = acc + idx;
 } @compute_shader
 
 bool_temp_chain :: (using in: Compute_Semantics_In, values: *u32) {
@@ -1830,6 +1852,39 @@ shaderfuncs_normalize_mix_clamp :: (using in: Compute_Semantics_In, values: *u32
   t := clamp(t_raw, 0.0, 1.0);
   m := mix(n.x, n.y + 0.125, t);
   values[idx] = cast(u32) (m * 1000.0 + n.x * 173.0 + n.y * 211.0 + t * 37.0);
+} @compute_shader
+
+shaderfuncs_saturate :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  x := cast(float) (idx % 17) * 0.17 - 0.85;
+  s := saturate(x);
+  values[idx] = cast(u32) floor(s * 257.0 + x * x * 91.0);
+} @compute_shader
+
+shaderfuncs_lerp :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  t := cast(float) (idx % 11) / 10.0;
+  a := cast(float) (values[idx] % 23) * 0.1;
+  b := a + 2.75;
+  ls := lerp(a, b, t);
+  values[idx] = cast(u32) floor(ls * 311.0 + t * 97.0 + a * 13.0);
+} @compute_shader
+
+shaderfuncs_reflect :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  i := normalize(Vector3.{
+    cast(float) (idx % 9) * 0.17 - 0.68,
+    cast(float) ((idx + 3) % 7) * 0.21 - 0.52,
+    -1.0,
+  });
+  n := normalize(Vector3.{0.25, 0.95, 0.1});
+  r := reflect(i, n);
+  values[idx] = cast(u32) floor((r.x * 0.5 + 0.5) * 89.0 +
+                                (r.y * 0.5 + 0.5) * 149.0 +
+                                (r.z * 0.5 + 0.5) * 211.0);
 } @compute_shader
 
 shaderfuncs_step_smoothstep_mod_fract :: (using in: Compute_Semantics_In, values: *u32) {

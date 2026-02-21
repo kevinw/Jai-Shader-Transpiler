@@ -1053,6 +1053,50 @@ ir_metal_compact_decl_key :: (decl: string) -> string {
   return string.{data = out.data, count = out.count};
 }
 
+ir_metal_is_ident_char :: (ch: u8) -> bool {
+  return (ch >= #char "a" && ch <= #char "z") ||
+         (ch >= #char "A" && ch <= #char "Z") ||
+         (ch >= #char "0" && ch <= #char "9") ||
+         ch == #char "_";
+}
+
+ir_metal_extract_type_name_after :: (text: string, after_index: s64) -> (string, bool) {
+  i := after_index;
+  while i < text.count {
+    ch := text[i];
+    if ch != #char " " && ch != #char "\t" && ch != #char "\r" && ch != #char "\n" break;
+    i += 1;
+  }
+  if i >= text.count return "", false;
+  if !ir_metal_is_ident_char(text[i]) return "", false;
+  start := i;
+  while i < text.count && ir_metal_is_ident_char(text[i]) i += 1;
+  if i <= start return "", false;
+  out: string;
+  out.data = text.data + start;
+  out.count = i - start;
+  return out, true;
+}
+
+ir_metal_declared_type_name :: (decl: string) -> (string, bool) {
+  text := trim_ascii_whitespace(decl);
+  if text.count == 0 return "", false;
+  keywords := string.["struct ", "class ", "enum "];
+  for keywords {
+    keyword := it;
+    idx: s64 = -1;
+    if begins_with(text, keyword) {
+      idx = 0;
+    } else if begins_with(text, "template") {
+      idx = find_index_from_left(text, keyword);
+    }
+    if idx == -1 continue;
+    type_name, ok := ir_metal_extract_type_name_after(text, idx + keyword.count);
+    if ok return type_name, true;
+  }
+  return "", false;
+}
+
 ir_metal_split_top_level_decls :: (source: string, out_preamble: *string, out_decls: *[..] string) {
   assert(out_preamble != null);
   assert(out_decls != null);
@@ -1133,14 +1177,29 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
   else if preamble_f.count != 0 a(*sb, preamble_f);
 
   seen: Table(string, bool);
+  selected_decls: [..] string;
+  selected_type_decl_index: Table(string, s64);
+
   for decls_v {
     decl := it;
     key := ir_metal_compact_decl_key(decl);
     if key.count == 0 continue;
     found, _ := table_find(*seen, key);
     if found continue;
+
+    type_name, type_name_ok := ir_metal_declared_type_name(decl);
+    if type_name_ok {
+      type_found, existing_index := table_find(*selected_type_decl_index, type_name);
+      if type_found {
+        selected_decls[existing_index] = copy_string(decl);
+        table_add(*seen, copy_string(key), true);
+        continue;
+      }
+      table_add(*selected_type_decl_index, copy_string(type_name), selected_decls.count);
+    }
+
+    array_add(*selected_decls, copy_string(decl));
     table_add(*seen, copy_string(key), true);
-    a(*sb, decl);
   }
 
   for decls_f {
@@ -1149,10 +1208,26 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
     if key.count == 0 continue;
     found, _ := table_find(*seen, key);
     if found continue;
+
+    type_name, type_name_ok := ir_metal_declared_type_name(decl);
+    if type_name_ok {
+      type_found, existing_index := table_find(*selected_type_decl_index, type_name);
+      if type_found {
+        // Prefer the later stage declaration for colliding type names.
+        // This resolves stage-split spirv-cross output that may emit differing
+        // definitions (for example, vector3 UBO packing variants) under the same type name.
+        selected_decls[existing_index] = copy_string(decl);
+        table_add(*seen, copy_string(key), true);
+        continue;
+      }
+      table_add(*selected_type_decl_index, copy_string(type_name), selected_decls.count);
+    }
+
+    array_add(*selected_decls, copy_string(decl));
     table_add(*seen, copy_string(key), true);
-    a(*sb, decl);
   }
 
+  for selected_decls a(*sb, it);
   return builder_to_string(*sb);
 }
 
@@ -1690,6 +1765,11 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
     // Declarations can typecheck before the target procedure body is available in early passes.
     return false;
   }
+  vertex_lookup_name := vertex_proc.header.name;
+  if decl.expression && decl.expression.kind == .IDENT {
+    ident := cast(*Code_Ident) decl.expression;
+    vertex_lookup_name = ident.name;
+  }
 
   for requested_languages {
     language := it;
@@ -1702,7 +1782,7 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
     target_name := target_name_from_language(language, glsl_target);
     if target_name.count != 0 {
       symbol_name := ifx language == .METAL then tprint("%_metal_string", vertex_proc.header.name) else tprint("%_string", vertex_proc.header.name);
-      queue_lookup_entry(plugin, target_name, vertex_proc.header.name, "", symbol_name);
+      queue_lookup_entry(plugin, target_name, vertex_lookup_name, "", symbol_name);
     }
   }
 
@@ -1738,7 +1818,7 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
     target_name := target_name_from_language(language, glsl_target);
     if target_name.count != 0 {
       symbol_name := ifx language == .METAL then tprint("%_metal_string", pair_name) else tprint("%_string", pair_name);
-      queue_lookup_entry(plugin, target_name, vertex_proc.header.name, fragment_proc.header.name, symbol_name);
+      queue_lookup_entry(plugin, target_name, vertex_lookup_name, fragment_name, symbol_name);
     }
   }
   return true;
