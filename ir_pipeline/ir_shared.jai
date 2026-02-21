@@ -752,6 +752,11 @@ ir_shared_is_slang_builtin_name :: (name: string) -> bool {
   if name == "cross" return true;
   if name == "mix" return true;
   if name == "sample_2d" return true;
+  if name == "write_2d" return true;
+  has_sample_2d, _ := contains(name, "sample_2d");
+  if has_sample_2d return true;
+  has_write_2d, _ := contains(name, "write_2d");
+  if has_write_2d return true;
   return false;
 }
 

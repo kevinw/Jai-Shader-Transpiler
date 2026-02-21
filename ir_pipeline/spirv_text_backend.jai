@@ -123,6 +123,22 @@ expr_text :: (expr: *IR_Expr) -> string {
   return text;
 }
 
+canonical_callee_name :: (name: string) -> string {
+  if name.count == 0 return name;
+  i := name.count - 1;
+  while i >= 0 {
+    if name[i] == #char "." {
+      out: string;
+      out.data = name.data + i + 1;
+      out.count = name.count - i - 1;
+      return out;
+    }
+    if i == 0 break;
+    i -= 1;
+  }
+  return name;
+}
+
 compact_text :: (in: string) -> string {
   out: [..] u8;
   for in {
@@ -349,6 +365,7 @@ IR_SPV_Gen_State :: struct {
   output_vars: [..] IR_SPV_Gen_Interface_Var;
   use_physical_storage: bool;
   uses_sample_2d: bool;
+  uses_write_2d: bool;
   
   using const_ids: struct {
     id_uint_0: s64;
@@ -374,6 +391,7 @@ IR_SPV_Gen_State :: struct {
     id_bool_true: s64;
     id_bool_false: s64;
     id_v3uint: s64;
+    id_v2uint: s64;
     id_ptr_input_v3uint: s64;
     id_gl_global_invocation_id: s64;
     id_ptr_input_uint: s64;
@@ -417,6 +435,11 @@ IR_SPV_Gen_State :: struct {
     id_ptr_uniformconst_sampler: s64;
     id_sample_2d_textures_var: s64;
     id_sample_2d_samplers_var: s64;
+    id_storage_image2d: s64;
+    id_storage_image2d_array: s64;
+    id_ptr_uniformconst_storage_image2d_array: s64;
+    id_ptr_uniformconst_storage_image2d: s64;
+    id_write_2d_textures_var: s64;
     id_ptr_func_float: s64;
     id_ptr_func_float2: s64;
     id_ptr_func_float3: s64;
@@ -1731,6 +1754,52 @@ emit_sample_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s
   return result, .FLOAT4, true, diag;
 }
 
+emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if s.stage != .COMPUTE return false, make_diag("write_2d is currently compute-stage only.");
+  if args.count != 4      return false, make_diag("write_2d expects 4 args (texture_index, x, y, value).");
+
+  texture_index_id, texture_index_type, texture_index_ok, texture_index_diag := emit_expr(s, args[0]);
+  if !texture_index_ok return false, texture_index_diag;
+  texture_index_id, texture_index_ok, texture_index_diag = coerce_to_kind(s, texture_index_id, texture_index_type, .UINT);
+  if !texture_index_ok return false, texture_index_diag;
+
+  x_id, x_type, x_ok, x_diag := emit_expr(s, args[1]);
+  if !x_ok return false, x_diag;
+  x_id, x_ok, x_diag = coerce_to_kind(s, x_id, x_type, .UINT);
+  if !x_ok return false, x_diag;
+
+  y_id, y_type, y_ok, y_diag := emit_expr(s, args[2]);
+  if !y_ok return false, y_diag;
+  y_id, y_ok, y_diag = coerce_to_kind(s, y_id, y_type, .UINT);
+  if !y_ok return false, y_diag;
+
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[3]);
+  if !value_ok return false, value_diag;
+  value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, .FLOAT4);
+  if !value_ok return false, value_diag;
+
+  // Clamp resource indices to the declared bindless array range [0, 15] to make
+  // out-of-range shader behavior explicit and deterministic across backends.
+  write_2d_max_index := get_u32_const(s, 15);
+  clamped_texture_index := new_id(s);
+  add_op(s, tprint("         % = OpExtInst % % UMin % %",
+                   id_text(clamped_texture_index),
+                   id_text(s.id_uint),
+                   id_text(s.id_extinst),
+                   id_text(texture_index_id),
+                   id_text(write_2d_max_index)));
+
+  tex_ptr := add_op(s, new_id(s), "OpAccessChain", s.id_ptr_uniformconst_storage_image2d, s.id_write_2d_textures_var, clamped_texture_index);
+  tex_id := add_op(s, new_id(s), "OpLoad", s.id_storage_image2d, tex_ptr);
+  coord_id := add_op(s, new_id(s), "OpCompositeConstruct", s.id_v2uint, x_id, y_id);
+  add_op(s, "OpImageWrite", tex_id, coord_id, value_id);
+
+  s.uses_write_2d = true;
+  return true, diag;
+}
+
 eval_inline_function_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Function, return_kind: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
@@ -2753,9 +2822,13 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if expr.left.kind == .IDENT callee = expr.left.text;
       else if expr.left.kind == .MEMBER callee = expr.left.text;
       if callee.count == 0 return_err("unsupported call target expression.");
+      callee = canonical_callee_name(callee);
       if callee == "sample_2d" {
         sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_2d_call(s, expr.args);
         return sampled_id, sampled_type, sampled_ok, sampled_diag;
+      }
+      if callee == "write_2d" {
+        return_err("write_2d has no return value and must be used as a statement.");
       }
       if callee == "radians" {
         if expr.args.count != 1 return_err("radians expects 1 arg.");
@@ -4005,6 +4078,28 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if !found return_err("continue used outside loop.");
       add_op(s, "OpBranch", loop_target.continue_label);
       return true, true, diag;
+    }
+
+    case .CALL; {
+      if !stmt.call_expr return_err("call statement is missing call expression.");
+      if stmt.call_expr.kind != .CALL return_err("call statement has non-call expression.");
+      if !stmt.call_expr.left return_err("unsupported call target expression.");
+
+      callee := "";
+      if stmt.call_expr.left.kind == .IDENT callee = stmt.call_expr.left.text;
+      else if stmt.call_expr.left.kind == .MEMBER callee = stmt.call_expr.left.text;
+      if callee.count == 0 return_err("unsupported call target expression.");
+      callee = canonical_callee_name(callee);
+
+      if callee == "write_2d" {
+        write_ok, write_diag := emit_write_2d_call(s, stmt.call_expr.args);
+        if !write_ok return false, false, write_diag;
+        return true, false, diag;
+      }
+
+      _, _, call_ok, call_diag := emit_expr(s, stmt.call_expr);
+      if !call_ok return false, false, call_diag;
+      return true, false, diag;
     }
 
     case .RETURN; {

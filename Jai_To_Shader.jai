@@ -1,7 +1,15 @@
+//
+// Metaprogram plugin for converting Jai funcs marked with @vertex_shader @fragment_shader or @compute_shader to shaders.
+// 
+// Usage:
+// 
+// metal_bytes := get_transpiled(.METAL, pbr_vertex_main, pbr_fragment_main);
+// 
+
 VERBOSE      :: false;
-DEBUG_OUTDIR :: ".generated_shaders";
 USE_SPIRV_OPT :: true;
 IR_INTERMEDIATE_DIR :: ".build/ir_intermediate";
+DEBUG_OUTDIR :: ".generated_shaders";
 
 Transpiled_Target :: enum {
   METAL;

@@ -163,6 +163,16 @@ Compute_Semantics_In :: struct {
   thread_id: UVector3; @thread_position_in_grid
 }
 
+compute_bindless_write_2d :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 2 || thread_id.y >= 2 return;
+
+  texture_index := values[0];
+  color := Vector4.{1.0, 0.0, 0.0, 1.0};
+  if thread_id.x == 1 color = Vector4.{0.0, 1.0, 0.0, 1.0};
+  if thread_id.y == 1 color.z = 1.0;
+  write_2d(texture_index, thread_id.x, thread_id.y, color);
+} @compute_shader
+
 simple :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x < 64 {
     v := values[thread_id.x];
@@ -2003,6 +2013,17 @@ check_contains_any :: (source: string, p0: string, p1: string, where: string) {
   if !ok0 && !ok1 fail("Expected either '%' or '%' in %", p0, p1, where);
 }
 
+check_rgba8_pixel :: (pixels: [] u8, width: s64, x: s64, y: s64, r: u8, g: u8, b: u8, a: u8) {
+  offset := (y * width + x) * 4;
+  if offset + 3 >= pixels.count fail("Readback index out of range for pixel (%,%).", x, y);
+  if pixels[offset + 0] != r || pixels[offset + 1] != g || pixels[offset + 2] != b || pixels[offset + 3] != a {
+    fail("Unexpected pixel (%,%): got (% % % %), expected (% % % %).",
+         x, y,
+         pixels[offset + 0], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3],
+         r, g, b, a);
+  }
+}
+
 run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F, proc_name: string, $WITH_TABLE := false, $TABLE_TYPE: Type = u32, $TABLE_KIND := Compute_Table_Kind.U32) {
   case_start := current_time_monotonic();
   timings: Compute_Case_Timings;
@@ -2177,6 +2198,91 @@ n :: ($proc: $F, call := #caller_code) #compile_time {
  return #run proc_name_from_caller_arg_compile_time(call, 0);
 }
 
+run_bindless_texture_write_case_metal :: () {
+  metal_source := get_transpiled(.METAL, compute_bindless_write_2d);
+  check_contains(metal_source, "kernel", "bindless compute write metal output");
+
+  error: *NSError = null;
+  lib_compute := MTLDevice.newLibraryWithSource_options_error(g_device, NSString.getTempString(metal_source), g_compile_options, *error);
+  if log_nserror("Failed to compile bindless write compute shader library", error) || !lib_compute {
+    if !lib_compute && error == null fail("Failed to compile bindless write compute shader library");
+    fail("Bindless write compute source compilation failed");
+  }
+  defer release(lib_compute);
+
+  fn_compute := cast(*MTLFunction) MTLLibrary.newFunctionWithName(lib_compute, NSString.getTempString("ComputeMain"));
+  if !fn_compute fail("Failed to find bindless write compute entry point 'ComputeMain'");
+  defer release(fn_compute);
+
+  error = null;
+  pipeline_compute := MTLDevice.newComputePipelineStateWithFunction_error(g_device, xx fn_compute, *error);
+  if log_nserror("Failed to create bindless write compute pipeline", error) || !pipeline_compute {
+    if !pipeline_compute && error == null fail("Failed to create bindless write compute pipeline");
+    fail("Bindless write compute pipeline creation failed");
+  }
+  defer release(pipeline_compute);
+
+  out_buffer := MTLDevice.newBufferWithLength_options(g_device, cast(NSUInteger) (ELEMENT_COUNT * size_of(u32)), .MTLResourceStorageModeShared);
+  if !out_buffer fail("Failed to create bindless write control buffer");
+  defer release(out_buffer);
+  control_values := cast(*u32) MTLBuffer.contents(out_buffer);
+  if !control_values fail("MTLBuffer.contents returned null");
+
+  make_output_texture :: () -> *MTLTexture {
+    texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm, 2, 2, NO);
+    if !texture_desc fail("Failed to create bindless write texture descriptor");
+    defer release(texture_desc);
+    MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageShaderWrite | .MTLTextureUsageShaderRead);
+    MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
+    texture := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(g_device, texture_desc);
+    if !texture fail("Failed to create bindless write texture");
+    return texture;
+  }
+
+  dispatch_write :: (control_values: *u32, out_buffer: *MTLBuffer, pipeline_compute: *MTLComputePipelineState, texture_index: u32, slot_1: *MTLTexture, slot_16: *MTLTexture) {
+    control_values[0] = texture_index;
+    command_buffer := MTLCommandQueue.commandBuffer(g_queue);
+    if !command_buffer fail("Failed to create bindless write command buffer");
+    encoder := MTLCommandBuffer.computeCommandEncoder(command_buffer);
+    if !encoder fail("Failed to create bindless write compute command encoder");
+    {
+      using MTLComputeCommandEncoder;
+      setComputePipelineState(encoder, xx pipeline_compute);
+      setBuffer_offset_atIndex(encoder, xx out_buffer, 0, 0);
+      if slot_1 setTexture_atIndex(encoder, xx slot_1, 1);
+      if slot_16 setTexture_atIndex(encoder, xx slot_16, 16);
+      dispatchThreads_threadsPerThreadgroup(encoder, MTLSizeMake(2, 2, 1), MTLSizeMake(2, 2, 1));
+    }
+    MTLCommandEncoder.endEncoding(cast(*MTLCommandEncoder) encoder);
+    MTLCommandBuffer.commit(command_buffer);
+    MTLCommandBuffer.waitUntilCompleted(command_buffer);
+  }
+
+  validate_texture_pixels :: (texture: *MTLTexture) {
+    bytes_per_row := cast(NSUInteger) 8;
+    pixels := NewArray(cast(s64) (bytes_per_row * 2), u8);
+    defer array_free(pixels);
+    region := MTLRegionMake2D(0, 0, 2, 2);
+    MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(texture, pixels.data, bytes_per_row, region, 0);
+    check_rgba8_pixel(pixels, 2, 0, 0, 255,   0,   0, 255);
+    check_rgba8_pixel(pixels, 2, 1, 0,   0, 255,   0, 255);
+    check_rgba8_pixel(pixels, 2, 0, 1, 255,   0, 255, 255);
+    check_rgba8_pixel(pixels, 2, 1, 1,   0, 255, 255, 255);
+  }
+
+  base_texture := make_output_texture();
+  defer release(base_texture);
+  dispatch_write(control_values, out_buffer, pipeline_compute, 0, base_texture, null);
+  validate_texture_pixels(base_texture);
+
+  oob_texture := make_output_texture();
+  defer release(oob_texture);
+  dispatch_write(control_values, out_buffer, pipeline_compute, 999, null, oob_texture);
+  validate_texture_pixels(oob_texture);
+
+  log("[OK] compute_bindless_write_2d");
+}
+
 main :: () {
   for get_command_line_arguments() {
     if it == "-timings" TIMINGS_ENABLED = true;
@@ -2188,11 +2294,13 @@ main :: () {
   g_device = cast(*MTLDevice) MTLCreateSystemDefaultDevice();
   g_queue = MTLDevice.newCommandQueue(g_device);
   g_compile_options = objc_init(objc_alloc(MTLCompileOptions));
+  MTLCompileOptions.setLanguageVersion(g_compile_options, .MTLLanguageVersion2_1);
   run_gpu_cpu_tests();
 }
 
 run_gpu_cpu_tests :: () {
   g_compute_timing_totals = .{};
+  total_functions_run: int = 0;
   log("Comparing CPU and GPU results for % functions...", ALL_TEST_FUNCTIONS.count);
   #insert #run -> string {
     sb: String_Builder;
@@ -2203,7 +2311,7 @@ run_gpu_cpu_tests :: () {
       case .Table; test_runner_func = "run_compute_case_with_table";
       case .Boids; test_runner_func = "run_compute_case_with_boid_table";
       }
-      append(*sb, tprint("%1(get_transpiled(.METAL, %2), \"%2\", %2);\n", test_runner_func, it.name));
+      print_to_builder(*sb, "%1(get_transpiled(.METAL, %2), \"%2\", %2);\ntotal_functions_run += 1;\n", test_runner_func, it.name);
     }
     return builder_to_string(*sb);
   };
@@ -2222,7 +2330,9 @@ run_gpu_cpu_tests :: () {
       g_compute_timing_totals.compare_s);
   }
   
-  log("Passed % functions: (GPU output matches CPU for % elements each).", ALL_TEST_FUNCTIONS.count, ELEMENT_COUNT);
+  run_bindless_texture_write_case_metal();
+  total_functions_run += 1;
+  log("% tests passed: GPU output matches CPU.", total_functions_run);
 }
 
 g_device: *MTLDevice;

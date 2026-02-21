@@ -259,6 +259,7 @@ spv_append_capabilities :: (sb: *String_Builder, state: *IR_SPV_Gen_State, use_p
   assert(state != null);
   append(sb, "               OpCapability Shader\n");
   if state_uses_int64(state) append(sb, "               OpCapability Int64\n");
+  if state.uses_write_2d append(sb, "               OpCapability StorageImageWriteWithoutFormat\n");
   if use_physical_storage append(sb, "               OpCapability PhysicalStorageBufferAddresses\n");
 }
 
@@ -280,6 +281,7 @@ spv_append_common_type_decls :: (sb: *String_Builder, state: *IR_SPV_Gen_State, 
   append(sb, tprint("       % = OpConstantTrue %\n", id_text(state.id_bool_true), id_text(state.id_bool)));
   append(sb, tprint("       % = OpConstantFalse %\n", id_text(state.id_bool_false), id_text(state.id_bool)));
   append(sb, tprint("     % = OpTypeVector % 3\n", id_text(state.id_v3uint), id_text(state.id_uint)));
+  append(sb, tprint("     % = OpTypeVector % 2\n", id_text(state.id_v2uint), id_text(state.id_uint)));
   append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_v3uint), id_text(state.id_v3uint)));
   append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_uint), id_text(state.id_uint)));
   append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float), id_text(state.id_float)));
