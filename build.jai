@@ -80,7 +80,7 @@ BUILD_IS_FOR_IDE :: #exists(JAILS_DIAGNOSTICS_BUILD); // Whether the build is fo
     if result.type == .FAILED_TO_LAUNCH fail("Failed to launch %.", TEST_RUNNER);
     if result.type != .EXITED || result.exit_code != 0 fail("% failed with exit code %.", TEST_RUNNER, result.exit_code);
     
-    log("Total time %s", FormatFloat.{value=to_float64_seconds(current_time_monotonic() - start_time), trailing_width=2});
+    log("Total time for transpiler tests %s", FormatFloat.{value=to_float64_seconds(current_time_monotonic() - start_time), trailing_width=2});
   }
 }
 

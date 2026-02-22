@@ -10,6 +10,7 @@ VERBOSE      :: false;
 USE_SPIRV_OPT :: true;
 IR_INTERMEDIATE_DIR :: ".build/ir_intermediate";
 DEBUG_OUTDIR :: ".generated_shaders";
+MY_MODULE_NAME :: "Jai-Shader-Transpiler";
 
 Transpiled_Target :: enum {
   METAL;
@@ -285,10 +286,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           }
 
           assert(s != "");
-          t_add := current_time_monotonic();
           if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
           else add_build_string(s, p.workspace);
-          plugin.timings.add_build_string_s += to_float64_seconds(current_time_monotonic() - t_add);
 
           if plugin.output_shaders {
             ext := tprint("%", pair_ctx.language);
@@ -351,10 +350,8 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             }
 
             s := tprint("% :: #string END\n%\nEND", ir_symbol_name_from_context(ctx), source);
-            t_add := current_time_monotonic();
             if plugin.generated_module_import add_build_string(s, p.workspace, plugin.generated_module_import);
             else add_build_string(s, p.workspace);
-            plugin.timings.add_build_string_s += to_float64_seconds(current_time_monotonic() - t_add);
             if plugin.output_shaders {
               ext := tprint("%", ctx.language);
               to_lower_in_place(ext);
@@ -431,17 +428,7 @@ ir_symbol_name_from_context :: (ctx: *Shader_Write_Context) -> string {
   return tprint("%_string", ctx.name);
 }
 
-ir_entry_name_from_context :: (ctx: *Shader_Write_Context) -> string {
-  if ctx.type == .Vertex return "VertexMain";
-  if ctx.type == .Fragment return "FragmentMain";
-  if ctx.type == .Compute return "ComputeMain";
-  return "";
-}
 
-// TODO: remove me
-ir_stage_from_context :: (ctx: *Shader_Write_Context) -> (IR_Shader_Kind, bool) {
-    return ctx.type, true;
-}
 
 ir_target_from_context :: (ctx: *Shader_Write_Context) -> (Toolchain_Target, bool) {
   if ctx.language == .METAL return .METAL, true;
@@ -605,10 +592,6 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
   if !ir_spirv_supports_single_context(ctx)
       return_err("SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only.");
 
-  stage, stage_ok := ir_stage_from_context(ctx);
-  if !stage_ok 
-      return_err("SPIR-V backend: unsupported shader stage.");
-
   target, target_ok := ir_target_from_context(ctx);
   if !target_ok
       return_err("SPIR-V backend: unsupported target for context.");
@@ -686,7 +669,7 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
   job.ctx = ctx;
   job.started = current_time_monotonic();
   job.validate_before_opt = false;
-  job.stage = stage;
+  job.stage = ctx.type;
   job.target = target;
   job.entry_name = copy_string(entry_name);
   job.use_metal_argument_buffers = use_metal_argument_buffers;
@@ -849,16 +832,6 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  stage, stage_ok := ir_stage_from_context(ctx);
-  if !stage_ok {
-    diag.message = "SPIR-V backend: unsupported shader stage.";
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", "", false, diag;
-  }
-
   spvasm_source: string;
   spvasm_ok := false;
   spvasm_diag: IR_Diagnostic;
@@ -986,7 +959,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   if timings_totals timings_totals.spv_validate_s += to_float64_seconds(current_time_monotonic() - t0);
 
   t0 = current_time_monotonic();
-  if !emit_spirv_cross_target_source(spv_for_target, entry_name, stage, target, output_path, use_metal_argument_buffers, source_entry_name=entry_name) {
+  if !emit_spirv_cross_target_source(spv_for_target, entry_name, ctx.type, target, output_path, use_metal_argument_buffers, source_entry_name=entry_name) {
     diag.message = tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", ctx.name, spv_for_target);
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);

@@ -8,7 +8,6 @@ Build_Timing_Totals :: struct {
 
   pair_emit_s: float64;
   single_emit_s: float64;
-  add_build_string_s: float64;
   lookup_emit_s: float64;
 
   typechecked_message_count: s64;
@@ -51,12 +50,11 @@ log_timings :: (using totals: Build_Timing_Totals) {
     known_proc_collect_s,
     declaration_collect_s,
     pending_resolution_s);
-  log("[timing][build][plugin] phase msgs=% total=%s pair_emit=%s single_emit=%s add_build_string=%s emit_lookup=%s emitted_pairs=% emitted_singles=%",
+  log("[timing][build][plugin] phase msgs=% total=%s pair_emit=%s single_emit=%s emit_lookup=%s emitted_pairs=% emitted_singles=%",
     phase_message_count,
     phase_message_s,
     pair_emit_s,
     single_emit_s,
-    add_build_string_s,
     lookup_emit_s,
     emitted_pair_count,
     emitted_single_count);

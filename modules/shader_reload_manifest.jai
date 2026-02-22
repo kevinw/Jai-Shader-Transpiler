@@ -221,13 +221,8 @@ shader_reload_watcher_init_auto :: (watcher: *Shader_Reload_Watcher, app_source_
     }
 
     watcher_refresh_dependency_baseline(watcher);
-    log("SHADER_RELOAD enabled app=% manifest=% entries=% deps=% poll_every=%",
-        watcher.app_source_file,
-        watcher.manifest.source_path,
-        watcher.manifest.entries.count,
-        watcher.dependency_states.count,
-        watcher.poll_every_frames);
-    log("SHADER_RELOAD paths root=% generated=%", watcher.paths.workspace_root, watcher.paths.generated_dir);
+    verbose_log("enabled app=% manifest=% entries=% deps=% poll_every=%", watcher.app_source_file, watcher.manifest.source_path, watcher.manifest.entries.count, watcher.dependency_states.count, watcher.poll_every_frames);
+    verbose_log("paths root=% generated=%", watcher.paths.workspace_root, watcher.paths.generated_dir);
     return true;
 }
 
@@ -296,7 +291,7 @@ shader_reload_watcher_rebuild_entry_ids :: (watcher: *Shader_Reload_Watcher, cha
 
     _ = shader_reload_manifest_load_with_context(*watcher.manifest, *watcher.paths);
     watcher_refresh_dependency_baseline(watcher);
-    log("SHADER_RELOAD build succeeded app=% ids=%", watcher.app_source_file, changed_entry_ids_csv);
+    verbose_log("build succeeded app=% ids=%", watcher.app_source_file, changed_entry_ids_csv);
     return true;
 }
 
@@ -541,9 +536,7 @@ manifest_parse_key_value :: (line: string) -> (string, string, bool) {
     key.data = line.data;
     key.count = split_index;
 
-    value: string;
-    value.data = line.data + split_index + 1;
-    value.count = line.count - split_index - 1;
+    value: string = {line.count - split_index - 1, line.data + split_index + 1};
     value = manifest_trim_ascii_whitespace(value);
 
     return key, value, true;
@@ -554,6 +547,7 @@ manifest_target_ext :: (target: string) -> string {
     if target == "HLSL" return "hlsl";
     if target == "OPENGL_GLSL" return "glsl";
     if target == "VULKAN_GLSL" return "glsl";
+    log_error("manifest_target_ext: unexpected target '%'", target);
     return "";
 }
 
@@ -619,10 +613,7 @@ manifest_trim_ascii_whitespace :: (s: string) -> string {
         end -= 1;
     }
 
-    out: string;
-    out.data = s.data + start;
-    out.count = end - start;
-    return out;
+    return { end - start, s.data + start };
 }
 
 #import "Basic";
@@ -634,4 +625,4 @@ using Hash;
 Hash :: #import "Hash";
 using,only(getenv) POSIX :: #import "POSIX";
 
-VERBOSE :: true;
+VERBOSE :: false;
