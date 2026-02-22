@@ -51,20 +51,15 @@ Transpiled_Lookup_Entry :: struct {
   symbol_name: string;
 }
 
-#load "write_shader_manifest.jai";
-
 get_plugin :: () -> *Jai_To_Shader_Plugin {
-  p := New(Jai_To_Shader_Plugin);
+  using p := New(Jai_To_Shader_Plugin);
   for get_build_options().compile_time_command_line {
     if it == "-timings" {
-      p.timings_enabled = true;
+      timings_enabled = true;
     } else if it == "-output_shaders" {
-      p.output_shaders = true;
+      output_shaders = true;
     } else if begins_with(it, "-shader_entry_ids=") {
-      filter: string;
-      filter.data = it.data + 18;
-      filter.count = it.count - 18;
-      p.shader_entry_ids_filter = trim_ascii_whitespace(filter);
+      shader_entry_ids_filter = trim_ascii_whitespace(string.{ it.count - 18, it.data + 18});
     }
   }
 
@@ -1964,6 +1959,7 @@ PP :: #import "Program_Print";
 #load "ir.jai";
 #load "build_timings.jai";
 #load "string_builder_util.jai";
+#load "write_shader_manifest.jai";
 
 proc_has_note :: (node: *Code_Procedure_Header, note: string) -> bool {
   for node.notes if it.text == note return true;
