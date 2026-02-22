@@ -3964,7 +3964,13 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if stmt.if_else {
         all_terminated = then_terminated && else_terminated;
       }
-      return true, all_terminated, diag;
+      if all_terminated {
+        // Keep a concrete merge block for structured control flow, but terminate it
+        // so the next emitted label starts a fresh basic block.
+        add_op(s, "               OpUnreachable");
+        return true, true, diag;
+      }
+      return true, false, diag;
     }
 
     case .SWITCH; {
