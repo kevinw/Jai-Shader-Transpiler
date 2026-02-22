@@ -52,14 +52,14 @@ Shader_Reload_Watcher :: struct {
     last_build_ok: bool;
 }
 
-shader_reload_manifest_reset :: (manifest: *Shader_Reload_Manifest) {
-    manifest.loaded = false;
-    manifest.source_path = "";
-    manifest.backing_text = "";
-    manifest.version = 0;
-    manifest.declared_entry_count = 0;
-    array_reset(*manifest.entries);
-    array_reset(*manifest.global_dependencies);
+shader_reload_manifest_reset :: (using manifest: *Shader_Reload_Manifest) {
+    loaded = false;
+    source_path = "";
+    backing_text = "";
+    version = 0;
+    declared_entry_count = 0;
+    array_reset(*entries);
+    array_reset(*global_dependencies);
 }
 
 shader_reload_manifest_load :: (manifest: *Shader_Reload_Manifest, path: string) -> bool {
@@ -77,9 +77,7 @@ shader_reload_manifest_load :: (manifest: *Shader_Reload_Manifest, path: string)
     while i < text.count {
         start := i;
         while i < text.count && text[i] != #char "\n" i += 1;
-        line: string;
-        line.data = text.data + start;
-        line.count = i - start;
+        line: string = { i - start, text.data + start };
         if i < text.count && text[i] == #char "\n" i += 1;
 
         line = manifest_trim_ascii_whitespace(line);
@@ -105,38 +103,28 @@ shader_reload_manifest_load :: (manifest: *Shader_Reload_Manifest, path: string)
         if !kv_ok continue;
 
         if !in_entry {
-            if key == "version" {
-                manifest.version = manifest_parse_s64(value);
-            } else if key == "entry_count" {
-                manifest.declared_entry_count = manifest_parse_s64(value);
-            } else if key == "global_dependency" {
-                array_add(*manifest.global_dependencies, value);
+            using manifest;
+            if key == {
+                case "version";           version = manifest_parse_s64(value);
+                case "entry_count";       declared_entry_count = manifest_parse_s64(value);
+                case "global_dependency"; array_add(*manifest.global_dependencies, value);
             }
             continue;
         }
 
-        if key == "entry_id" {
-            current_entry.entry_id = value;
-        } else if key == "request_name" {
-            current_entry.request_name = value;
-        } else if key == "output_source_path" {
-            current_entry.output_source_path = value;
-        } else if key == "shader_kind" {
-            current_entry.shader_kind = value;
-        } else if key == "stage" {
-            current_entry.stage = value;
-        } else if key == "target" {
-            current_entry.target = value;
-        } else if key == "primary_name" {
-            current_entry.primary_name = value;
-        } else if key == "secondary_name" {
-            current_entry.secondary_name = value;
-        } else if key == "signature" {
-            current_entry.signature = value;
-        } else if key == "signature_hash" {
-            current_entry.signature_hash = value;
-        } else if key == "dependency" {
-            array_add(*current_entry.dependencies, value);
+        using current_entry;
+        if key == {
+            case "entry_id"; entry_id = value;
+            case "request_name"; request_name = value;
+            case "output_source_path"; output_source_path = value;
+            case "shader_kind"; shader_kind = value;
+            case "stage"; stage = value;
+            case "target"; target = value;
+            case "primary_name"; primary_name = value;
+            case "secondary_name"; secondary_name = value;
+            case "signature"; signature = value;
+            case "signature_hash"; signature_hash = value;
+            case "dependency"; array_add(*current_entry.dependencies, value);
         }
     }
 
@@ -646,4 +634,4 @@ using Hash;
 Hash :: #import "Hash";
 using,only(getenv) POSIX :: #import "POSIX";
 
-VERBOSE :: false;
+VERBOSE :: true;
