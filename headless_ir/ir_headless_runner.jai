@@ -429,7 +429,7 @@ ir_headless_fragment_boost :: (x: float) -> float {
   write_and_compile_metal_if_macos(boids_pair_path, boids_pair);
 
   _ = get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_vec3_params_main);
-  vec3_params_pair_path := tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_vec3_params_main_pair.metal", HEADLESS_IR_INTERMEDIATE_DIR);
+  vec3_params_pair_path := ".generated_shaders/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_vec3_params_main.metal";
   check_generated_file_contains(vec3_params_pair_path, "fragment", "vec3 fragment-params pair metal output");
   #if OS == .MACOS compile_metal(vec3_params_pair_path);
 

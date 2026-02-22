@@ -10,6 +10,21 @@ manifest_target_from_language :: (language: Shader_Language, glsl_target: GLSL_T
   return "UNKNOWN";
 }
 
+manifest_ext_from_target :: (target: string) -> string {
+  if target == "METAL" return "metal";
+  if target == "HLSL" return "hlsl";
+  if target == "OPENGL_GLSL" return "glsl";
+  if target == "VULKAN_GLSL" return "glsl";
+  return "";
+}
+
+manifest_output_source_path :: (request_name: string, target: string) -> string {
+  if request_name.count == 0 return "";
+  ext := manifest_ext_from_target(target);
+  if ext.count == 0 return "";
+  return tprint(".generated_shaders/%.%", request_name, ext);
+}
+
 manifest_stage_from_shader_type :: (type: Shader_Type) -> string {
   if type == .Vertex return "vertex";
   if type == .Fragment return "fragment";
@@ -278,6 +293,7 @@ manifest_make_single_entry :: (ctx: *Shader_Write_Context, workspace_root: strin
   out.shader_kind = "single";
   out.stage = manifest_stage_from_shader_type(ctx.type);
   out.target = manifest_target_from_context(ctx);
+  out.output_source_path = manifest_output_source_path(out.request_name, out.target);
   out.primary_name = copy_string(ctx.main_fn.header.name);
   out.secondary_name = "";
   proc_sig := manifest_header_signature(ctx.main_fn.header);
@@ -299,6 +315,7 @@ manifest_make_pair_entry :: (ctx: *Shader_Write_Pair_Context, workspace_root: st
   out.shader_kind = "pair";
   out.stage = "pair";
   out.target = manifest_target_from_pair_context(ctx);
+  out.output_source_path = manifest_output_source_path(out.request_name, out.target);
   out.primary_name = copy_string(ctx.vertex_fn.header.name);
   out.secondary_name = copy_string(ctx.fragment_fn.header.name);
   v_sig := manifest_header_signature(ctx.vertex_fn.header);
@@ -323,7 +340,7 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
   }
 
   sb: String_Builder;
-  append(*sb, "version 1\n");
+  append(*sb, "version 2\n");
   append(*sb, tprint("entry_count %\n", plugin.manifest_entries.count));
   append(*sb, tprint("global_dependency_count %\n", global_dependencies.count));
   for global_dependencies append(*sb, tprint("global_dependency %\n", it));
@@ -332,6 +349,7 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
     append(*sb, "entry_begin\n");
     append(*sb, tprint("entry_id %\n", it.entry_id));
     append(*sb, tprint("request_name %\n", it.request_name));
+    append(*sb, tprint("output_source_path %\n", it.output_source_path));
     append(*sb, tprint("shader_kind %\n", it.shader_kind));
     append(*sb, tprint("stage %\n", it.stage));
     append(*sb, tprint("target %\n", it.target));

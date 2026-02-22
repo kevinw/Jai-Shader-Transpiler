@@ -461,13 +461,11 @@ ir_output_ext_from_context :: (ctx: *Shader_Write_Context) -> string {
 }
 
 ir_output_path_from_context :: (ctx: *Shader_Write_Context) -> string {
-  build_dir := IR_INTERMEDIATE_DIR;
-  return tprint("%/%_%.%", build_dir, ctx.name, ir_stage_short_from_context(ctx), ir_output_ext_from_context(ctx));
+  return tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ir_output_ext_from_context(ctx));
 }
 
 ir_output_path_from_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> string {
-  build_dir := IR_INTERMEDIATE_DIR;
-  return tprint("%/%_pair.metal", build_dir, pair_ctx.name);
+  return tprint("%/%.metal", DEBUG_OUTDIR, pair_ctx.name);
 }
 
 is_internal_transpiled_request_name :: (name: string) -> bool {
@@ -1017,6 +1015,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   if add_generated_comment {
     target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_context(ctx), ir_pipeline_label_spirv(target));
   }
+  make_directory_if_it_does_not_exist(path_strip_filename(output_path), recursive=true);
   timed(ifx timings_totals *timings_totals.spv_write_flags_s, #code {
     write_entire_file(output_path, target_source);
   });
@@ -1544,6 +1543,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context, timings_tot
   merged_source = ir_metal_enable_unsafe_runtime_array_indexing(merged_source);
   merged_source = ir_prepend_generated_comment(merged_source, ir_source_file_from_pair_context(pair_ctx), ir_pipeline_label_spirv(.METAL));
   output_path := ir_output_path_from_pair_context(pair_ctx);
+  make_directory_if_it_does_not_exist(path_strip_filename(output_path), recursive=true);
   t0 = current_time_monotonic();
   if !write_entire_file(output_path, merged_source) {
     diag.message = tprint("SPIR-V backend: failed writing merged pair source '%'.", output_path);
