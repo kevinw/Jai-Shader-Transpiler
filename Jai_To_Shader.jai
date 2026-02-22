@@ -1097,6 +1097,17 @@ ir_metal_declared_type_name :: (decl: string) -> (string, bool) {
   return "", false;
 }
 
+ir_metal_is_forward_type_decl :: (decl: string) -> bool {
+  text := trim_ascii_whitespace(decl);
+  if text.count == 0 return false;
+  if find_index_from_left(text, "{") != -1 return false;
+  if !ends_with(text, ";") return false;
+  if begins_with(text, "struct ") return true;
+  if begins_with(text, "class ") return true;
+  if begins_with(text, "enum ") return true;
+  return false;
+}
+
 ir_metal_split_top_level_decls :: (source: string, out_preamble: *string, out_decls: *[..] string) {
   assert(out_preamble != null);
   assert(out_decls != null);
@@ -1187,8 +1198,9 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
     found, _ := table_find(*seen, key);
     if found continue;
 
+    is_forward := ir_metal_is_forward_type_decl(decl);
     type_name, type_name_ok := ir_metal_declared_type_name(decl);
-    if type_name_ok {
+    if type_name_ok && !is_forward {
       type_found, existing_index := table_find(*selected_type_decl_index, type_name);
       if type_found {
         selected_decls[existing_index] = copy_string(decl);
@@ -1209,8 +1221,9 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
     found, _ := table_find(*seen, key);
     if found continue;
 
+    is_forward := ir_metal_is_forward_type_decl(decl);
     type_name, type_name_ok := ir_metal_declared_type_name(decl);
-    if type_name_ok {
+    if type_name_ok && !is_forward {
       type_found, existing_index := table_find(*selected_type_decl_index, type_name);
       if type_found {
         // Prefer the later stage declaration for colliding type names.

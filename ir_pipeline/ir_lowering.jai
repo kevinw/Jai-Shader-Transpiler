@@ -452,6 +452,94 @@ ir_type_name_is_global_resource :: (type_name: string) -> bool {
   return false;
 }
 
+ir_align_up_s64 :: (value: s64, alignment: s64) -> s64 {
+  if alignment <= 1 return value;
+  rem := value % alignment;
+  if rem == 0 return value;
+  return value + (alignment - rem);
+}
+
+ir_uniform_field_layout_for_type :: (type: *Type_Info) -> (align: s64, size: s64, ok: bool, reason: string) {
+  if !type return 0, 0, false, "missing type";
+
+  if type.type == .ARRAY {
+    arr := cast(*Type_Info_Array) type;
+    if arr.array_type != .FIXED return 0, 0, false, "uniform arrays must be fixed-size";
+    if arr.array_count < 0 return 0, 0, false, "uniform array has invalid element count";
+    _, elem_size, elem_ok, _ := ir_uniform_field_layout_for_type(arr.element_type);
+    if !elem_ok return 0, 0, false, "uniform array element type is unsupported";
+    // Keep this in lock-step with spirv_text_backend_emitters.jai (std140-like array stride).
+    stride: s64 = 16;
+    return 16, stride * arr.array_count, true, "";
+  }
+
+  field_ir_type, field_ir_ok := ir_type_from_type_info(type);
+  if !field_ir_ok return 0, 0, false, "unsupported field type";
+
+  if field_ir_type.kind == .BOOL || field_ir_type.kind == .I32 || field_ir_type.kind == .U32 || field_ir_type.kind == .F32 {
+    return 4, 4, true, "";
+  }
+  if field_ir_type.kind == .I64 || field_ir_type.kind == .U64 {
+    // Keep this in lock-step with current backend behavior.
+    return 4, 8, true, "";
+  }
+  if field_ir_type.kind == .F32x2 {
+    return 8, 8, true, "";
+  }
+  if field_ir_type.kind == .F32x3 {
+    return 16, 16, true, "";
+  }
+  if field_ir_type.kind == .F32x4 {
+    return 16, 16, true, "";
+  }
+
+  return 0, 0, false, "field type is not currently supported for uniform layout validation";
+}
+
+ir_validate_parameter_block_layout :: (arg_name: string, struct_type: *Type_Info_Struct, state: *IR_Lowering_State, node: *Code_Node = null) -> bool {
+  if !struct_type || !state return true;
+  // Ignore unions for now; we only validate standard struct parameter blocks.
+  if struct_type.textual_flags & .UNION return true;
+
+  expected_offset: s64 = 0;
+  mismatch_count := 0;
+  skipped_count := 0;
+  sb: String_Builder;
+
+  for struct_type.members {
+    member := it;
+    if member.flags & .CONSTANT continue;
+    if member.offset_in_bytes < 0 continue;
+
+    field_align, field_size, field_ok, _ := ir_uniform_field_layout_for_type(member.type);
+    if !field_ok {
+      skipped_count += 1;
+      continue;
+    }
+    expected_offset = ir_align_up_s64(expected_offset, field_align);
+    actual_offset := member.offset_in_bytes;
+    if actual_offset != expected_offset {
+      mismatch_count += 1;
+      a(*sb, "  field '%': expected offset %, got % (align %, size %).",
+        member.name, expected_offset, actual_offset, field_align, field_size);
+      if field_align >= 16 {
+        a(*sb, "    hint: add explicit padding before '%' (or use `#align 16`) so this field lands on a 16-byte boundary.", member.name);
+      } else if field_align == 8 {
+        a(*sb, "    hint: consider field reordering or explicit padding before '%'.", member.name);
+      }
+    }
+    expected_offset += field_size;
+  }
+
+  if mismatch_count == 0 return true;
+  message := tprint("IR lowering: parameter block layout mismatch for argument '%' (struct '%').\nExpected GPU-side offsets do not match Jai CPU layout.\n%\nhint: reorder fields and/or add explicit pad fields; `#align` can help enforce boundaries.", arg_name, struct_type.name, builder_to_string(*sb));
+  if skipped_count > 0 {
+    message = tprint("%\nnote: skipped % unsupported field(s) during validation.", message, skipped_count);
+  }
+  ir_set_diagnostic(state, message, node);
+  return false;
+}
+
 ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> (string, bool) {
   if !type return "", false;
   if type.type == .POINTER {
@@ -1395,6 +1483,9 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
     if !arg_ir_type_ok return_err("unsupported typed IR argument '%'", arg.name);
     if arg_type && arg_type.type == .STRUCT {
       arg_ir_type.flags |= .PARAMETER_BLOCK;
+      if !ir_validate_parameter_block_layout(arg.name, cast(*Type_Info_Struct) arg_type, *state, cast(*Code_Node) arg) {
+        return { {}, false, ir_get_diagnostic(*state) };
+      }
     }
     pointee_name := "";
     pointee_ok := false;
@@ -1530,6 +1621,9 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
     }
     if arg_type && arg_type.type == .STRUCT {
       arg_ir_type.flags |= .PARAMETER_BLOCK;
+      if !ir_validate_parameter_block_layout(arg.name, cast(*Type_Info_Struct) arg_type, *state, cast(*Code_Node) arg) {
+        return { {}, false, ir_get_diagnostic(*state) };
+      }
     }
     pointee_name := "";
     pointee_ok := false;

@@ -101,6 +101,14 @@ IR_Headless_Fragment_Vec3_Params :: struct {
   intensity: float;
 }
 
+IR_Headless_Fragment_Layout_Params :: struct {
+  gain: float;
+  _pad0_x: float;
+  _pad0_y: float;
+  _pad0_z: float;
+  tint: Vector4;
+}
+
 IR_Headless_Position_Semantic_Vertex_Out :: struct {
   gl_Position: Vector4; @position
   color: Vector4;
@@ -190,6 +198,17 @@ ir_headless_fragment_vec3_params_main :: (using input: IR_Headless_Vertex_Out, p
     input.color.x * params.intensity + params.bias.x,
     input.color.y * params.intensity + params.bias.y,
     input.color.z * params.intensity + params.bias.z,
+    1.0
+  };
+  return out;
+} @fragment_shader
+
+ir_headless_fragment_layout_params_main :: (using input: IR_Headless_Vertex_Out, params: IR_Headless_Fragment_Layout_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  out_color = Vector4.{
+    input.color.x * params.gain + params.tint.x,
+    input.color.y * params.gain + params.tint.y,
+    input.color.z * params.gain + params.tint.z,
     1.0
   };
   return out;
@@ -413,6 +432,11 @@ ir_headless_fragment_boost :: (x: float) -> float {
   vec3_params_pair_path := tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_vec3_params_main_pair.metal", HEADLESS_IR_INTERMEDIATE_DIR);
   check_generated_file_contains(vec3_params_pair_path, "fragment", "vec3 fragment-params pair metal output");
   #if OS == .MACOS compile_metal(vec3_params_pair_path);
+
+  layout_params_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_layout_params_main);
+  check_contains(layout_params_pair, "fragment", "layout-validated fragment-params pair metal output");
+  layout_params_pair_path := tprint("%/ir_pair_fragment_layout_params.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(layout_params_pair_path, layout_params_pair);
 
   log("IR headless runner passed. Outputs in %", HEADLESS_IR_DIR);
 }
