@@ -360,6 +360,7 @@ _add_source :: (p: *Metaprogram_Plugin) {
     // shader strings into later, and also to look them up via get_transpiled.
     assert(p.workspace > 0);
     path_to_generated_source := compute_path_to_shader_bucket_module(p.workspace);
+    make_directory_if_it_does_not_exist(path_strip_filename(path_to_generated_source), recursive=true);
     ok := write_entire_file(path_to_generated_source, #string END
 // Auto-generated from Jai_To_Shader's _add_source
 #scope_export

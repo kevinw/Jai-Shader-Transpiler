@@ -623,6 +623,10 @@ Process :: #import "Process";
 String :: #import "String";
 using Hash;
 Hash :: #import "Hash";
-using,only(getenv) POSIX :: #import "POSIX";
+#if OS == .WINDOWS {
+    using,only(getenv) _ :: #import "Windows";
+} else {
+    using,only(getenv) POSIX :: #import "POSIX";
+}
 
 VERBOSE :: false;
