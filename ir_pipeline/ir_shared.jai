@@ -840,7 +840,7 @@ ir_shared_name_matches_builtin :: (name: string, builtin: string) -> bool {
   return name[builtin.count] == #char "_";
 }
 
-ir_shared_is_slang_builtin_name :: (name: string) -> bool {
+ir_shared_is_builtin_function_name :: (name: string) -> bool {
   if name == "floor" return true;
   if name == "ceil" return true;
   if name == "min" return true;
@@ -895,7 +895,7 @@ ir_shared_collect_calls_in_node :: (node: *Code_Node, called_headers: *[..] *Cod
       }
 
       if header {
-        if ir_shared_is_slang_builtin_name(header.name) {
+        if ir_shared_is_builtin_function_name(header.name) {
           // Keep as direct call in emitted Slang instead of lowering Jai stdlib bodies.
         } else if header.body_or_null && !ir_shared_header_in_list(called_headers, header) {
           array_add(called_headers, header);
