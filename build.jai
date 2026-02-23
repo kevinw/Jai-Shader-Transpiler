@@ -129,6 +129,7 @@ build :: (build_file: string, using opts: Opts) {
 
   compiler_begin_intercept(w);
   defer compiler_end_intercept(w);
+  jai_to_shader_plugin.add_source(jai_to_shader_plugin);
   add_build_file(build_file, w);
   compile_ok: bool;
   {

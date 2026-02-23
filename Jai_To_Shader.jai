@@ -19,30 +19,11 @@ Transpiled_Target :: enum {
   VULKAN_GLSL;
 }
 
-add_code :: (plugin: *Jai_To_Shader_Plugin, code: string, ctx := "") {
-    msg := plugin.generated_module_import;
-    LOG :: false;
-    if msg {
-        filename: string;
-        if msg.kind == {
-        case .FILE;
-            #if LOG filename = tprint("Message_File[%]", msg.(*Message_File).fully_pathed_filename);
-        case .IMPORT;
-            #if LOG filename = tprint("Message_Import[%]", msg.(*Message_Import).fully_pathed_filename);
-        case;
-            assert(false);
-        }
-        #if LOG log("add_build_string(message=%) %", filename, ctx);
-        add_build_string(code, plugin.workspace, plugin.generated_module_import);
-    } else {
-        #if LOG log("add_build_string(message=null) %", ctx);
-        add_build_string(code, plugin.workspace);
-    }
-}
-
 Jai_To_Shader_Plugin :: struct {
     using #as plugin: Metaprogram_Plugin;
     message = convert_procs; // the Compiler message handler
+    before_intercept = _before_intercept;
+    add_source = _add_source;
     
     // options
     output_shaders: bool;
@@ -54,15 +35,14 @@ Jai_To_Shader_Plugin :: struct {
       currently_waiting_pair_contexts: [..] Shader_Write_Pair_Context;
       pending_request_declarations: [..] *Code_Declaration;
       known_procedure_bodies: [..] *Code_Procedure_Body;
-      generated_module_import: *Message;
       lookup_entries: [..] Transpiled_Lookup_Entry;
       manifest_entries: [..] Shader_Reload_Manifest_Entry;
       did_emit_lookup_overloads: bool;
       did_log_ir_pipeline: bool;
       did_log_ir_limitations: bool;
+      did_add_setup_source: bool;
     }
 }
-
 Transpiled_Lookup_Entry :: struct {
   target_name: string;
   primary_name: string;
@@ -181,23 +161,21 @@ get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) 
 }
 
 get_transpiled :: (target: Transpiled_Target, args: ..Any, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> string #expand {
-  #insert #run tprint("G :: #import \"generated\";\nreturn %;",
-                      get_transpiled_result_expr_from_call(call, loc));
+    #insert #run -> string {
+        workspace := get_current_workspace();
+        return tprint(#string END
+G :: #import,file "%";
+return %;
+END, compute_path_to_shader_bucket_module(workspace), get_transpiled_result_expr_from_call(call, loc));
+    };
 }
 
 convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
   plugin := cast(*Jai_To_Shader_Plugin) p;
+  
+  assert(plugin.did_add_setup_source, "Your compiler message loop needs to call plugin.add_source first");
 
   if message.kind == {
-    case .IMPORT; {
-      import_message := cast(*Message_Import) message;
-      
-      // TODO: HACK
-      if import_message.module_name == "generated" || import_message.module_name == "Jai-Shader-Transpiler/generated" {
-        plugin.generated_module_import = import_message;
-      }
-    }
-
     case .TYPECHECKED; {
       tc_message_start := current_time_monotonic();
       tc := cast(*Message_Typechecked) message;
@@ -365,13 +343,45 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       array_reset(*known_procedure_bodies);
       array_reset(*lookup_entries);
       array_reset(*manifest_entries);
-      generated_module_import = null;
       did_emit_lookup_overloads = false;
       did_log_ir_pipeline = false;
       did_log_ir_limitations = false;
       table_reset(*get_transpiled_requests_seen);
     }
   }
+}
+
+_before_intercept :: (p: *Metaprogram_Plugin, intercept_flags: *Intercept_Flags) {
+}
+
+_add_source :: (p: *Metaprogram_Plugin) {
+    // Here at the beginning of the compiler loop, we generate a .jai file in the intermediate directory.
+    // We can use that generated module as a known-good place in this workspace to #poke_name our generated
+    // shader strings into later, and also to look them up via get_transpiled.
+    assert(p.workspace > 0);
+    path_to_generated_source := compute_path_to_shader_bucket_module(p.workspace);
+    ok := write_entire_file(path_to_generated_source, #string END
+// Auto-generated from Jai_To_Shader's _add_source
+#scope_export
+
+#placeholder lookup_transpiled_impl;
+
+lookup_transpiled :: (target_name: string, primary_name: string, secondary_name: string) -> string {
+    return lookup_transpiled_impl(target_name, primary_name, secondary_name);
+}
+END);
+    assert(ok);
+    
+    plugin := cast(*Jai_To_Shader_Plugin)p;
+    add_build_file(path_to_generated_source, p.workspace);
+    plugin.did_add_setup_source = true;
+}
+
+compute_path_to_shader_bucket_module :: (workspace: Workspace) -> string {
+    assert(workspace > 0);
+    opts := get_build_options(workspace);
+    path := sprint("%/jst_generated.jai", opts.intermediate_path);
+    return path;
 }
 
 ir_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
@@ -1185,7 +1195,7 @@ emit_lookup_overloads :: (plugin: *Jai_To_Shader_Plugin, workspace: Workspace) {
 
   sb: String_Builder;
   append_lines(*sb,
-    "G :: #import \"generated\";",
+    tprint("G :: #import,file \"%\";", compute_path_to_shader_bucket_module(plugin.workspace)),
     "#poke_name G lookup_transpiled_impl;",
     "lookup_transpiled_impl :: (target_name: string, primary_name: string, secondary_name: string) -> string {",
   );
@@ -1580,4 +1590,8 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
 
 unpack_result :: (result: IR_Result($R)) -> (R, bool, IR_Diagnostic) {
     return result.value, result.ok, result.diag;
+}
+
+add_code :: (plugin: *Jai_To_Shader_Plugin, code: string, ctx := "") {
+    add_build_string(code, plugin.workspace);
 }
