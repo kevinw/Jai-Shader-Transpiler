@@ -177,7 +177,6 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 
   if message.kind == {
     case .TYPECHECKED; {
-      tc_message_start := current_time_monotonic();
       tc := cast(*Message_Typechecked) message;
       for tc.procedure_bodies {
         proc := it.expression;
@@ -206,7 +205,6 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     }
     
     case .PHASE; {
-      phase_message_start := current_time_monotonic();
       phase := cast(*Message_Phase) message;
       if phase.phase == .TYPECHECKED_ALL_WE_CAN {
         array_reset(*plugin.manifest_entries);
@@ -215,7 +213,6 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           plugin.did_log_ir_pipeline = true;
         }
 
-        t_pairs := current_time_monotonic();
         for * pair_ctx: plugin.currently_waiting_pair_contexts {
           s: string;
           used_ir_pipeline := false;
@@ -263,9 +260,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           remove pair_ctx;
         }
 
-        t_single := current_time_monotonic();
         {
-          t_single_spv := current_time_monotonic();
           jobs: [..] SPV_External_Single_Job;
           for *ctx: plugin.currently_waiting_contexts {
             job: SPV_External_Single_Job;
@@ -324,7 +319,6 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 
         if plugin.manifest_entries.count > 0 emit_shader_reload_manifest(plugin);
 
-        t_lookup := current_time_monotonic();
         emit_lookup_overloads(plugin, p.workspace);
       }
     }
@@ -519,7 +513,6 @@ ir_graphics_requires_metal_argument_buffer :: (args: [] IR_Function_Arg, extra_s
 
 SPV_External_Single_Job :: struct {
   ctx: *Shader_Write_Context;
-  started: Apollo_Time;
   validate_before_opt: bool;
   stage: IR_Shader_Kind;
   target: Toolchain_Target;
@@ -534,9 +527,7 @@ SPV_External_Single_Job :: struct {
   error_message: string;
 }
 
-prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
-                                      job: *SPV_External_Single_Job) -> (ok: bool, diag: IR_Diagnostic)
-{
+prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_External_Single_Job) -> (ok: bool, diag: IR_Diagnostic) {
   assert(ctx != null && job != null);
   
   return_err :: (msg: string) #expand {
@@ -609,7 +600,6 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context,
   output_ext := ifx ctx.language == .METAL then "metal" else "glsl";
 
   job.ctx = ctx;
-  job.started = current_time_monotonic();
   job.validate_before_opt = false;
   job.stage = ctx.type;
   job.target = target;
@@ -685,9 +675,7 @@ run_spirv_external_jobs_parallel :: (jobs: [] SPV_External_Single_Job) {
   tg.logging = false;
   tg.name = "JTS-SPV-External";
   start(*tg);
-  defer {
-    shutdown(*tg);
-  }
+  defer shutdown(*tg);
 
   for *jobs add_work(*tg, it);
 
@@ -699,8 +687,7 @@ run_spirv_external_jobs_parallel :: (jobs: [] SPV_External_Single_Job) {
   }
 }
 
-finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job,
-                                       add_generated_comment := true) -> (target_source: string, ok: bool, diag: IR_Diagnostic) {
+finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job, add_generated_comment := true) -> (target_source: string, ok: bool, diag: IR_Diagnostic) {
   assert(job != null);
   diag: IR_Diagnostic;
   if !job.ok {
@@ -735,7 +722,6 @@ finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job,
 
 ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated_comment := true) -> (string, string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
-  single_start := current_time_monotonic();
   if !ir_spirv_supports_single_context(ctx) {
     diag.message = "SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only.";
     if ctx && ctx.main_fn && ctx.main_fn.header {
@@ -960,7 +946,6 @@ ir_validate_pair_stage_interface_local :: (pair_name: string, vertex: *IR_Vertex
 
 write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
-  pair_start := current_time_monotonic();
   if !ir_supports_pair_context(pair_ctx) {
     diag.message = "SPIR-V backend: unsupported shader pair context/target combination.";
     if pair_ctx && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
