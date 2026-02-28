@@ -334,3 +334,9 @@ spv_append_numeric_constants :: (sb: *String_Builder, state: *IR_SPV_Gen_State) 
   for state.const_u64 append(sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint64), it.value));
   for state.const_f32 append(sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_float), it.text));
 }
+
+spv_append_null_constants :: (sb: *String_Builder, state: *IR_SPV_Gen_State) {
+  assert(sb != null);
+  assert(state != null);
+  for state.const_null append(sb, tprint("% = OpConstantNull %\n", id_text(it.id), id_text(it.type_id)));
+}

@@ -345,6 +345,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   spv_append_sample_2d_vars(*sb, *state);
   spv_append_write_2d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
+  spv_append_null_constants(*sb, *state);
 
   spv_append_function_and_body(*sb, *state, entry_label, "    ", "     ");
   return builder_to_string(*sb), true, diag;
@@ -701,6 +702,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   spv_append_sample_2d_vars(*sb, *state);
   spv_append_write_2d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
+  spv_append_null_constants(*sb, *state);
 
   spv_append_function_and_body(*sb, *state, entry_label, "    ", "     ");
   return builder_to_string(*sb), true, diag;
@@ -773,6 +775,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   spv_append_buffer_vars(*sb, *state, "StorageBuffer");
   spv_append_write_2d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
+  spv_append_null_constants(*sb, *state);
 
   _ = body_terminated;
   spv_append_function_and_body(*sb, *state, entry_label, "      ", "         ");

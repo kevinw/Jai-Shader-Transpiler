@@ -36,3 +36,15 @@ Completed items were moved to `IR_DONE.md`.
 - Desired fix:
   - Verify `gpu_dispatch_buffers` / Metal backend binding limits and argument-table setup.
   - Confirm whether this is backend cap, descriptor layout mismatch, or IR-generated signature mismatch.
+
+## 11) Helper pointer arguments cannot target local variables in shader IR
+- Symptom at compile time:
+  - `SPIR-V backend: helper 'tm_emit_vertex' pointer arg 'out_count' must be a buffer identifier.`
+- Where hit:
+  - Attempted robust emission pattern in terrain compute shader:
+    - `tm_emit_vertex(..., out_count: *u32, ...)` with `*count` where `count` is local.
+- Current workaround:
+  - Keep counter flow in return values (`out_count = tm_emit_vertex(...)`) instead of pointer mutation helpers.
+- Desired fix:
+  - Clarify this as an explicit language/IR restriction in diagnostics/docs, and/or
+  - Support pointer-to-function-local arguments for simple scalar mutation in helper calls.

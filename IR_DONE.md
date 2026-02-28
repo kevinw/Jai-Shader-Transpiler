@@ -76,3 +76,24 @@ Status: Fixed (February 28, 2026) for constructor/helper/local-struct RHS in com
   - Existing helper-call/local-struct RHS support remains.
   - Added regression coverage in `compute_semantics_runner`:
     - `struct_buffer_element_constructor_assign`
+
+## 10) Compute correctness mismatch in helper-heavy tetra logic
+Status: Fixed (February 28, 2026) for compute helper return-chain lowering.
+- Symptom:
+  - GPU and CPU diverged for identical tetra-style helper code, causing terrain meshing artifacts.
+  - Repro failure:
+    - `[FAIL] mismatch in 'terrain_tetra_inside_outside_signature' at index 2: GPU=2147483650 CPU=2484802686`
+- Where hit:
+  - `headless_ir/compute_semantics_runner.jai` case `terrain_tetra_inside_outside_signature`
+  - `modules/Terrain_Mesh_Compute/shaders/terrain_mesh_compute_shader.jai` terrain compute flow.
+- Root cause:
+  - SPIR-V helper return-chain lowering for `if` branches evaluated both branches eagerly, then selected, instead of preserving branch control flow.
+- Implemented:
+  - Reworked helper return-chain `if` lowering in `ir_pipeline/spirv_text_backend.jai` to emit real branch/merge control flow and load the chosen result.
+  - Added null-constant tracking/emission and function-local variable initialization plumbing (`OpConstantNull`) in:
+    - `ir_pipeline/spirv_text_backend.jai`
+    - `ir_pipeline/spv_types.jai`
+    - `ir_pipeline/spirv_text_backend_emitters.jai`
+- Verification:
+  - `bash headless_ir/test_ir_compute_semantics.sh` passes with the new regression case.
+  - `jai modules/Jai-Shader-Transpiler/build.jai - -run_tests` passes.

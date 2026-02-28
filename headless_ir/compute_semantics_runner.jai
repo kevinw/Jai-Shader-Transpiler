@@ -159,6 +159,8 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"raw_vec4_buffer_component_write", .Vec4},
   {"struct_vec4_field_write", .Vec4Box},
   {"struct_buffer_element_constructor_assign", .Vec4Box},
+  {"terrain_tetra_inside_outside_signature", .Bare},
+  {"helper_scalar_arg_shadow_capture", .Bare},
 ];
 
 ELEMENT_COUNT :: 64;
@@ -2173,6 +2175,140 @@ edge_gap_72_helper_pointer_alias_arg :: (using in: Compute_Semantics_In, values:
   idx := thread_id.x;
   t := table;
   values[idx] = values[idx] + pointer_table_mix_helper(t, idx);
+} @compute_shader
+
+terrain_tetra_hash_edge :: (h: u32, a: u32, b: u32) -> u32 {
+  e := (a << 2) | (b & 3);
+  return (h ^ e) * 16777619;
+}
+
+terrain_tetra_getd :: (i: u32, d0: float, d1: float, d2: float, d3: float) -> float {
+  if i == 0 return d0;
+  if i == 1 return d1;
+  if i == 2 return d2;
+  return d3;
+}
+
+terrain_tetra_candidate_signature :: (d0: float, d1: float, d2: float, d3: float) -> u32 {
+  inside: [4]u32;
+  outside: [4]u32;
+  inside_count: u32 = 0;
+  outside_count: u32 = 0;
+
+  if d0 < 0.0 { inside[inside_count] = 0; inside_count += 1; } else { outside[outside_count] = 0; outside_count += 1; }
+  if d1 < 0.0 { inside[inside_count] = 1; inside_count += 1; } else { outside[outside_count] = 1; outside_count += 1; }
+  if d2 < 0.0 { inside[inside_count] = 2; inside_count += 1; } else { outside[outside_count] = 2; outside_count += 1; }
+  if d3 < 0.0 { inside[inside_count] = 3; inside_count += 1; } else { outside[outside_count] = 3; outside_count += 1; }
+
+  if inside_count == 0 || inside_count == 4 return 0;
+
+  h: u32 = 2166136261;
+  if inside_count == 1 {
+    i0 := inside[0];
+    o0 := outside[0];
+    o1 := outside[1];
+    o2 := outside[2];
+    _ = terrain_tetra_getd(i0, d0, d1, d2, d3);
+    _ = terrain_tetra_getd(o0, d0, d1, d2, d3);
+    _ = terrain_tetra_getd(o1, d0, d1, d2, d3);
+    _ = terrain_tetra_getd(o2, d0, d1, d2, d3);
+    h = terrain_tetra_hash_edge(h, i0, o0);
+    h = terrain_tetra_hash_edge(h, i0, o1);
+    h = terrain_tetra_hash_edge(h, i0, o2);
+    return h;
+  }
+
+  if inside_count == 3 {
+    o0 := outside[0];
+    i0 := inside[0];
+    i1 := inside[1];
+    i2 := inside[2];
+    _ = terrain_tetra_getd(o0, d0, d1, d2, d3);
+    _ = terrain_tetra_getd(i0, d0, d1, d2, d3);
+    _ = terrain_tetra_getd(i1, d0, d1, d2, d3);
+    _ = terrain_tetra_getd(i2, d0, d1, d2, d3);
+    h = terrain_tetra_hash_edge(h, o0, i0);
+    h = terrain_tetra_hash_edge(h, o0, i2);
+    h = terrain_tetra_hash_edge(h, o0, i1);
+    return h;
+  }
+
+  i0 := inside[0];
+  i1 := inside[1];
+  o0 := outside[0];
+  o1 := outside[1];
+  _ = terrain_tetra_getd(i0, d0, d1, d2, d3);
+  _ = terrain_tetra_getd(i1, d0, d1, d2, d3);
+  _ = terrain_tetra_getd(o0, d0, d1, d2, d3);
+  _ = terrain_tetra_getd(o1, d0, d1, d2, d3);
+
+  h = terrain_tetra_hash_edge(h, i0, o0);
+  h = terrain_tetra_hash_edge(h, i1, o0);
+  h = terrain_tetra_hash_edge(h, i1, o1);
+  h = terrain_tetra_hash_edge(h, i0, o0);
+  h = terrain_tetra_hash_edge(h, i1, o1);
+  h = terrain_tetra_hash_edge(h, i0, o1);
+  return h;
+}
+
+terrain_tetra_ref_signature :: (mask: u32) -> u32 {
+  h: u32 = 2166136261;
+
+  if mask == 0 || mask == 15 return 0;
+  if mask == 1  { h = terrain_tetra_hash_edge(h, 0, 1); h = terrain_tetra_hash_edge(h, 0, 2); h = terrain_tetra_hash_edge(h, 0, 3); return h; }
+  if mask == 2  { h = terrain_tetra_hash_edge(h, 1, 0); h = terrain_tetra_hash_edge(h, 1, 2); h = terrain_tetra_hash_edge(h, 1, 3); return h; }
+  if mask == 4  { h = terrain_tetra_hash_edge(h, 2, 0); h = terrain_tetra_hash_edge(h, 2, 1); h = terrain_tetra_hash_edge(h, 2, 3); return h; }
+  if mask == 8  { h = terrain_tetra_hash_edge(h, 3, 0); h = terrain_tetra_hash_edge(h, 3, 1); h = terrain_tetra_hash_edge(h, 3, 2); return h; }
+  if mask == 14 { h = terrain_tetra_hash_edge(h, 0, 1); h = terrain_tetra_hash_edge(h, 0, 3); h = terrain_tetra_hash_edge(h, 0, 2); return h; }
+  if mask == 13 { h = terrain_tetra_hash_edge(h, 1, 0); h = terrain_tetra_hash_edge(h, 1, 3); h = terrain_tetra_hash_edge(h, 1, 2); return h; }
+  if mask == 11 { h = terrain_tetra_hash_edge(h, 2, 0); h = terrain_tetra_hash_edge(h, 2, 3); h = terrain_tetra_hash_edge(h, 2, 1); return h; }
+  if mask == 7  { h = terrain_tetra_hash_edge(h, 3, 0); h = terrain_tetra_hash_edge(h, 3, 2); h = terrain_tetra_hash_edge(h, 3, 1); return h; }
+  if mask == 3  { h = terrain_tetra_hash_edge(h, 0, 2); h = terrain_tetra_hash_edge(h, 1, 2); h = terrain_tetra_hash_edge(h, 1, 3); h = terrain_tetra_hash_edge(h, 0, 2); h = terrain_tetra_hash_edge(h, 1, 3); h = terrain_tetra_hash_edge(h, 0, 3); return h; }
+  if mask == 5  { h = terrain_tetra_hash_edge(h, 0, 1); h = terrain_tetra_hash_edge(h, 2, 1); h = terrain_tetra_hash_edge(h, 2, 3); h = terrain_tetra_hash_edge(h, 0, 1); h = terrain_tetra_hash_edge(h, 2, 3); h = terrain_tetra_hash_edge(h, 0, 3); return h; }
+  if mask == 6  { h = terrain_tetra_hash_edge(h, 1, 0); h = terrain_tetra_hash_edge(h, 2, 0); h = terrain_tetra_hash_edge(h, 2, 3); h = terrain_tetra_hash_edge(h, 1, 0); h = terrain_tetra_hash_edge(h, 2, 3); h = terrain_tetra_hash_edge(h, 1, 3); return h; }
+  if mask == 9  { h = terrain_tetra_hash_edge(h, 0, 1); h = terrain_tetra_hash_edge(h, 3, 1); h = terrain_tetra_hash_edge(h, 3, 2); h = terrain_tetra_hash_edge(h, 0, 1); h = terrain_tetra_hash_edge(h, 3, 2); h = terrain_tetra_hash_edge(h, 0, 2); return h; }
+  if mask == 10 { h = terrain_tetra_hash_edge(h, 1, 0); h = terrain_tetra_hash_edge(h, 3, 0); h = terrain_tetra_hash_edge(h, 3, 2); h = terrain_tetra_hash_edge(h, 1, 0); h = terrain_tetra_hash_edge(h, 3, 2); h = terrain_tetra_hash_edge(h, 1, 2); return h; }
+  if mask == 12 { h = terrain_tetra_hash_edge(h, 2, 0); h = terrain_tetra_hash_edge(h, 3, 0); h = terrain_tetra_hash_edge(h, 3, 1); h = terrain_tetra_hash_edge(h, 2, 0); h = terrain_tetra_hash_edge(h, 3, 1); h = terrain_tetra_hash_edge(h, 2, 1); return h; }
+  return 0;
+}
+
+terrain_tetra_inside_outside_signature :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  mask := idx & 15;
+
+  d0 := ifx (mask & 1) != 0 then -1.0 else +1.0;
+  d1 := ifx (mask & 2) != 0 then -1.0 else +1.0;
+  d2 := ifx (mask & 4) != 0 then -1.0 else +1.0;
+  d3 := ifx (mask & 8) != 0 then -1.0 else +1.0;
+
+  candidate := terrain_tetra_candidate_signature(d0, d1, d2, d3);
+  reference := terrain_tetra_ref_signature(mask);
+  if candidate != reference {
+    values[idx] = 0x80000000 | idx;
+    return;
+  }
+  values[idx] = values[idx] + candidate + 1;
+} @compute_shader
+
+helper_scalar_arg_shadow_sig :: (d0: u32, d1: u32, d2: u32, d3: u32) -> u32 {
+  // Distinct weights make accidental argument aliasing obvious.
+  return d0 + d1 * 11 + d2 * 101 + d3 * 1009;
+}
+
+helper_scalar_arg_shadow_capture :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+
+  d0 := values[idx] & 7;
+  d1 := idx + 3;
+  d5 := idx * 5 + 1;
+  d6 := idx * 9 + 2;
+
+  // Third call arg intentionally references d1 while second helper arg is named d1.
+  // Broken inline arg binding can incorrectly capture d1 <- d5 here.
+  sig := helper_scalar_arg_shadow_sig(d0, d5, d1, d6);
+  values[idx] = values[idx] + sig + 1;
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {

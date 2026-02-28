@@ -295,6 +295,11 @@ IR_SPV_Gen_Const_F32 :: struct {
   id: s64;
 }
 
+IR_SPV_Gen_Const_Null :: struct {
+  type_id: s64;
+  id: s64;
+}
+
 IR_SPV_Gen_Buffer :: struct {
   name: string;
   var_id: s64;
@@ -357,6 +362,7 @@ IR_SPV_Gen_State :: struct {
   const_i64: [..] IR_SPV_Gen_Const_I64;
   const_u64: [..] IR_SPV_Gen_Const_U64;
   const_f32: [..] IR_SPV_Gen_Const_F32;
+  const_null: [..] IR_SPV_Gen_Const_Null;
   buffers: [..] IR_SPV_Gen_Buffer;
   uniform_blocks: [..] IR_SPV_Gen_Uniform_Block;
   loop_targets: [..] IR_SPV_Gen_Loop_Target;
@@ -939,6 +945,14 @@ get_f32_const :: (s: *IR_SPV_Gen_State, text: string) -> s64 {
   return id;
 }
 
+get_null_const :: (s: *IR_SPV_Gen_State, type_id: s64) -> s64 {
+  if type_id == 0 return 0;
+  for s.const_null if it.type_id == type_id return it.id;
+  id := new_id(s);
+  array_add(*s.const_null, .{type_id=type_id, id=id});
+  return id;
+}
+
 get_current_loop_target :: (s: *IR_SPV_Gen_State) -> (IR_SPV_Gen_Loop_Target, bool) {
   if s.loop_targets.count == 0 return .{}, false;
   return s.loop_targets[s.loop_targets.count-1], true;
@@ -1271,9 +1285,11 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
       return null, false, make_diag("local struct '%' field '%' type '%' has no function pointer type.", type_name, it.name, it.type_name);
     }
     field_ptr := new_id(s);
-    add_local_decl(s, tprint("         % = OpVariable % Function",
+    field_zero := get_null_const(s, type_id_from_kind(s, field_type));
+    add_local_decl(s, tprint("         % = OpVariable % Function %",
                              id_text(field_ptr),
-                             id_text(field_ptr_type)));
+                             id_text(field_ptr_type),
+                             id_text(field_zero)));
     add_debug_name(s, field_ptr, tprint("%.%", name, it.name));
     array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=field_type});
   }
@@ -1903,23 +1919,52 @@ eval_inline_function_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Function
         return 0, .UNKNOWN, false, true, make_diag("helper '%' if-condition must lower to bool.", helper.name);
       }
 
+      result_type_id := type_id_from_kind(s, return_kind);
+      if result_type_id == 0 {
+        return 0, .UNKNOWN, false, true, make_diag("helper '%' return type % is unsupported for if-return lowering.", helper.name, return_kind);
+      }
+
+      result_ptr_type := func_ptr_type_id_from_kind(s, return_kind);
+      if result_ptr_type == 0 {
+        return 0, .UNKNOWN, false, true, make_diag("helper '%' return type % has no function pointer type.", helper.name, return_kind);
+      }
+      result_ptr := new_id(s);
+      result_zero := get_null_const(s, result_type_id);
+      add_local_decl(s, tprint("         % = OpVariable % Function %",
+                               id_text(result_ptr),
+                               id_text(result_ptr_type),
+                               id_text(result_zero)));
+
+      then_label := new_id(s);
+      else_label := new_id(s);
+      merge_label := new_id(s);
+      add_op(s, tprint("OpSelectionMerge % None", id_text(merge_label)));
+      add_op(s, "OpBranchConditional", cond_id, then_label, else_label);
+
+      add_op(s, then_label, "OpLabel");
       then_id, then_type, then_ok, then_handled, then_diag := eval_return_block_value(s, helper, return_kind, stmt.if_then);
       if !then_handled return 0, .UNKNOWN, false, false, diag;
       if !then_ok return 0, .UNKNOWN, false, true, then_diag;
+      if then_type != return_kind {
+        return 0, .UNKNOWN, false, true, make_diag("helper '%' then-branch return type mismatch (expected %, got %).", helper.name, return_kind, then_type);
+      }
+      add_op(s, "OpStore", result_ptr, then_id);
+      if !spv_last_op_is_terminator(s.op_lines) add_op(s, "OpBranch", merge_label);
 
+      add_op(s, else_label, "OpLabel");
       else_id, else_type, else_ok, else_handled, else_diag := eval_return_block_value(s, helper, return_kind, stmt.if_else);
       if !else_handled return 0, .UNKNOWN, false, false, diag;
       if !else_ok return 0, .UNKNOWN, false, true, else_diag;
-      if then_type != else_type {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' if-return branches must resolve to same type.", helper.name);
+      if else_type != return_kind {
+        return 0, .UNKNOWN, false, true, make_diag("helper '%' else-branch return type mismatch (expected %, got %).", helper.name, return_kind, else_type);
       }
-      result_type_id := type_id_from_kind(s, then_type);
-      if result_type_id == 0 {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' return type % is unsupported for OpSelect.", helper.name, then_type);
-      }
+      add_op(s, "OpStore", result_ptr, else_id);
+      if !spv_last_op_is_terminator(s.op_lines) add_op(s, "OpBranch", merge_label);
+
+      add_op(s, merge_label, "OpLabel");
       selected := new_id(s);
-      add_op(s, selected, "OpSelect", result_type_id, cond_id, then_id, else_id);
-      return selected, then_type, true, true, diag;
+      add_op(s, selected, "OpLoad", result_type_id, result_ptr);
+      return selected, return_kind, true, true, diag;
     }
 
     return 0, .UNKNOWN, false, false, diag;
@@ -1985,6 +2030,30 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
   return true, true, diag;
 }
 
+bind_inline_function_scalar_arg_with_value :: (s: *IR_SPV_Gen_State, function_name: string, arg: IR_Function_Arg, final_value: s64, final_type: IR_SPV_Gen_Type, arg_type: IR_SPV_Gen_Type) -> (ok: bool, handled: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if arg_type == .UNKNOWN || arg_type == .STRUCT return true, false, diag;
+
+  if final_type != arg_type {
+    return false, true, make_diag("helper '%' arg '%' type mismatch (expected %, got %).", function_name, arg.name, arg_type, final_type);
+  }
+
+  arg_ptr_type := func_ptr_type_id_from_kind(s, arg_type);
+  if arg_ptr_type == 0 {
+    return false, true, make_diag("helper '%' arg '%' type '%' has no function pointer representation.", function_name, arg.name, arg_type);
+  }
+  arg_ptr := new_id(s);
+  arg_zero := get_null_const(s, type_id_from_kind(s, arg_type));
+  add_local_decl(s, tprint("         % = OpVariable % Function %",
+                           id_text(arg_ptr),
+                           id_text(arg_ptr_type),
+                           id_text(arg_zero)));
+  add_debug_name(s, arg_ptr, arg.name);
+  add_op(s, "OpStore", arg_ptr, final_value);
+  array_add(*s.locals, .{name=arg.name, ptr_id=arg_ptr, type=arg_type});
+  return true, true, diag;
+}
+
 bind_inline_function_scalar_arg :: (s: *IR_SPV_Gen_State, function_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (ok: bool, handled: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
   arg_type := spv_kind_from_ir_type_kind(arg.type.kind);
@@ -2018,22 +2087,8 @@ bind_inline_function_scalar_arg :: (s: *IR_SPV_Gen_State, function_name: string,
     final_type = .FLOAT4;
   }
 
-  if final_type != arg_type {
-    return false, true, make_diag("helper '%' arg '%' type mismatch (expected %, got %).", function_name, arg.name, arg_type, final_type);
-  }
-
-  arg_ptr_type := func_ptr_type_id_from_kind(s, arg_type);
-  if arg_ptr_type == 0 {
-    return false, true, make_diag("helper '%' arg '%' type '%' has no function pointer representation.", function_name, arg.name, arg_type);
-  }
-  arg_ptr := new_id(s);
-  add_local_decl(s, tprint("         % = OpVariable % Function",
-                           id_text(arg_ptr),
-                           id_text(arg_ptr_type)));
-  add_debug_name(s, arg_ptr, arg.name);
-  add_op(s, "OpStore", arg_ptr, final_value);
-  array_add(*s.locals, .{name=arg.name, ptr_id=arg_ptr, type=arg_type});
-  return true, true, diag;
+  bind_ok, bind_handled, bind_diag := bind_inline_function_scalar_arg_with_value(s, function_name, arg, final_value, final_type, arg_type);
+  return bind_ok, bind_handled, bind_diag;
 }
 
 bind_inline_function_struct_arg :: (s: *IR_SPV_Gen_State, function_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
@@ -2102,9 +2157,11 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
   ptr_id := new_id(s);
   add_debug_name(s, array_type_id, tprint("%_array", arg.name));
   add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", arg.name));
-  add_local_decl(s, tprint("         % = OpVariable % Function",
+  array_zero := get_null_const(s, array_type_id);
+  add_local_decl(s, tprint("         % = OpVariable % Function %",
                            id_text(ptr_id),
-                           id_text(ptr_func_array_type_id)));
+                           id_text(ptr_func_array_type_id),
+                           id_text(array_zero)));
   add_debug_name(s, ptr_id, arg.name);
   array_add(*s.local_arrays, .{
     name = arg.name,
@@ -2179,12 +2236,74 @@ bind_inline_function_args :: (s: *IR_SPV_Gen_State, ir_function: *IR_Function, c
     return false, make_diag("helper '%' expected % args but got %.", ir_function.name, ir_function.args.count, call_args.count);
   }
 
+  Inline_Scalar_Arg_Capture :: struct {
+    captured: bool;
+    arg_type: IR_SPV_Gen_Type;
+    value_type: IR_SPV_Gen_Type;
+    value_id: s64;
+  }
+  scalar_captures: [..] Inline_Scalar_Arg_Capture;
+  for call_args array_add(*scalar_captures, .{});
+
+  // Pre-evaluate scalar call args before introducing helper parameter locals.
+  // This prevents accidental capture of earlier helper args when later call
+  // args reference identifiers with matching names.
+  for ir_function.args {
+    arg_expr := call_args[it_index];
+    arg_type := spv_kind_from_ir_type_kind(it.type.kind);
+    if arg_type == .UNKNOWN arg_type = expr_type_from_decl(it.type_name);
+    if arg_type == .UNKNOWN || arg_type == .STRUCT continue;
+
+    value_id, value_type, value_ok, value_diag := emit_expr(s, arg_expr);
+    if !value_ok return false, value_diag;
+
+    final_value := value_id;
+    final_type := value_type;
+    if arg_type == .FLOAT || is_integral_kind(arg_type) || arg_type == .BOOL {
+      coerced, coerced_ok, coerced_diag := coerce_to_kind(s, value_id, value_type, arg_type);
+      if !coerced_ok return false, coerced_diag;
+      final_value = coerced;
+      final_type = arg_type;
+    } else if arg_type == .FLOAT2 && value_type != .FLOAT2 {
+      coerced, coerced_ok, coerced_diag := coerce_to_float2(s, value_id, value_type);
+      if !coerced_ok return false, coerced_diag;
+      final_value = coerced;
+      final_type = .FLOAT2;
+    } else if arg_type == .FLOAT3 && value_type != .FLOAT3 {
+      coerced, coerced_ok, coerced_diag := coerce_to_float3(s, value_id, value_type);
+      if !coerced_ok return false, coerced_diag;
+      final_value = coerced;
+      final_type = .FLOAT3;
+    } else if arg_type == .FLOAT4 && value_type != .FLOAT4 {
+      coerced, coerced_ok, coerced_diag := coerce_to_float4(s, value_id, value_type);
+      if !coerced_ok return false, coerced_diag;
+      final_value = coerced;
+      final_type = .FLOAT4;
+    }
+
+    scalar_captures[it_index] = .{
+      captured = true,
+      arg_type = arg_type,
+      value_type = final_type,
+      value_id = final_value,
+    };
+  }
+
   for ir_function.args {
     arg_expr := call_args[it_index];
     pointer_handled, pointer_ok, pointer_diag := bind_inline_helper_pointer_arg(s, ir_function.name, it, arg_expr);
     if pointer_handled {
       if !pointer_ok return false, pointer_diag;
       continue;
+    }
+
+    if scalar_captures[it_index].captured {
+      capture := scalar_captures[it_index];
+      scalar_ok, scalar_handled, scalar_diag := bind_inline_function_scalar_arg_with_value(s, ir_function.name, it, capture.value_id, capture.value_type, capture.arg_type);
+      if scalar_handled {
+        if !scalar_ok return false, scalar_diag;
+        continue;
+      }
     }
 
     scalar_ok, scalar_handled, scalar_diag := bind_inline_function_scalar_arg(s, ir_function.name, it, arg_expr);
@@ -2268,9 +2387,11 @@ eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_a
 
   helper_exit_label := new_id(s);
   helper_return_flag_ptr := new_id(s);
-  add_local_decl(s, tprint("         % = OpVariable % Function",
+  helper_return_flag_zero := get_null_const(s, s.id_bool);
+  add_local_decl(s, tprint("         % = OpVariable % Function %",
                            id_text(helper_return_flag_ptr),
-                           id_text(s.id_ptr_func_bool)));
+                           id_text(s.id_ptr_func_bool),
+                           id_text(helper_return_flag_zero)));
   add_debug_name(s, helper_return_flag_ptr, tprint("__helper_returned_%", helper.name));
   add_op(s, "OpStore", helper_return_flag_ptr, s.id_bool_false);
 
@@ -2486,9 +2607,11 @@ ensure_select_result_storage :: (s: *IR_SPV_Gen_State, result_type: IR_SPV_Gen_T
     return false, make_diag("select expression pointer type % is unsupported.", result_type);
   }
   result_ptr_id.* = new_id(s);
-  add_local_decl(s, tprint("         % = OpVariable % Function",
+  result_zero := get_null_const(s, result_type_id.*);
+  add_local_decl(s, tprint("         % = OpVariable % Function %",
                            id_text(result_ptr_id.*),
-                           id_text(result_ptr_type_id.*)));
+                           id_text(result_ptr_type_id.*),
+                           id_text(result_zero)));
   return true, diag;
 }
 
@@ -3847,9 +3970,11 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         ptr_id := new_id(s);
         ptr_type_id := func_ptr_type_id_from_kind(s, decl_type);
         assert(ptr_type_id != 0);
-        add_local_decl(s, tprint("         % = OpVariable % Function",
+        local_zero := get_null_const(s, type_id_from_kind(s, decl_type));
+        add_local_decl(s, tprint("         % = OpVariable % Function %",
                                  id_text(ptr_id),
-                                 id_text(ptr_type_id)));
+                                 id_text(ptr_type_id),
+                                 id_text(local_zero)));
         add_debug_name(s, ptr_id, stmt.decl_name);
         array_add(*s.locals, .{name=stmt.decl_name, ptr_id=ptr_id, type=decl_type});
         if stmt.decl_init {
@@ -3886,9 +4011,11 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         ptr_id := new_id(s);
         add_debug_name(s, array_type_id, tprint("%_array", stmt.decl_name));
         add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", stmt.decl_name));
-        add_local_decl(s, tprint("         % = OpVariable % Function",
+        array_zero := get_null_const(s, array_type_id);
+        add_local_decl(s, tprint("         % = OpVariable % Function %",
                                  id_text(ptr_id),
-                                 id_text(ptr_func_array_type_id)));
+                                 id_text(ptr_func_array_type_id),
+                                 id_text(array_zero)));
         add_debug_name(s, ptr_id, stmt.decl_name);
         array_add(*s.local_arrays, .{
           name = stmt.decl_name,
@@ -4347,9 +4474,11 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       loop_ptr := new_id(s);
       loop_ptr_type_id := func_ptr_type_id_from_kind(s, start_type);
       if loop_ptr_type_id == 0 return_err("for-loop start type is unsupported (%).", start_type);
-      add_local_decl(s, tprint("         % = OpVariable % Function",
+      loop_zero := get_null_const(s, type_id_from_kind(s, start_type));
+      add_local_decl(s, tprint("         % = OpVariable % Function %",
                                           id_text(loop_ptr),
-                                          id_text(loop_ptr_type_id)));
+                                          id_text(loop_ptr_type_id),
+                                          id_text(loop_zero)));
       add_debug_name(s, loop_ptr, loop_name);
       array_add(*s.locals, .{name=loop_name, ptr_id=loop_ptr, type=start_type});
       add_op(s, "OpStore", loop_ptr, start_id);
