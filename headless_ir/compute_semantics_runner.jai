@@ -36,6 +36,11 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"vector_scalar_mix", .Bare},
   {"helper_return_member_on_call", .Bare},
   {"helper_return_assign_local", .Bare},
+  {"helper_void_call_statement", .Bare},
+  {"helper_void_nested_return", .Bare},
+  {"helper_void_switch_return", .Bare},
+  {"local_float3_array_roundtrip", .Bare},
+  {"helper_float3_array_arg", .Bare},
   {"buffer_struct_copy_temp", .Boids},
   {"unary_not_bool", .Bare},
   {"unary_bit_not", .Bare},
@@ -1473,6 +1478,103 @@ matrix_ctor_scalar_chain :: (using in: Compute_Semantics_In, values: *u32) {
 helper_make_vec4 :: (x: float) -> Vector4 {
   return Vector4.{x + 1.0, x * 0.5 + 2.0, x * 0.25 + 3.0, 1.0};
 }
+
+helper_add_bias_void :: (values: *u32, idx: u32, bias: u32) {
+  values[idx] += bias;
+}
+
+helper_void_call_statement :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  base := values[idx];
+  helper_add_bias_void(values, idx, (idx % 5) + 3);
+  values[idx] = values[idx] + base * 2 + 1;
+} @compute_shader
+
+helper_add_with_nested_return :: (values: *u32, idx: u32) {
+  values[idx] += 2;
+  if (idx % 4) == 0 {
+    return;
+  }
+
+  i: u32 = 0;
+  while i < 3 {
+    if i == (idx % 3) {
+      values[idx] += 5;
+      return;
+    }
+    values[idx] += i + 1;
+    i += 1;
+  }
+
+  values[idx] += 11;
+}
+
+helper_void_nested_return :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  base := values[idx];
+  helper_add_with_nested_return(values, idx);
+  values[idx] = values[idx] + base * 3 + 7;
+} @compute_shader
+
+helper_add_with_switch_return :: (values: *u32, idx: u32) {
+  values[idx] += 1;
+  if idx % 5 == {
+    case 0;
+      values[idx] += 40;
+      return;
+    case 1;
+      values[idx] += 30;
+      #through;
+    case 2;
+      values[idx] += 20;
+      return;
+    case;
+      values[idx] += 10;
+  }
+  values[idx] += 3;
+}
+
+helper_void_switch_return :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  base := values[idx];
+  helper_add_with_switch_return(values, idx);
+  values[idx] = values[idx] + base * 4 + 5;
+} @compute_shader
+
+local_float3_array_roundtrip :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  a: [4]Vector3;
+  a[0] = .{1.0, 2.0, 3.0};
+  a[1] = .{4.0, 5.0, 6.0};
+  a[2] = .{7.0, 8.0, 9.0};
+  a[3] = .{10.0, 11.0, 12.0};
+  j0 := idx % 4;
+  j1 := (idx + 1) % 4;
+  v := a[j0] + a[j1] * 0.5;
+  values[idx] = cast(u32) floor(v.x * 5.0 + v.y * 3.0 + v.z * 2.0 + cast(float) idx);
+} @compute_shader
+
+helper_float3_array_arg_inner :: (arr: [4]Vector3, idx: u32) -> u32 {
+  a := arr[idx % 4];
+  b := arr[(idx + 2) % 4];
+  v := a * 0.75 + b * 0.25;
+  return cast(u32) floor(v.x * 7.0 + v.y * 5.0 + v.z * 3.0 + cast(float) idx);
+}
+
+helper_float3_array_arg :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  a: [4]Vector3;
+  a[0] = .{2.0, 4.0, 6.0};
+  a[1] = .{8.0, 10.0, 12.0};
+  a[2] = .{14.0, 16.0, 18.0};
+  a[3] = .{20.0, 22.0, 24.0};
+  values[idx] = helper_float3_array_arg_inner(a, idx);
+} @compute_shader
 
 helper_vector_return_swizzle :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;

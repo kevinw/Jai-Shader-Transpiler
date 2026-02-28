@@ -329,6 +329,11 @@ IR_SPV_Gen_Debug_Member_Name :: struct {
   name: string;
 }
 
+IR_SPV_Inline_Helper_Context :: struct {
+  exit_label: s64;
+  return_flag_ptr: s64;
+}
+
 IR_SPV_PS_Struct_Info :: struct {
   name: string;
   prefix: string;
@@ -356,6 +361,9 @@ IR_SPV_Gen_State :: struct {
   uniform_blocks: [..] IR_SPV_Gen_Uniform_Block;
   loop_targets: [..] IR_SPV_Gen_Loop_Target;
   break_targets: [..] s64;
+  control_merge_targets: [..] s64;
+  inline_return_targets: [..] s64;
+  inline_helper_contexts: [..] IR_SPV_Inline_Helper_Context;
   functions: [] IR_Function;
   extra_structs: [..] IR_Struct;
   local_var_lines: [..] string;
@@ -938,6 +946,21 @@ get_current_loop_target :: (s: *IR_SPV_Gen_State) -> (IR_SPV_Gen_Loop_Target, bo
 get_current_break_target :: (s: *IR_SPV_Gen_State) -> (s64, bool) {
   if s.break_targets.count == 0 return 0, false;
   return s.break_targets[s.break_targets.count-1], true;
+}
+
+get_current_inline_return_target :: (s: *IR_SPV_Gen_State) -> (s64, bool) {
+  if s.inline_return_targets.count == 0 return 0, false;
+  return s.inline_return_targets[s.inline_return_targets.count-1], true;
+}
+
+get_current_control_merge_target :: (s: *IR_SPV_Gen_State) -> (s64, bool) {
+  if s.control_merge_targets.count == 0 return 0, false;
+  return s.control_merge_targets[s.control_merge_targets.count-1], true;
+}
+
+get_current_inline_helper_context :: (s: *IR_SPV_Gen_State) -> (IR_SPV_Inline_Helper_Context, bool) {
+  if s.inline_helper_contexts.count == 0 return .{}, false;
+  return s.inline_helper_contexts[s.inline_helper_contexts.count-1], true;
 }
 
 // -----------------------------------------------------------------------------
@@ -2015,6 +2038,111 @@ bind_inline_function_struct_arg :: (s: *IR_SPV_Gen_State, function_name: string,
   return true, diag;
 }
 
+bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (ok: bool, handled: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if !s return false, false, make_diag("null SPIR-V state while binding helper array arg.");
+
+  array_elem_type_name: string;
+  array_count: s64;
+  is_fixed_array := arg.type.kind == .FIXED_ARRAY;
+  elem_type := spv_kind_from_ir_type_kind(arg.type.element_kind);
+  if is_fixed_array {
+    array_elem_type_name = arg.type.element_display_name;
+    array_count = arg.type.array_count;
+    if elem_type == .UNKNOWN {
+      elem_type = expr_type_from_decl(array_elem_type_name);
+    }
+  } else {
+    array_elem_type_name, array_count, is_fixed_array = parse_fixed_array_type_name(arg.type_name);
+    if is_fixed_array {
+      elem_type = expr_type_from_decl(array_elem_type_name);
+    }
+  }
+  if !is_fixed_array return false, false, diag;
+
+  if elem_type == .UNKNOWN || elem_type == .STRUCT {
+    return false, true, make_diag("helper '%' fixed array arg '%' has unsupported element type '%'.", function_name, arg.name, array_elem_type_name);
+  }
+  if array_count <= 0 || array_count > 0xFFFF_FFFF {
+    return false, true, make_diag("helper '%' fixed array arg '%' has invalid count %.", function_name, arg.name, array_count);
+  }
+
+  count_const_id := get_u32_const(s, cast(u32) array_count);
+  array_type_id := new_id(s);
+  ptr_func_array_type_id := new_id(s);
+  ptr_id := new_id(s);
+  add_debug_name(s, array_type_id, tprint("%_array", arg.name));
+  add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", arg.name));
+  add_local_decl(s, tprint("         % = OpVariable % Function",
+                           id_text(ptr_id),
+                           id_text(ptr_func_array_type_id)));
+  add_debug_name(s, ptr_id, arg.name);
+  array_add(*s.local_arrays, .{
+    name = arg.name,
+    element_type = elem_type,
+    count = array_count,
+    var_id = ptr_id,
+    array_type_id = array_type_id,
+    ptr_func_array_type_id = ptr_func_array_type_id,
+    count_const_id = count_const_id,
+  });
+  array_add(*s.local_array_types, .{
+    name = arg.name,
+    element_type = elem_type,
+    count = array_count,
+    var_id = ptr_id,
+    array_type_id = array_type_id,
+    ptr_func_array_type_id = ptr_func_array_type_id,
+    count_const_id = count_const_id,
+  });
+
+  elem_ptr_type_id := func_ptr_type_id_from_kind(s, elem_type);
+  if elem_ptr_type_id == 0 {
+    return false, true, make_diag("helper '%' fixed array arg '%' element type '%' has no function pointer type.", function_name, arg.name, elem_type);
+  }
+
+  if arg_expr && arg_expr.kind == .IDENT {
+    src_array := find_local_array(s, arg_expr.text);
+    if !src_array {
+      return false, true, make_diag("helper '%' fixed array arg '%' source '%' is not a local array.", function_name, arg.name, arg_expr.text);
+    }
+    if src_array.count != array_count || src_array.element_type != elem_type {
+      return false, true, make_diag("helper '%' fixed array arg '%' source '%' type mismatch.", function_name, arg.name, arg_expr.text);
+    }
+    type_id := type_id_from_kind(s, elem_type);
+    for i: 0..array_count-1 {
+      idx_const := get_u32_const(s, cast(u32) i);
+      src_ptr := new_id(s);
+      dst_ptr := new_id(s);
+      add_op(s, src_ptr, "OpAccessChain", elem_ptr_type_id, src_array.var_id, idx_const);
+      add_op(s, dst_ptr, "OpAccessChain", elem_ptr_type_id, ptr_id, idx_const);
+      src_value := new_id(s);
+      add_op(s, src_value, "OpLoad", type_id, src_ptr);
+      add_op(s, "OpStore", dst_ptr, src_value);
+    }
+    return true, true, diag;
+  }
+
+  if arg_expr && arg_expr.kind == .ARRAY_LITERAL {
+    if arg_expr.args.count != array_count {
+      return false, true, make_diag("helper '%' fixed array arg '%' literal count mismatch (expected %, got %).", function_name, arg.name, array_count, arg_expr.args.count);
+    }
+    for arg_expr.args {
+      value_id, value_type, value_ok, value_diag := emit_expr(s, it);
+      if !value_ok return false, true, value_diag;
+      value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, elem_type);
+      if !value_ok return false, true, value_diag;
+      idx_const := get_u32_const(s, cast(u32) it_index);
+      dst_ptr := new_id(s);
+      add_op(s, dst_ptr, "OpAccessChain", elem_ptr_type_id, ptr_id, idx_const);
+      add_op(s, "OpStore", dst_ptr, value_id);
+    }
+    return true, true, diag;
+  }
+
+  return false, true, make_diag("helper '%' fixed array arg '%' must be passed as local array identifier or array literal.", function_name, arg.name);
+}
+
 bind_inline_function_args :: (s: *IR_SPV_Gen_State, ir_function: *IR_Function, call_args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
   if !ir_function return false, make_diag("missing function metadata for inline call.");
   
@@ -2036,6 +2164,12 @@ bind_inline_function_args :: (s: *IR_SPV_Gen_State, ir_function: *IR_Function, c
       continue;
     }
 
+    array_ok, array_handled, array_diag := bind_inline_function_fixed_array_arg(s, ir_function.name, it, arg_expr);
+    if array_handled {
+      if !array_ok return false, array_diag;
+      continue;
+    }
+
     struct_ok, struct_diag := bind_inline_function_struct_arg(s, ir_function.name, it, arg_expr);
     if !struct_ok return false, struct_diag;
   }
@@ -2054,10 +2188,12 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
   }
 
   local_count_before := s.locals.count;
+  local_array_count_before := s.local_arrays.count;
   local_struct_count_before := s.local_structs.count;
   buffer_count_before := s.buffers.count;
   defer {
     s.locals.count = local_count_before;
+    s.local_arrays.count = local_array_count_before;
     s.local_structs.count = local_struct_count_before;
     s.buffers.count = buffer_count_before;
   }
@@ -2072,6 +2208,75 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
   }
   if !return_ok return 0, .UNKNOWN, false, return_diag;
   return return_id, return_type, true, {};
+}
+
+helper_returns_void :: (helper: *IR_Function) -> bool {
+  if !helper return false;
+  if helper.return_type_name == "void" return true;
+  return false;
+}
+
+eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  if !helper return false, make_diag("missing helper metadata for inline void call.");
+  if !helper_returns_void(helper) {
+    return false, make_diag("helper '%' is not a void helper.", helper.name);
+  }
+
+  local_count_before := s.locals.count;
+  local_array_count_before := s.local_arrays.count;
+  local_struct_count_before := s.local_structs.count;
+  buffer_count_before := s.buffers.count;
+  defer {
+    s.locals.count = local_count_before;
+    s.local_arrays.count = local_array_count_before;
+    s.local_structs.count = local_struct_count_before;
+    s.buffers.count = buffer_count_before;
+  }
+
+  bind_ok, bind_diag := bind_inline_function_args(s, helper, call_args);
+  if !bind_ok return false, bind_diag;
+
+  helper_exit_label := new_id(s);
+  helper_return_flag_ptr := new_id(s);
+  add_local_decl(s, tprint("         % = OpVariable % Function",
+                           id_text(helper_return_flag_ptr),
+                           id_text(s.id_ptr_func_bool)));
+  add_debug_name(s, helper_return_flag_ptr, tprint("__helper_returned_%", helper.name));
+  add_op(s, "OpStore", helper_return_flag_ptr, s.id_bool_false);
+
+  array_add(*s.inline_return_targets, helper_exit_label);
+  array_add(*s.inline_helper_contexts, .{exit_label=helper_exit_label, return_flag_ptr=helper_return_flag_ptr});
+  for helper.body.statements {
+    guard_body_label := new_id(s);
+    guard_merge_label := new_id(s);
+    guard_flag_id := new_id(s);
+    add_op(s, guard_flag_id, "OpLoad", s.id_bool, helper_return_flag_ptr);
+    add_op(s, tprint("OpSelectionMerge % None", id_text(guard_merge_label)));
+    add_op(s, "OpBranchConditional", guard_flag_id, guard_merge_label, guard_body_label);
+    add_op(s, guard_body_label, "OpLabel");
+    array_add(*s.control_merge_targets, guard_merge_label);
+
+    stmt_ok, stmt_terminated, stmt_diag := emit_stmt(s, *it);
+    if !stmt_ok {
+      if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
+      if s.inline_helper_contexts.count > 0 s.inline_helper_contexts.count -= 1;
+      if s.inline_return_targets.count > 0 s.inline_return_targets.count -= 1;
+      return false, stmt_diag;
+    }
+    if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
+    if !stmt_terminated {
+      add_op(s, "OpBranch", guard_merge_label);
+    }
+    add_op(s, guard_merge_label, "OpLabel");
+  }
+  if s.inline_helper_contexts.count > 0 s.inline_helper_contexts.count -= 1;
+  if s.inline_return_targets.count > 0 s.inline_return_targets.count -= 1;
+
+  add_op(s, "OpBranch", helper_exit_label);
+  add_op(s, helper_exit_label, "OpLabel");
+
+  return true, {};
 }
 
 eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr, out_struct: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
@@ -2092,10 +2297,12 @@ eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, c
   }
 
   local_count_before := s.locals.count;
+  local_array_count_before := s.local_arrays.count;
   local_struct_count_before := s.local_structs.count;
   buffer_count_before := s.buffers.count;
   defer {
     s.locals.count = local_count_before;
+    s.local_arrays.count = local_array_count_before;
     s.local_structs.count = local_struct_count_before;
     s.buffers.count = buffer_count_before;
   }
@@ -3940,10 +4147,14 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 
       add_op(s, tprint("OpSelectionMerge % None", id_text(merge_label)));
       add_op(s, "OpBranchConditional", cond_id, then_label, else_label);
+      array_add(*s.control_merge_targets, merge_label);
 
       add_op(s, then_label, "OpLabel");
       then_ok, then_terminated, then_diag := emit_stmt_block(s, stmt.if_then);
-      if !then_ok return false, false, then_diag;
+      if !then_ok {
+        if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
+        return false, false, then_diag;
+      }
       if !then_terminated {
         add_op(s, "OpBranch", merge_label);
       }
@@ -3953,11 +4164,15 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         add_op(s, else_label, "OpLabel");
         else_ok, local_else_terminated, else_diag := emit_stmt_block(s, stmt.if_else);
         else_terminated = local_else_terminated;
-        if !else_ok return false, false, else_diag;
+        if !else_ok {
+          if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
+          return false, false, else_diag;
+        }
         if !else_terminated {
           add_op(s, "OpBranch", merge_label);
         }
       }
+      if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
 
       add_op(s, merge_label, "OpLabel");
       all_terminated := false;
@@ -3965,6 +4180,16 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         all_terminated = then_terminated && else_terminated;
       }
       if all_terminated {
+        _, has_inline_helper_context := get_current_inline_helper_context(s);
+        if has_inline_helper_context {
+          parent_merge_label, has_parent_merge_label := get_current_control_merge_target(s);
+          if has_parent_merge_label {
+            add_op(s, "OpBranch", parent_merge_label);
+          } else {
+            add_op(s, "               OpUnreachable");
+          }
+          return true, true, diag;
+        }
         // Keep a concrete merge block for structured control flow, but terminate it
         // so the next emitted label starts a fresh basic block.
         add_op(s, "               OpUnreachable");
@@ -3999,15 +4224,18 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       add_op(s, builder_to_string(*switch_line_sb));
 
       array_add(*s.break_targets, merge_label);
+      array_add(*s.control_merge_targets, merge_label);
       for stmt.switch_cases {
         case_block := it.body;
         if !case_block {
+          if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
           if s.break_targets.count > 0 s.break_targets.count -= 1;
           return_err("switch case body is missing.");
         }
         add_op(s, case_labels[it_index], "OpLabel");
         case_ok, case_terminated, case_diag := emit_stmt_block(s, case_block);
         if !case_ok {
+          if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
           if s.break_targets.count > 0 s.break_targets.count -= 1;
           return false, false, case_diag;
         }
@@ -4019,6 +4247,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           add_op(s, "OpBranch", target_label);
         }
       }
+      if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
       if s.break_targets.count > 0 s.break_targets.count -= 1;
 
       add_op(s, merge_label, "OpLabel");
@@ -4071,7 +4300,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       add_op(s, body_label, "OpLabel");
       array_add(*s.break_targets, merge_label);
       array_add(*s.loop_targets, .{merge_label=merge_label, continue_label=continue_label});
+      array_add(*s.control_merge_targets, merge_label);
       body_ok, body_terminated, body_diag := emit_stmt_block(s, stmt.for_body);
+      if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
       if s.loop_targets.count > 0 s.loop_targets.count -= 1;
       if s.break_targets.count > 0 s.break_targets.count -= 1;
       if !body_ok return false, false, body_diag;
@@ -4128,7 +4359,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       add_op(s, body_label, "OpLabel");
       array_add(*s.break_targets, merge_label);
       array_add(*s.loop_targets, .{merge_label=merge_label, continue_label=continue_label});
+      array_add(*s.control_merge_targets, merge_label);
       body_ok, body_terminated, body_diag := emit_stmt_block(s, stmt.while_body);
+      if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
       if s.loop_targets.count > 0 s.loop_targets.count -= 1;
       if s.break_targets.count > 0 s.break_targets.count -= 1;
       if !body_ok return false, false, body_diag;
@@ -4174,12 +4407,46 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return true, false, diag;
       }
 
+      helper := find_function(s, callee);
+      if helper && helper_returns_void(helper) {
+        call_ok, call_diag := eval_inline_function_void(s, helper, stmt.call_expr.args);
+        if !call_ok return false, false, call_diag;
+        return true, false, diag;
+      }
+
       _, _, call_ok, call_diag := emit_expr(s, stmt.call_expr);
       if !call_ok return false, false, call_diag;
       return true, false, diag;
     }
 
     case .RETURN; {
+      inline_helper_context, has_inline_helper_context := get_current_inline_helper_context(s);
+      if has_inline_helper_context {
+        if stmt.return_expr {
+          return_err("inline void helper return cannot return a value.");
+        }
+        add_op(s, "OpStore", inline_helper_context.return_flag_ptr, s.id_bool_true);
+        branch_target := inline_helper_context.exit_label;
+        break_target, has_break_target := get_current_break_target(s);
+        if has_break_target {
+          branch_target = break_target;
+        } else {
+          merge_target, has_merge_target := get_current_control_merge_target(s);
+          if has_merge_target branch_target = merge_target;
+        }
+        add_op(s, "OpBranch", branch_target);
+        return true, true, diag;
+      }
+
+      inline_return_target, has_inline_return_target := get_current_inline_return_target(s);
+      if has_inline_return_target {
+        if stmt.return_expr {
+          return_err("inline helper return cannot return a value.");
+        }
+        add_op(s, "OpBranch", inline_return_target);
+        return true, true, diag;
+      }
+
       if s.stage == .COMPUTE {
         if stmt.return_expr {
           return_err("return with value is not supported yet for compute.");

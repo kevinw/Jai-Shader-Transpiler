@@ -1,4 +1,4 @@
-USE_NATIVE_DLL :: true;
+USE_NATIVE_DLL :: false;
 #if USE_NATIVE_DLL {
     #import,dir "./modules/ir_pipe";
 } else {
