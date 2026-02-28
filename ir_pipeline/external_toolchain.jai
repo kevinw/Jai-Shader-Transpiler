@@ -38,7 +38,7 @@ validate_spirv_binary :: (spv_path: string) -> bool #c_call {
     push_context,defer_pop;
   return ir_run_command_checked(
     tprint("spirv-val %", spv_path),
-    .["spirv-val", "--target-env", "vulkan1.2", spv_path]);
+    .["spirv-val", "--target-env", "vulkan1.2", "--scalar-block-layout", spv_path]);
 }
 
 #program_export

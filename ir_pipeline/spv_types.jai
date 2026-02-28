@@ -20,6 +20,7 @@ IR_SPV_Id_Slot :: enum {
   PTR_STORAGE_FLOAT;
   PTR_STORAGE_FLOAT2;
   PTR_STORAGE_FLOAT3;
+  PTR_STORAGE_FLOAT4;
 
   PTR_INPUT_UINT;
   PTR_INPUT_FLOAT;
@@ -74,7 +75,7 @@ SPV_KIND_INFO :: IR_SPV_Kind_Info.[
   .{kind=.FLOAT,  type_slot=.TYPE_FLOAT,  storage_ptr_slot=.PTR_STORAGE_FLOAT,  input_ptr_slot=.PTR_INPUT_FLOAT, output_ptr_slot=.PTR_OUTPUT_FLOAT,  uniform_ptr_slot=.PTR_UNIFORM_FLOAT,  func_ptr_slot=.PTR_FUNC_FLOAT,  byte_size=4,  is_integral=false, is_signed=false},
   .{kind=.FLOAT2, type_slot=.TYPE_FLOAT2, storage_ptr_slot=.PTR_STORAGE_FLOAT2, input_ptr_slot=.PTR_INPUT_FLOAT2, output_ptr_slot=.PTR_OUTPUT_FLOAT2, uniform_ptr_slot=.PTR_UNIFORM_FLOAT2, func_ptr_slot=.PTR_FUNC_FLOAT2, byte_size=8,  is_integral=false, is_signed=false},
   .{kind=.FLOAT3, type_slot=.TYPE_FLOAT3, storage_ptr_slot=.PTR_STORAGE_FLOAT3, input_ptr_slot=.PTR_INPUT_FLOAT3, output_ptr_slot=.PTR_OUTPUT_FLOAT3, uniform_ptr_slot=.PTR_UNIFORM_FLOAT3, func_ptr_slot=.PTR_FUNC_FLOAT3, byte_size=12, is_integral=false, is_signed=false},
-  .{kind=.FLOAT4, type_slot=.TYPE_FLOAT4, storage_ptr_slot=.NONE,               input_ptr_slot=.PTR_INPUT_FLOAT4, output_ptr_slot=.PTR_OUTPUT_FLOAT4, uniform_ptr_slot=.PTR_UNIFORM_FLOAT4, func_ptr_slot=.PTR_FUNC_FLOAT4, byte_size=16, is_integral=false, is_signed=false},
+  .{kind=.FLOAT4, type_slot=.TYPE_FLOAT4, storage_ptr_slot=.PTR_STORAGE_FLOAT4, input_ptr_slot=.PTR_INPUT_FLOAT4, output_ptr_slot=.PTR_OUTPUT_FLOAT4, uniform_ptr_slot=.PTR_UNIFORM_FLOAT4, func_ptr_slot=.PTR_FUNC_FLOAT4, byte_size=16, is_integral=false, is_signed=false},
   .{kind=.FLOAT2X2, type_slot=.TYPE_FLOAT2X2, storage_ptr_slot=.NONE,           input_ptr_slot=.NONE,             output_ptr_slot=.NONE,               uniform_ptr_slot=.NONE,               func_ptr_slot=.PTR_FUNC_FLOAT2X2, byte_size=0, is_integral=false, is_signed=false},
   .{kind=.BOOL,   type_slot=.TYPE_BOOL,   storage_ptr_slot=.NONE,               input_ptr_slot=.NONE,             output_ptr_slot=.NONE,               uniform_ptr_slot=.NONE,               func_ptr_slot=.PTR_FUNC_BOOL,   byte_size=0,  is_integral=false, is_signed=false},
 ];
@@ -133,6 +134,7 @@ state_id_from_slot :: (s: *IR_SPV_Gen_State, slot: IR_SPV_Id_Slot) -> s64 {
     case .PTR_STORAGE_FLOAT; return s.id_ptr_storage_float;
     case .PTR_STORAGE_FLOAT2; return s.id_ptr_storage_float2;
     case .PTR_STORAGE_FLOAT3; return s.id_ptr_storage_float3;
+    case .PTR_STORAGE_FLOAT4; return s.id_ptr_storage_float4;
     case .PTR_INPUT_UINT; return s.id_ptr_input_uint;
     case .PTR_INPUT_FLOAT; return s.id_ptr_input_float;
     case .PTR_INPUT_FLOAT2; return s.id_ptr_input_float2;
@@ -310,6 +312,7 @@ spv_append_common_type_decls :: (sb: *String_Builder, state: *IR_SPV_Gen_State, 
   append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float), storage_class, id_text(state.id_float)));
   append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float2), storage_class, id_text(state.id_float2)));
   append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float3), storage_class, id_text(state.id_float3)));
+  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float4), storage_class, id_text(state.id_float4)));
   append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int), id_text(state.id_int)));
   append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint), id_text(state.id_uint)));
   append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int64), id_text(state.id_int64)));

@@ -420,6 +420,7 @@ IR_SPV_Gen_State :: struct {
     id_ptr_storage_float: s64;
     id_ptr_storage_float2: s64;
     id_ptr_storage_float3: s64;
+    id_ptr_storage_float4: s64;
     id_ptr_input_float: s64;
     id_ptr_input_float2: s64;
     id_ptr_input_float3: s64;
@@ -1070,6 +1071,9 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     buffer_info.ptr_storage_element_type_id = ptr_storage_element_type_id;
 
     offset: s64 = 0;
+    max_align: s64 = 1;
+    cpu_offset: s64 = 0;
+    cpu_max_align: s64 = 1;
     for struct_def.fields {
       field_type := spv_kind_from_ir_type_kind(it.type.kind);
       if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
@@ -1080,6 +1084,19 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       if field_size <= 0 {
         return_err("SPIR-V generic backend: buffer struct '%' field '%' has unsupported layout type '%'.", struct_def.name, it.name, it.type_name);
       }
+
+      field_align := host_blit_align_for_kind(field_type);
+      offset = align_up(offset, field_align);
+      if field_align > max_align max_align = field_align;
+
+      cpu_field_align := host_blit_align_for_kind(field_type);
+      cpu_offset = align_up(cpu_offset, cpu_field_align);
+      if cpu_field_align > cpu_max_align cpu_max_align = cpu_field_align;
+
+      if cpu_offset != offset {
+        return_err("SPIR-V generic backend: buffer struct '%' field '%' is not CPU-blittable (cpu offset %, gpu offset %).", struct_def.name, it.name, cpu_offset, offset);
+      }
+
       array_add(*buffer_info.fields, .{
         name = it.name,
         index = it_index,
@@ -1088,8 +1105,13 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       });
       add_debug_member_name(s, buffer_info.element_type_id, it_index, it.name);
       offset += field_size;
+      cpu_offset += field_size;
     }
-    buffer_info.array_stride = offset;
+    buffer_info.array_stride = align_up(offset, max_align);
+    cpu_stride := align_up(cpu_offset, cpu_max_align);
+    if cpu_stride != buffer_info.array_stride {
+      return_err("SPIR-V generic backend: buffer struct '%' is not CPU-blittable (cpu stride %, gpu stride %).", struct_def.name, cpu_stride, buffer_info.array_stride);
+    }
     add_debug_name(s, buffer_info.element_type_id, debug_type_name(s, element_type_name));
     add_debug_name(s, buffer_info.runtimearr_type_id, debug_type_name(s, tprint("%_data_array", buffer_info.name)));
     add_debug_name(s, buffer_info.wrapper_struct_type_id, debug_type_name(s, tprint("%_buffer", buffer_info.name)));
@@ -1198,6 +1220,13 @@ align_up :: (value: s64, alignment: s64) -> s64 {
   if alignment <= 1 return value;
   mask := alignment - 1;
   return (value + mask) & ~mask;
+}
+
+host_blit_align_for_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .INT64 || kind == .UINT64 return 8;
+  if kind == .INT || kind == .UINT || kind == .FLOAT || kind == .FLOAT2 ||
+     kind == .FLOAT3 || kind == .FLOAT4 || kind == .FLOAT2X2 || kind == .BOOL return 4;
+  return 4;
 }
 
 find_buffer_field :: (buffer: *IR_SPV_Gen_Buffer, name: string) -> *IR_SPV_Gen_Buffer_Field {
@@ -3659,7 +3688,45 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
   if expr.kind == .MEMBER {
     if expr.left && expr.left.kind == .SUBSCRIPT {
       ptr_id, ptr_type, ptr_ok, ptr_diag := emit_buffer_struct_field_ptr(s, expr.left, expr.text);
-      return ptr_id, ptr_type, ptr_ok, ptr_diag;
+      if ptr_ok return ptr_id, ptr_type, true, diag;
+
+      // Fallback: component lvalue on raw vector buffer element, e.g. table[idx].x
+      buffer_name, base_ok := resolve_ident_or_zero_deref(expr.left.left);
+      if base_ok {
+        // resolved
+      } else if expr.left.left && expr.left.left.kind == .MEMBER {
+        member_root, member_field, member_ok := resolve_member_root_and_field(expr.left.left);
+        if member_ok {
+          buffer_name = tprint("%.%", member_root, member_field);
+        } else {
+          buffer_name = expr_text(expr.left.left);
+        }
+      }
+      buffer := ifx buffer_name.count > 0 then find_buffer(s, buffer_name) else null;
+      if buffer && (buffer.element_kind == .FLOAT2 || buffer.element_kind == .FLOAT3 || buffer.element_kind == .FLOAT4) {
+        comp_index: u32 = 0;
+        if expr.text == "x" comp_index = 0;
+        else if expr.text == "y" comp_index = 1;
+        else if expr.text == "z" comp_index = 2;
+        else if expr.text == "w" comp_index = 3;
+        else return_err("unsupported vector component '%' for lvalue.", expr.text);
+        if buffer.element_kind == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
+        if buffer.element_kind == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
+
+        idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.left.right);
+        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+        idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
+        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+
+        elem_ptr := new_id(s);
+        add_op(s, elem_ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
+        comp_index_id := get_u32_const(s, comp_index);
+        ptr := new_id(s);
+        add_op(s, ptr, "OpAccessChain", s.id_ptr_storage_float, elem_ptr, comp_index_id);
+        return ptr, .FLOAT, true, diag;
+      }
+
+      return ptr_id, ptr_type, false, ptr_diag;
     }
     if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .SUBSCRIPT {
       field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
@@ -4004,6 +4071,17 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             src_struct = find_local_struct(s, tmp_name);
             if !src_struct {
               return_err("inline helper assignment source struct '%' went missing.", tmp_name);
+            }
+          } else if stmt.binary_right && stmt.binary_right.kind == .CONSTRUCTOR &&
+                    stmt.binary_right.text == dst_buffer.element_type_name {
+            tmp_name := tprint("__assign_src_%", new_id(s));
+            tmp_struct, tmp_ok, tmp_diag := alloc_local_struct(s, tmp_name, dst_buffer.element_type_name);
+            if !tmp_ok return false, false, tmp_diag;
+            init_ok, init_diag := init_local_struct_from_expr(s, tmp_struct, stmt.binary_right);
+            if !init_ok return false, false, init_diag;
+            src_struct = find_local_struct(s, tmp_name);
+            if !src_struct {
+              return_err("constructor assignment source struct '%' went missing.", tmp_name);
             }
           } else {
             return_err("unsupported struct buffer assignment rhs '%'.", expr_text(stmt.binary_right));

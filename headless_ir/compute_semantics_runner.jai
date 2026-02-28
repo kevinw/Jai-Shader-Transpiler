@@ -3,7 +3,7 @@
 // running them on the GPU and CPU and comparing results.
 // 
 
-ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }; }).[
+ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; Vec3; Vec4; Vec4Box; }; }).[
   {"simple", .Bare},
   {"loop", .Bare},
   {"locals", .Bare},
@@ -155,6 +155,10 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; }
   {"access_chain", .Boids},
   {"helper_struct_chain", .Boids},
   {"helper_struct_direct_assign", .Boids},
+  {"raw_vec3_buffer_component_write", .Vec3},
+  {"raw_vec4_buffer_component_write", .Vec4},
+  {"struct_vec4_field_write", .Vec4Box},
+  {"struct_buffer_element_constructor_assign", .Vec4Box},
 ];
 
 ELEMENT_COUNT :: 64;
@@ -164,9 +168,16 @@ Compute_Boid_State :: struct {
   vel: Vector2;
 }
 
+Compute_Vec4_Box :: struct {
+  v: Vector4;
+}
+
 Compute_Table_Kind :: enum {
   U32;
   BOID_STATE;
+  VEC3;
+  VEC4;
+  VEC4_BOX;
 }
 
 Compute_Semantics_In :: struct {
@@ -495,6 +506,51 @@ helper_struct_direct_assign :: (using in: Compute_Semantics_In, values: *u32, bo
     boids[idx] = boid_advance(boids[idx], 2.0);
     values[idx] = cast(u32) (boids[idx].pos.x + boids[idx].pos.y);
   }
+} @compute_shader
+
+raw_vec3_buffer_component_write :: (using in: Compute_Semantics_In, values: *u32, table: *Vector3) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v := table[idx];
+  table[idx].x = v.x + 0.5;
+  table[idx].z = table[idx].x + table[idx].y + cast(float) (idx % 5) * 0.25;
+  out := table[idx].x + table[idx].z;
+  values[idx] = cast(u32) floor(out * 13.0) + idx;
+} @compute_shader
+
+raw_vec4_buffer_component_write :: (using in: Compute_Semantics_In, values: *u32, table: *Vector4) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v := table[idx];
+  table[idx].x = v.x + 1.0;
+  table[idx].z = table[idx].x + table[idx].y + cast(float) (idx % 3);
+  out := table[idx].z + table[idx].w;
+  values[idx] = cast(u32) floor(out * 10.0) + idx;
+} @compute_shader
+
+struct_vec4_field_write :: (using in: Compute_Semantics_In, values: *u32, table: *Compute_Vec4_Box) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  b := table[idx];
+  b.v = b.v + Vector4.{0.25, 0.5, 0.75, 1.0};
+  b.v.w = b.v.x + b.v.y + b.v.z + 0.5;
+  table[idx].v = b.v;
+  values[idx] = cast(u32) floor(table[idx].v.w * 9.0 + b.v.x * 3.0) + idx;
+} @compute_shader
+
+struct_buffer_element_constructor_assign :: (using in: Compute_Semantics_In, values: *u32, table: *Compute_Vec4_Box) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v := table[idx].v;
+  table[idx] = Compute_Vec4_Box.{
+    v = .{
+      x = v.x + 0.2,
+      y = v.y + 0.4,
+      z = v.z + 0.6,
+      w = v.x + v.y + v.z + 0.8,
+    },
+  };
+  values[idx] = cast(u32) floor(table[idx].v.w * 11.0 + table[idx].v.x * 5.0) + idx;
 } @compute_shader
 
 matrix_math :: (using in: Compute_Semantics_In, values: *u32) {
@@ -2253,6 +2309,34 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
         boid := Compute_Boid_State.{pos = .{x = px, y = py}, vel = .{x = vx, y = vy}};
         gpu_table[it] = cast(TABLE_TYPE) boid;
         table_data[it] = cast(TABLE_TYPE) boid;
+      } else #if TABLE_KIND == .VEC3 {
+        vec := Vector3.{
+          cast(float) it * 0.09 + 0.35,
+          cast(float) ((it % 7) + 2) * 0.19,
+          cast(float) ((it % 11) + 1) * 0.14,
+        };
+        gpu_table[it] = cast(TABLE_TYPE) vec;
+        table_data[it] = cast(TABLE_TYPE) vec;
+      } else #if TABLE_KIND == .VEC4 {
+        vec := Vector4.{
+          cast(float) it * 0.11 + 0.5,
+          cast(float) ((it % 7) + 1) * 0.23,
+          cast(float) ((it % 9) + 2) * 0.17,
+          cast(float) ((it % 5) + 3) * 0.19,
+        };
+        gpu_table[it] = cast(TABLE_TYPE) vec;
+        table_data[it] = cast(TABLE_TYPE) vec;
+      } else #if TABLE_KIND == .VEC4_BOX {
+        box := Compute_Vec4_Box.{
+          v = .{
+            cast(float) it * 0.07 + 0.25,
+            cast(float) ((it % 11) + 1) * 0.13,
+            cast(float) ((it % 13) + 2) * 0.09,
+            cast(float) ((it % 3) + 1) * 0.21,
+          },
+        };
+        gpu_table[it] = cast(TABLE_TYPE) box;
+        table_data[it] = cast(TABLE_TYPE) box;
       } else {
         #assert false;
       }
@@ -2349,6 +2433,24 @@ run_compute_case_with_boid_table :: (source: string, case_name: string, $cpu_sha
   proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
   if proc_name.count == 0 proc_name = "cpu_shader_proc";
   run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Compute_Boid_State, .BOID_STATE);
+}
+
+run_compute_case_with_vec3_table :: (source: string, case_name: string, $cpu_shader_proc: $F, call := #caller_code) #expand {
+  proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
+  if proc_name.count == 0 proc_name = "cpu_shader_proc";
+  run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Vector3, .VEC3);
+}
+
+run_compute_case_with_vec4_table :: (source: string, case_name: string, $cpu_shader_proc: $F, call := #caller_code) #expand {
+  proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
+  if proc_name.count == 0 proc_name = "cpu_shader_proc";
+  run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Vector4, .VEC4);
+}
+
+run_compute_case_with_vec4_box_table :: (source: string, case_name: string, $cpu_shader_proc: $F, call := #caller_code) #expand {
+  proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
+  if proc_name.count == 0 proc_name = "cpu_shader_proc";
+  run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Compute_Vec4_Box, .VEC4_BOX);
 }
 
 n :: ($proc: $F, call := #caller_code) #compile_time {
@@ -2464,9 +2566,12 @@ run_gpu_cpu_tests :: () {
     for ALL_TEST_FUNCTIONS {
       test_runner_func: string;
       if #complete it.type == {
-      case .Bare;  test_runner_func = "run_compute_case";
-      case .Table; test_runner_func = "run_compute_case_with_table";
-      case .Boids; test_runner_func = "run_compute_case_with_boid_table";
+      case .Bare;    test_runner_func = "run_compute_case";
+      case .Table;   test_runner_func = "run_compute_case_with_table";
+      case .Boids;   test_runner_func = "run_compute_case_with_boid_table";
+      case .Vec3;    test_runner_func = "run_compute_case_with_vec3_table";
+      case .Vec4;    test_runner_func = "run_compute_case_with_vec4_table";
+      case .Vec4Box; test_runner_func = "run_compute_case_with_vec4_box_table";
       }
       print_to_builder(*sb, "%1(get_transpiled(.METAL, %2), \"%2\", %2);\ntotal_functions_run += 1;\n", test_runner_func, it.name);
     }
