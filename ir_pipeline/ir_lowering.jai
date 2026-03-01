@@ -817,6 +817,7 @@ ir_lower_expr :: (node: *Code_Node,
         out := ir_expr_new(.MEMBER);
         out.left = base;
         out.text = ident.name;
+        out.member_access = ir_member_access_kind_from_name(ident.name);
         if base && base.builtin_ref.kind != .NONE {
           out.builtin_ref = base.builtin_ref;
           component, component_ok := ir_vector_component_index(ident.name);
@@ -1057,6 +1058,7 @@ ir_lower_expr :: (node: *Code_Node,
           out := ir_expr_new(.MEMBER);
           out.left = left_for_member;
           out.text = right_ident.name;
+          out.member_access = ir_member_access_kind_from_name(right_ident.name);
           if left_for_member && left_for_member.builtin_ref.kind != .NONE {
             out.builtin_ref = left_for_member.builtin_ref;
             component, component_ok := ir_vector_component_index(right_ident.name);
@@ -1450,6 +1452,15 @@ ir_vector_component_index :: (field_name: string) -> (s32, bool) {
   if field_name == "z" return 2, true;
   if field_name == "w" return 3, true;
   return -1, false;
+}
+
+ir_member_access_kind_from_name :: (field_name: string) -> IR_Member_Access_Kind {
+  if field_name == "x" return .COMPONENT_X;
+  if field_name == "y" return .COMPONENT_Y;
+  if field_name == "z" return .COMPONENT_Z;
+  if field_name == "w" return .COMPONENT_W;
+  if field_name == "xy" return .SWIZZLE_XY;
+  return .NONE;
 }
 
 ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct, bool) {

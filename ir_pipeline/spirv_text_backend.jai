@@ -793,6 +793,20 @@ resolve_buffer_name_from_expr :: (expr: *IR_Expr) -> (buffer_name: string, ok: b
   return "", false;
 }
 
+spv_member_component_index :: inline (access: IR_Member_Access_Kind) -> (s64, bool) {
+  if access == .COMPONENT_X return 0, true;
+  if access == .COMPONENT_Y return 1, true;
+  if access == .COMPONENT_Z return 2, true;
+  if access == .COMPONENT_W return 3, true;
+  return -1, false;
+}
+
+spv_member_component_index_u32 :: inline (access: IR_Member_Access_Kind) -> (u32, bool) {
+  idx, ok := spv_member_component_index(access);
+  if !ok return 0, false;
+  return cast(u32) idx, true;
+}
+
 apply_buffer_base_index :: (s: *IR_SPV_Gen_State, buffer: *IR_SPV_Gen_Buffer, idx: s64) -> s64 {
   if !buffer || !buffer.has_base_index return idx;
   out := new_id(s);
@@ -2913,7 +2927,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !skip_direct_left_eval {
           left_id, left_type, left_ok, left_diag := emit_expr(s, expr.left);
           if left_ok && (left_type == .FLOAT2 || left_type == .FLOAT3 || left_type == .FLOAT4) {
-            if expr.text == "xy" {
+            if expr.member_access == .SWIZZLE_XY {
               if left_type == .FLOAT2 return left_id, .FLOAT2, true, diag;
               swz := new_id(s);
               add_op(s, tprint("         % = OpVectorShuffle % % % 0 1",
@@ -2923,11 +2937,8 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
                                id_text(left_id)));
               return swz, .FLOAT2, true, diag;
             }
-            comp_index: s64 = -1;
-            if expr.text == "x" comp_index = 0;
-            if expr.text == "y" comp_index = 1;
-            if expr.text == "z" comp_index = 2;
-            if expr.text == "w" comp_index = 3;
+            comp_index, comp_ok := spv_member_component_index(expr.member_access);
+            if !comp_ok comp_index = -1;
             if comp_index >= 0 {
               if left_type == .FLOAT2 && comp_index > 1 return_err("component '%' out of range for float2.", expr.text);
               if left_type == .FLOAT3 && comp_index > 2 return_err("component '%' out of range for float3.", expr.text);
@@ -2958,17 +2969,14 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
         local := find_local(s, expr.left.text);
         if local && (local.type == .FLOAT2 || local.type == .FLOAT3 || local.type == .FLOAT4) {
-          comp_index: s64 = -1;
-          if expr.text == "x" comp_index = 0;
-          if expr.text == "y" comp_index = 1;
-          if expr.text == "z" comp_index = 2;
-          if expr.text == "w" comp_index = 3;
+          comp_index, comp_ok := spv_member_component_index(expr.member_access);
+          if !comp_ok comp_index = -1;
           vec_value := new_id(s);
           vec_type_id := s.id_float4;
           if local.type == .FLOAT2 vec_type_id = s.id_float2;
           if local.type == .FLOAT3 vec_type_id = s.id_float3;
           add_op(s, vec_value, "OpLoad", vec_type_id, local.ptr_id);
-          if expr.text == "xy" {
+          if expr.member_access == .SWIZZLE_XY {
             if local.type == .FLOAT2 return vec_value, .FLOAT2, true, diag;
             swz := new_id(s);
             add_op(s, tprint("         % = OpVectorShuffle % % % 0 1",
@@ -4020,12 +4028,8 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left.left);
       buffer := ifx buffer_name.count > 0 then find_buffer(s, buffer_name) else null;
       if buffer && (buffer.element_kind == .FLOAT2 || buffer.element_kind == .FLOAT3 || buffer.element_kind == .FLOAT4) {
-        comp_index: u32 = 0;
-        if expr.text == "x" comp_index = 0;
-        else if expr.text == "y" comp_index = 1;
-        else if expr.text == "z" comp_index = 2;
-        else if expr.text == "w" comp_index = 3;
-        else return_err("unsupported vector component '%' for lvalue.", expr.text);
+        comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
+        if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
         if buffer.element_kind == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
         if buffer.element_kind == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
 
@@ -4049,12 +4053,8 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
       if !field_ok return 0, .UNKNOWN, false, field_diag;
       if field_type != .FLOAT2 && field_type != .FLOAT3 && field_type != .FLOAT4 return_err("lvalue component access requires float2/float3/float4 field, got %.", field_type);
-      comp_index: u32 = 0;
-      if expr.text == "x" comp_index = 0;
-      else if expr.text == "y" comp_index = 1;
-      else if expr.text == "z" comp_index = 2;
-      else if expr.text == "w" comp_index = 3;
-      else return_err("unsupported vector component '%' for lvalue.", expr.text);
+      comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
+      if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
       if field_type == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
       if field_type == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
       comp_index_id := get_u32_const(s, comp_index);
@@ -4065,12 +4065,8 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
     if expr.left && expr.left.kind == .IDENT {
       local_vec := find_local(s, expr.left.text);
       if local_vec && (local_vec.type == .FLOAT2 || local_vec.type == .FLOAT3 || local_vec.type == .FLOAT4) {
-        comp_index: u32 = 0;
-        if expr.text == "x" comp_index = 0;
-        else if expr.text == "y" comp_index = 1;
-        else if expr.text == "z" comp_index = 2;
-        else if expr.text == "w" comp_index = 3;
-        else return_err("unsupported vector component '%' for lvalue.", expr.text);
+        comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
+        if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
         if local_vec.type == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
         if local_vec.type == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
         comp_index_id := get_u32_const(s, comp_index);
@@ -4100,12 +4096,8 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
           return nested_field.ptr_id, nested_field.type, true, diag;
         }
         if field.type != .FLOAT2 && field.type != .FLOAT3 && field.type != .FLOAT4 return_err("component lvalue requires float2/float3/float4 field, got %.", field.type);
-        comp_index: u32 = 0;
-        if      expr.text == "x" comp_index = 0;
-        else if expr.text == "y" comp_index = 1;
-        else if expr.text == "z" comp_index = 2;
-        else if expr.text == "w" comp_index = 3;
-        else return_err("unsupported vector component '%' for lvalue.", expr.text);
+        comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
+        if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
         if field.type == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
         if field.type == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
         comp_index_id := get_u32_const(s, comp_index);

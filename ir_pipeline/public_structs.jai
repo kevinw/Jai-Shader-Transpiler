@@ -156,6 +156,15 @@ IR_Expr_Builtin_Kind :: enum {
   GROUP_INDEX;
 }
 
+IR_Member_Access_Kind :: enum {
+  NONE;
+  COMPONENT_X;
+  COMPONENT_Y;
+  COMPONENT_Z;
+  COMPONENT_W;
+  SWIZZLE_XY;
+}
+
 IR_Builtin_Ref :: struct {
   kind: IR_Expr_Builtin_Kind;
   component: s32; // -1 means whole builtin value (for vector builtins).
@@ -167,6 +176,7 @@ IR_Expr :: struct {
   result_type: IR_Type;
   unary_op: IR_Unary_Op;
   builtin_ref: IR_Builtin_Ref;
+  member_access: IR_Member_Access_Kind;
   binary_operator_type: Operator_Type;
   text: string;
   left: *IR_Expr;
