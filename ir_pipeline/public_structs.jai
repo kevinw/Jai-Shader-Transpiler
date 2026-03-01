@@ -191,6 +191,7 @@ IR_Call_Builtin_Kind :: enum {
   MAX;
   ABS;
   SQRT;
+  EXP;
   SIN;
   COS;
   FRACT;

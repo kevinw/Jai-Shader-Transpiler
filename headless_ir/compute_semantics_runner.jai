@@ -33,6 +33,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"intrinsic_mod_float", .Bare},
   {"intrinsic_smoothstep", .Bare},
   {"intrinsic_pow", .Bare},
+  {"intrinsic_exp", .Bare},
   {"vector_scalar_mix", .Bare},
   {"helper_return_member_on_call", .Bare},
   {"helper_return_assign_local", .Bare},
@@ -791,6 +792,14 @@ intrinsic_pow :: (using in: Compute_Semantics_In, values: *u32) {
   idx := thread_id.x;
   y := pow(2.0, cast(float) (idx % 6));
   values[idx] = cast(u32) y;
+} @compute_shader
+
+intrinsic_exp :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  x := cast(float) (idx % 8) * 0.125;
+  y := exp(x);
+  values[idx] = cast(u32) floor(y * 32.0);
 } @compute_shader
 
 helper_return_member_on_call :: (using in: Compute_Semantics_In, values: *u32) {

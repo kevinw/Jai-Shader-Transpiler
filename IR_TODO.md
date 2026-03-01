@@ -12,6 +12,46 @@ Direction note:
 - Add one case per builtin alias pattern and coercion edge (`f16/f32/int`).
 - Add one case per key pointer/lvalue/resource shape to catch regressions early.
 
+## 19) Graphics helper proc pointer args reject fixed-array storage buffer pointees
+- Symptom:
+  - `SPIR-V backend: helper '...' pointer arg 'state' has unsupported pointee kind FIXED_ARRAY.`
+- Where hit:
+  - `src/apps/shaders/flux_shader.jai` when calling a helper with `state: *[FLUX_CELL_COUNT] Vector4` in vertex/fragment path.
+- Current workaround:
+  - Avoid helper signatures that take fixed-array storage pointers; use scalar-pointer arg (`*Vector4`) or inline sampling logic in shader entry functions.
+- Desired fix:
+  - Allow helper lowering for fixed-array storage-buffer pointer arguments in graphics/compute stages.
+
+## 20) Subscript on casted storage pointer expression is not recognized in SPIR-V backend
+- Symptom:
+  - `SPIR-V backend: unknown subscript base '*float4(state)'.`
+- Where hit:
+  - `flux_shader.jai` when indexing `cast(*Vector4) state` in graphics shaders.
+- Current workaround:
+  - Use entry arg type `*Vector4` directly for graphics storage-buffer bindings instead of casted fixed-array pointer expressions.
+- Desired fix:
+  - Support indexing casted storage pointer expressions (or canonicalize them to a recognized storage identifier during lowering).
+
+## 21) Storage-buffer swizzle/member access on indexed expression is brittle
+- Symptom:
+  - `SPIR-V backend: unsupported member expression 'payload[0].xyz'.`
+- Where hit:
+  - `src/apps/shaders/flux_shader.jai` during graphics path refactor for shadow-map/camera params.
+- Current workaround:
+  - Load indexed vector into a temporary first, then build vectors from scalar fields (`p := payload[i]; v := .{p.x,p.y,p.z}`).
+- Desired fix:
+  - Allow structured member/swizzle reads directly on indexed storage-buffer expressions when type is known.
+
+## 22) Member access on vector-returning function calls is unsupported
+- Symptom:
+  - `SPIR-V backend: member access on non-struct call return 'float4'.`
+- Where hit:
+  - `flux_shader.jai` for expressions like `sample_2d(...).x` and `flux_read_state_uv(...).x`.
+- Current workaround:
+  - Assign function return to temporary (`t := sample_2d(...); x := t.x`) before component access.
+- Desired fix:
+  - Support component extraction from vector-valued call expressions in SPIR-V lowering.
+
 ## 4) Pointer-style `normalize(*v, fallback=...)` is not shader-IR compatible
 - Symptom:
   - `SPIR-V backend: normalize expects 1 arg.`

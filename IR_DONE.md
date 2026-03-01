@@ -44,6 +44,17 @@ Status: Completed (March 1, 2026).
   - Enabled `edge_gap_70_helper_struct_named_constructor_arg` and `edge_gap_72_helper_pointer_alias_arg` in compute semantics.
   - Added graphics semantics nested resource-container case (`graphics_nested_resource_container`).
 
+## 23) `exp` intrinsic call support in SPIR-V backend expression lowering
+Status: Fixed (March 1, 2026).
+- Symptom:
+  - `SPIR-V backend: unsupported call target 'exp'.`
+- Where hit:
+  - `src/apps/shaders/flux_shader.jai` while adding exponential distance fog in fragment shading.
+- Implemented:
+  - Added typed builtin kind support for `exp` in IR lowering/backend call classification.
+  - Mapped `exp` to `GLSL.std.450 Exp` in SPIR-V emission.
+  - Added compute semantics regression coverage (`intrinsic_exp`).
+
 ## 1) Helper procs with `void` return are not supported in compute lowering
 Status: Fixed (February 28, 2026) for statement-level void helper calls with side effects.
 - Symptom:

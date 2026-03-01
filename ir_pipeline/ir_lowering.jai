@@ -1509,6 +1509,7 @@ ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   if name == "max" return .MAX;
   if name == "abs" return .ABS;
   if name == "sqrt" return .SQRT;
+  if name == "exp" return .EXP;
   if name == "sin" return .SIN;
   if name == "cos" return .COS;
   if name == "fract" return .FRACT;

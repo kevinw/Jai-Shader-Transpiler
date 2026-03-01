@@ -180,6 +180,7 @@ call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee == "max" return .MAX;
   if callee == "abs" return .ABS;
   if callee == "sqrt" return .SQRT;
+  if callee == "exp" return .EXP;
   if callee == "sin" return .SIN;
   if callee == "cos" return .COS;
   if callee == "fract" return .FRACT;
@@ -217,6 +218,7 @@ call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
   if kind == .MAX return "max";
   if kind == .ABS return "abs";
   if kind == .SQRT return "sqrt";
+  if kind == .EXP return "exp";
   if kind == .SIN return "sin";
   if kind == .COS return "cos";
   if kind == .FRACT return "fract";
@@ -1730,13 +1732,14 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
   if      builtin_name == "floor" op_name = "Floor";
   else if builtin_name == "abs" op_name = "FAbs";
   else if builtin_name == "sqrt" op_name = "Sqrt";
+  else if builtin_name == "exp" op_name = "Exp";
   else if builtin_name == "sin" op_name = "Sin";
   else if builtin_name == "cos" op_name = "Cos";
   else if builtin_name == "fract" op_name = "Fract";
   else return 0, .UNKNOWN, false, make_diag("unsupported float builtin '%'.", builtin_name);
 
   if value_type == .FLOAT2 {
-    if builtin_name == "sin" || builtin_name == "cos" || builtin_name == "sqrt" {
+    if builtin_name == "sin" || builtin_name == "cos" || builtin_name == "sqrt" || builtin_name == "exp" {
       return 0, .UNKNOWN, false, make_diag("builtin '%' on float2 is not supported yet.", builtin_name);
     }
     out_v2 := spv_extinst1(s, s.id_float2, op_name, value_id);
@@ -3611,7 +3614,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         return_err("unsupported mul argument types (%, %).", a_type, b_type);
       }
       if builtin_kind == .FLOOR || builtin_kind == .MIN || builtin_kind == .MAX ||
-         builtin_kind == .ABS || builtin_kind == .SQRT || builtin_kind == .SIN || builtin_kind == .COS || builtin_kind == .FRACT || builtin_kind == .LENGTH || builtin_kind == .NORMALIZE {
+         builtin_kind == .ABS || builtin_kind == .SQRT || builtin_kind == .EXP || builtin_kind == .SIN || builtin_kind == .COS || builtin_kind == .FRACT || builtin_kind == .LENGTH || builtin_kind == .NORMALIZE {
         if builtin_kind == .LENGTH {
           if expr.args.count != 1 return_err("length expects 1 arg.");
           v_id, v_type, v_ok, v_diag := emit_expr(s, expr.args[0]);
