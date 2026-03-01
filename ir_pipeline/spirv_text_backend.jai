@@ -1891,6 +1891,7 @@ emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
   assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .COMPUTE return false, make_diag("write_2d is currently compute-stage only.");
+  if !s.uses_write_2d return false, make_diag("internal backend error: write_2d call was not pre-analyzed before compute emission.");
   if args.count != 4      return false, make_diag("write_2d expects 4 args (texture_index, x, y, value).");
 
   texture_index_id, texture_index_type, texture_index_ok, texture_index_diag := emit_expr(s, args[0]);
@@ -1928,8 +1929,6 @@ emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
   tex_id := add_op(s, new_id(s), "OpLoad", s.id_storage_image2d, tex_ptr);
   coord_id := add_op(s, new_id(s), "OpCompositeConstruct", s.id_v2uint, x_id, y_id);
   add_op(s, "OpImageWrite", tex_id, coord_id, value_id);
-
-  s.uses_write_2d = true;
   return true, diag;
 }
 

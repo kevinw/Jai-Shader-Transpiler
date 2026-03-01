@@ -704,28 +704,112 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
 // Module Assembly
 // -----------------------------------------------------------------------------
 
-emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
-  return_err :: (msg: string, args: ..Any) #expand { `return "", false, make_diag(msg, ..args); }
+IR_SPV_Compute_Analysis :: struct {
+  bound_value: u32;
+  uses_write_2d: bool;
+  uses_sample_2d: bool;
+  expanded_buffers: [..] IR_Compute_Buffer;
+}
+
+spv_analyze_builtin_usage_expr :: (expr: *IR_Expr, uses_write_2d: *bool, uses_sample_2d: *bool) {
+  if !expr return;
+  if expr.kind == .CALL && expr.left && expr.left.kind == .IDENT {
+    callee := expr.left.text;
+    if callee_matches_builtin(callee, "write_2d") uses_write_2d.* = true;
+    if callee_matches_builtin(callee, "sample_2d") uses_sample_2d.* = true;
+  }
+  spv_analyze_builtin_usage_expr(expr.left, uses_write_2d, uses_sample_2d);
+  spv_analyze_builtin_usage_expr(expr.right, uses_write_2d, uses_sample_2d);
+  for expr.args spv_analyze_builtin_usage_expr(it, uses_write_2d, uses_sample_2d);
+}
+
+spv_analyze_builtin_usage_block :: (block: *IR_Block, uses_write_2d: *bool, uses_sample_2d: *bool) {
+  if !block return;
+  for block.statements {
+    stmt := it;
+    if stmt.kind == {
+      case .DECL; {
+        spv_analyze_builtin_usage_expr(stmt.decl_init, uses_write_2d, uses_sample_2d);
+      }
+      case .BINARY; {
+        spv_analyze_builtin_usage_expr(stmt.binary_left, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.binary_right, uses_write_2d, uses_sample_2d);
+      }
+      case .IF; {
+        spv_analyze_builtin_usage_expr(stmt.if_condition, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_block(stmt.if_then, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_block(stmt.if_else, uses_write_2d, uses_sample_2d);
+      }
+      case .SWITCH; {
+        spv_analyze_builtin_usage_expr(stmt.switch_condition, uses_write_2d, uses_sample_2d);
+        for stmt.switch_cases {
+          spv_analyze_builtin_usage_expr(it.condition, uses_write_2d, uses_sample_2d);
+          spv_analyze_builtin_usage_block(it.body, uses_write_2d, uses_sample_2d);
+        }
+      }
+      case .FOR; {
+        spv_analyze_builtin_usage_expr(stmt.for_start, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.for_end, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_block(stmt.for_body, uses_write_2d, uses_sample_2d);
+      }
+      case .WHILE; {
+        spv_analyze_builtin_usage_expr(stmt.while_condition, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_block(stmt.while_body, uses_write_2d, uses_sample_2d);
+      }
+      case .CALL; {
+        spv_analyze_builtin_usage_expr(stmt.call_expr, uses_write_2d, uses_sample_2d);
+      }
+      case .RETURN; {
+        spv_analyze_builtin_usage_expr(stmt.return_expr, uses_write_2d, uses_sample_2d);
+      }
+      case .BREAK;
+      case .CONTINUE;
+    }
+  }
+}
+
+spv_analyze_compute_shader :: (shader: IR_Compute_Shader) -> (analysis: IR_SPV_Compute_Analysis, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return .{}, false, make_diag(msg, ..args); }
 
   diag: IR_Diagnostic;
   if shader.buffers.count == 0 return_err("SPIR-V generic backend: expected at least one compute buffer.");
   if shader.body.statements.count == 0 return_err("SPIR-V generic backend: empty compute body.");
 
-  bound_value := cast(u32) 64;
+  out: IR_SPV_Compute_Analysis;
+  out.bound_value = cast(u32) 64;
   if shader.body.statements[0].kind == .IF {
-    b, ok := match_branch_condition_outer(shader.body.statements[0].if_condition);
-    if ok bound_value = b;
+    b, bound_ok := match_branch_condition_outer(shader.body.statements[0].if_condition);
+    if bound_ok out.bound_value = b;
   }
+
+  spv_analyze_builtin_usage_block(*shader.body, *out.uses_write_2d, *out.uses_sample_2d);
+  for shader.functions {
+    spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_sample_2d);
+  }
+
+  expand_state: IR_SPV_Gen_State;
+  for shader.extra_structs array_add(*expand_state.extra_structs, it);
+  expand_ok, expand_diag := expand_compute_resource_root_buffers(*expand_state, shader.buffers, *out.expanded_buffers);
+  if !expand_ok return .{}, false, expand_diag;
+
+  return out, true, diag;
+}
+
+emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return "", false, make_diag(msg, ..args); }
+
+  diag: IR_Diagnostic;
+  analysis, analysis_ok, analysis_diag := spv_analyze_compute_shader(shader);
+  if !analysis_ok return "", false, analysis_diag;
 
   state: IR_SPV_Gen_State;
   state.stage = .COMPUTE;
   state.debug_type_prefix = tprint("compute_%", shader.source_name);
   state.functions = shader.functions;
   for shader.extra_structs array_add(*state.extra_structs, it);
-  compute_buffers: [..] IR_Compute_Buffer;
-  expand_ok, expand_diag := expand_compute_resource_root_buffers(*state, shader.buffers, *compute_buffers);
-  if !expand_ok return "", false, expand_diag;
-  init_ok, init_diag := init_base(*state, compute_buffers, bound_value);
+  state.uses_write_2d = analysis.uses_write_2d;
+  state.uses_sample_2d = analysis.uses_sample_2d;
+  init_ok, init_diag := init_base(*state, analysis.expanded_buffers, analysis.bound_value);
   if !init_ok return "", false, init_diag;
 
   entry_label := new_id(*state);
