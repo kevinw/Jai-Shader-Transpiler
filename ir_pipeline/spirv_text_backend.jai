@@ -1206,6 +1206,32 @@ emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, kind: IR_SPV_Ge
   }
 }
 
+spv_access_chain1 :: inline (s: *IR_SPV_Gen_State, ptr_type_id: s64, base_id: s64, index0_id: s64) -> s64 {
+  return add_op(s, new_id(s), "OpAccessChain", ptr_type_id, base_id, index0_id);
+}
+
+spv_access_chain2 :: inline (s: *IR_SPV_Gen_State, ptr_type_id: s64, base_id: s64, index0_id: s64, index1_id: s64) -> s64 {
+  return add_op(s, new_id(s), "OpAccessChain", ptr_type_id, base_id, index0_id, index1_id);
+}
+
+spv_load :: inline (s: *IR_SPV_Gen_State, type_id: s64, ptr_id: s64) -> s64 {
+  return add_op(s, new_id(s), "OpLoad", type_id, ptr_id);
+}
+
+spv_extinst1 :: inline (s: *IR_SPV_Gen_State, type_id: s64, op_name: string, a_id: s64) -> s64 {
+  out := new_id(s);
+  add_op(s, tprint("         % = OpExtInst % % % %",
+                   id_text(out), id_text(type_id), id_text(s.id_extinst), op_name, id_text(a_id)));
+  return out;
+}
+
+spv_extinst2 :: inline (s: *IR_SPV_Gen_State, type_id: s64, op_name: string, a_id: s64, b_id: s64) -> s64 {
+  out := new_id(s);
+  add_op(s, tprint("         % = OpExtInst % % % % %",
+                   id_text(out), id_text(type_id), id_text(s.id_extinst), op_name, id_text(a_id), id_text(b_id)));
+  return out;
+}
+
 spv_line_is_terminator :: (line: string) -> bool {
   auto_release_temp();
   trimmed := compact_text(line,, temp);
@@ -1798,9 +1824,7 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
     bf, bf_ok, bf_diag := coerce_to_float(s, b_id, b_type);
     if !bf_ok return 0, .UNKNOWN, false, bf_diag;
     op_name := ifx builtin_name == "min" then "FMin" else "FMax";
-    result := new_id(s);
-    add_op(s, tprint("         % = OpExtInst % % % % %",
-                     id_text(result), id_text(s.id_float), id_text(s.id_extinst), op_name, id_text(af), id_text(bf)));
+    result := spv_extinst2(s, s.id_float, op_name, af, bf);
     return result, .FLOAT, true, diag;
   }
 
@@ -1823,17 +1847,13 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
     if builtin_name == "sin" || builtin_name == "cos" || builtin_name == "sqrt" {
       return 0, .UNKNOWN, false, make_diag("builtin '%' on float2 is not supported yet.", builtin_name);
     }
-    out_v2 := new_id(s);
-    add_op(s, tprint("         % = OpExtInst % % % %",
-                     id_text(out_v2), id_text(s.id_float2), id_text(s.id_extinst), op_name, id_text(value_id)));
+    out_v2 := spv_extinst1(s, s.id_float2, op_name, value_id);
     return out_v2, .FLOAT2, true, diag;
   }
 
   vf, vf_ok, vf_diag := coerce_to_float(s, value_id, value_type);
   if !vf_ok return 0, .UNKNOWN, false, vf_diag;
-  result := new_id(s);
-  add_op(s, tprint("         % = OpExtInst % % % %",
-                   id_text(result), id_text(s.id_float), id_text(s.id_extinst), op_name, id_text(vf)));
+  result := spv_extinst1(s, s.id_float, op_name, vf);
   return result, .FLOAT, true, diag;
 }
 
@@ -1856,30 +1876,18 @@ emit_sample_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s
   // Clamp resource indices to the declared bindless array range [0, 15] to make
   // out-of-range shader behavior explicit and deterministic across backends.
   sample_2d_max_index := get_u32_const(s, 15);
-  clamped_texture_index := new_id(s);
-  add_op(s, tprint("         % = OpExtInst % % UMin % %",
-                   id_text(clamped_texture_index),
-                   id_text(s.id_uint),
-                   id_text(s.id_extinst),
-                   id_text(texture_index_id),
-                   id_text(sample_2d_max_index)));
-  clamped_sampler_index := new_id(s);
-  add_op(s, tprint("         % = OpExtInst % % UMin % %",
-                   id_text(clamped_sampler_index),
-                   id_text(s.id_uint),
-                   id_text(s.id_extinst),
-                   id_text(sampler_index_id),
-                   id_text(sample_2d_max_index)));
+  clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, sample_2d_max_index);
+  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_2d_max_index);
 
   uv_id, uv_type, uv_ok, uv_diag := emit_expr(s, args[2]);
   if !uv_ok return 0, .UNKNOWN, false, uv_diag;
   uv_id, uv_ok, uv_diag = coerce_to_float2(s, uv_id, uv_type);
   if !uv_ok return 0, .UNKNOWN, false, uv_diag;
 
-  tex_ptr       := add_op(s, new_id(s), "OpAccessChain", s.id_ptr_uniformconst_image2d, s.id_sample_2d_textures_var, clamped_texture_index);
-  tex_id        := add_op(s, new_id(s), "OpLoad", s.id_image2d, tex_ptr);
-  sampler_ptr   := add_op(s, new_id(s), "OpAccessChain", s.id_ptr_uniformconst_sampler, s.id_sample_2d_samplers_var, clamped_sampler_index);
-  sampler_id    := add_op(s, new_id(s), "OpLoad", s.id_sampler, sampler_ptr);
+  tex_ptr       := spv_access_chain1(s, s.id_ptr_uniformconst_image2d, s.id_sample_2d_textures_var, clamped_texture_index);
+  tex_id        := spv_load(s, s.id_image2d, tex_ptr);
+  sampler_ptr   := spv_access_chain1(s, s.id_ptr_uniformconst_sampler, s.id_sample_2d_samplers_var, clamped_sampler_index);
+  sampler_id    := spv_load(s, s.id_sampler, sampler_ptr);
   sampled_image := add_op(s, new_id(s), "OpSampledImage", s.id_sampled_image2d, tex_id, sampler_id);
   result        := add_op(s, new_id(s), "OpImageSampleImplicitLod", s.id_float4, sampled_image, uv_id);
 
@@ -1917,16 +1925,10 @@ emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
   // Clamp resource indices to the declared bindless array range [0, 15] to make
   // out-of-range shader behavior explicit and deterministic across backends.
   write_2d_max_index := get_u32_const(s, 15);
-  clamped_texture_index := new_id(s);
-  add_op(s, tprint("         % = OpExtInst % % UMin % %",
-                   id_text(clamped_texture_index),
-                   id_text(s.id_uint),
-                   id_text(s.id_extinst),
-                   id_text(texture_index_id),
-                   id_text(write_2d_max_index)));
+  clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, write_2d_max_index);
 
-  tex_ptr := add_op(s, new_id(s), "OpAccessChain", s.id_ptr_uniformconst_storage_image2d, s.id_write_2d_textures_var, clamped_texture_index);
-  tex_id := add_op(s, new_id(s), "OpLoad", s.id_storage_image2d, tex_ptr);
+  tex_ptr := spv_access_chain1(s, s.id_ptr_uniformconst_storage_image2d, s.id_write_2d_textures_var, clamped_texture_index);
+  tex_id := spv_load(s, s.id_storage_image2d, tex_ptr);
   coord_id := add_op(s, new_id(s), "OpCompositeConstruct", s.id_v2uint, x_id, y_id);
   add_op(s, "OpImageWrite", tex_id, coord_id, value_id);
   return true, diag;
