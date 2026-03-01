@@ -2355,7 +2355,8 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
   return_kind := spv_kind_from_ir_type(helper.return_type);
   if return_kind == .UNKNOWN || return_kind == .STRUCT {
     helper_return_text := helper.return_type.display_name;
-    if helper_return_text.count == 0 helper_return_text = helper.return_type_name;
+    if helper_return_text.count == 0 helper_return_text = spv_struct_name_from_ir_type(helper.return_type);
+    if helper_return_text.count == 0 helper_return_text = "<unknown>";
     return 0, .UNKNOWN, false, make_diag("helper '%' has unsupported return type '%'.", helper.name, helper_return_text);
   }
 
@@ -2469,7 +2470,8 @@ eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, c
   helper_return_struct_name := spv_struct_name_from_ir_type(helper.return_type);
   if helper_return_struct_name != out_struct_type {
     helper_return_text := helper.return_type.display_name;
-    if helper_return_text.count == 0 helper_return_text = helper.return_type_name;
+    if helper_return_text.count == 0 helper_return_text = helper_return_struct_name;
+    if helper_return_text.count == 0 helper_return_text = "<unknown>";
     return false, make_diag("helper '%' return type '%' does not match destination struct '%'.", helper.name, helper_return_text, out_struct_type);
   }
 
@@ -2691,7 +2693,8 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !helper return_err("unknown helper '%'.", expr.left.left.text);
         helper_ret_kind := spv_kind_from_ir_type(helper.return_type);
         helper_ret_text := helper.return_type.display_name;
-        if helper_ret_text.count == 0 helper_ret_text = helper.return_type_name;
+        if helper_ret_text.count == 0 helper_ret_text = spv_struct_name_from_ir_type(helper.return_type);
+        if helper_ret_text.count == 0 helper_ret_text = "<unknown>";
         if helper_ret_kind != .STRUCT return_err("member access on non-struct call return '%'.", helper_ret_text);
         temp_name := tprint("__call_ret_%", new_id(s));
         helper_ret_struct_name := spv_struct_name_from_ir_type(helper.return_type);
