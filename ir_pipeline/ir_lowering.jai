@@ -177,21 +177,6 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
   return out, true;
 }
 
-ir_pointer_pointee_lowered_name :: (pointer_type: *Type_Info) -> (string, bool, bool) {
-  if !pointer_type || pointer_type.type != .POINTER return "", false, false;
-  ptr := cast(*Type_Info_Pointer) pointer_type;
-  if !ptr.pointer_to return "", false, false;
-
-  if ptr.pointer_to.type == .STRUCT {
-    st := cast(*Type_Info_Struct) ptr.pointer_to;
-    return jai_to_hlsl_type_name(get_struct_type_name(st)), true, true;
-  }
-
-  pointee_name, pointee_ok := ir_type_to_shader_name(ptr.pointer_to);
-  if !pointee_ok return "", false, false;
-  return pointee_name, true, false;
-}
-
 ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, bool) {
   out: IR_Struct;
   out.name = name;
@@ -207,22 +192,12 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
     field_semantic := member_get_semantic(it);
     original_type_name, original_ok := ir_type_to_original_name(it.type);
     if !original_ok return out, false;
-    pointee_name := "";
-    pointee_ok := false;
-    pointee_is_struct := false;
-    if it.type && it.type.type == .POINTER {
-      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(it.type);
-      if !pointee_ok return out, false;
-    }
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
       type_name = type_name,
       semantic = field_semantic,
       original_type_name = original_type_name,
-      is_pointer = it.type && it.type.type == .POINTER,
-      pointer_pointee_type_name = pointee_name,
-      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
 
@@ -303,22 +278,12 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
     field_semantic := member_get_semantic(it);
     original_type_name, original_ok := ir_type_to_original_name(it.type);
     if !original_ok return out, false;
-    pointee_name := "";
-    pointee_ok := false;
-    pointee_is_struct := false;
-    if it.type && it.type.type == .POINTER {
-      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(it.type);
-      if !pointee_ok return out, false;
-    }
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
       type_name = type_name,
       semantic = field_semantic,
       original_type_name = original_type_name,
-      is_pointer = it.type && it.type.type == .POINTER,
-      pointer_pointee_type_name = pointee_name,
-      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
 
@@ -1588,24 +1553,12 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
         return { {}, false, ir_get_diagnostic(*state) };
       }
     }
-    pointee_name := "";
-    pointee_ok := false;
-    pointee_is_struct := false;
-    if arg_type && arg_type.type == .POINTER {
-      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(arg_type);
-      if !pointee_ok {
-          return_err("unsupported pointer pointee type for argument '%'", arg.name);
-      }
-    }
     array_add(*out.args, .{
       name = arg.name,
       type = arg_ir_type,
       type_name = arg_type_name,
       is_readonly = true,
       original_type_name = original_type_name,
-      is_pointer = arg_type && arg_type.type == .POINTER,
-      pointer_pointee_type_name = pointee_name,
-      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
   seen_headers: [..] *Code_Procedure_Header;
@@ -1726,22 +1679,12 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
         return { {}, false, ir_get_diagnostic(*state) };
       }
     }
-    pointee_name := "";
-    pointee_ok := false;
-    pointee_is_struct := false;
-    if arg_type && arg_type.type == .POINTER {
-      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(arg_type);
-      if !pointee_ok return_err("unsupported pointer pointee type for argument '%'", arg.name, node=arg);
-    }
     array_add(*out.args, .{
       name = arg.name,
       type = arg_ir_type,
       type_name = arg_type_name,
       is_readonly = true,
       original_type_name = original_type_name,
-      is_pointer = arg_type && arg_type.type == .POINTER,
-      pointer_pointee_type_name = pointee_name,
-      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
   seen_headers: [..] *Code_Procedure_Header;

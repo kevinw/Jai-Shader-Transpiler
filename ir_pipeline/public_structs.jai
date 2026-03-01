@@ -55,9 +55,6 @@ IR_Field :: struct {
   type_name: string;
   semantic: string;
   original_type_name: string;
-  is_pointer: bool;
-  pointer_pointee_type_name: string;
-  pointer_pointee_is_struct: bool;
 }
 
 IR_Struct :: struct {
@@ -110,9 +107,6 @@ IR_Function_Arg :: struct {
   type_name: string;
   is_readonly: bool;
   original_type_name: string;
-  is_pointer: bool;
-  pointer_pointee_type_name: string;
-  pointer_pointee_is_struct: bool;
 }
 
 IR_Function :: struct {

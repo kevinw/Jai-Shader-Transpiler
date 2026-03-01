@@ -1068,21 +1068,11 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
     if !original_ok return out, false;
     arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
     if !arg_ir_type_ok return out, false;
-    pointee_name := "";
-    pointee_ok := false;
-    pointee_is_struct := false;
-    if arg_type && arg_type.type == .POINTER {
-      pointee_name, pointee_ok, pointee_is_struct = ir_pointer_pointee_lowered_name(arg_type);
-      if !pointee_ok return out, false;
-    }
     array_add(*out.args, .{
       name = it.name,
       type = arg_ir_type,
       type_name = arg_type_name,
       original_type_name = original_type_name,
-      is_pointer = arg_type && arg_type.type == .POINTER,
-      pointer_pointee_type_name = pointee_name,
-      pointer_pointee_is_struct = pointee_is_struct,
     });
   }
 

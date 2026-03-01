@@ -207,17 +207,17 @@ ir_struct_has_pointer_fields_recursive_local :: (extra_structs: [] IR_Struct, na
   st := ir_find_struct_by_name_local(extra_structs, name);
   if !st return false;
   for st.fields {
-    if it.is_pointer return true;
-    if it.type_name.count != 0 && ir_struct_has_pointer_fields_recursive_local(extra_structs, it.type_name) return true;
+    if it.type.kind == .POINTER return true;
+    nested_name := it.type.struct_name;
+    if nested_name.count != 0 && ir_struct_has_pointer_fields_recursive_local(extra_structs, nested_name) return true;
   }
   return false;
 } @jdll_export 
 
 ir_uses_pointer_abi_local :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct) -> bool {
   for args {
-    using it;
-    if !is_pointer || !pointer_pointee_is_struct || pointer_pointee_type_name.count == 0 continue;
-    if ir_struct_has_pointer_fields_recursive_local(extra_structs, pointer_pointee_type_name) return true;
+    if it.type.kind != .POINTER || !it.type.pointee_is_struct || it.type.pointee_struct_name.count == 0 continue;
+    if ir_struct_has_pointer_fields_recursive_local(extra_structs, it.type.pointee_struct_name) return true;
   }
   return false;
 } @jdll_export
