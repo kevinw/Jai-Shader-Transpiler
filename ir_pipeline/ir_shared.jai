@@ -244,11 +244,6 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       }
 
       decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
-      _, type_ok := ir_type_to_shader_name(decl_type);
-      if !type_ok {
-        ir_set_diagnostic(state, tprint("IR lowering: unsupported declaration type for '%'", decl.name), stmt);
-        return false;
-      }
       out_stmt: IR_Stmt;
       out_stmt.kind = .DECL;
       out_stmt.origin_node = stmt;
@@ -557,10 +552,6 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           if !source_decl_type_ok {
             return_err("IR lowering: iterable for-loop source has unsupported type", stmt);
           }
-          _, source_decl_name_ok := ir_type_to_shader_name(iterable_source_type);
-          if !source_decl_name_ok {
-            return_err("IR lowering: iterable for-loop source type name lowering failed", stmt);
-          }
           source_decl_name := tprint("__for_source_%_%", out_stmt.for_loop_name, out_block.statements.count);
           array_add(*out_block.statements, {
             kind = .DECL,
@@ -588,10 +579,6 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         iter_decl_ir_type, iter_decl_ir_type_ok := ir_type_from_type_info(iter_decl_type);
         if !iter_decl_ir_type_ok {
           return_err(tprint("IR lowering: iterable for-loop iterator '%' has unsupported type", op.ident_decl.name), stmt);
-        }
-        _, iter_decl_type_ok := ir_type_to_shader_name(iter_decl_type);
-        if !iter_decl_type_ok {
-          return_err(tprint("IR lowering: iterable for-loop iterator '%' could not be lowered to shader type", op.ident_decl.name), stmt);
         }
 
         array_add(*out_stmt.for_body.statements, {
@@ -1055,8 +1042,6 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
 
   for header.arguments {
     arg_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
-    _, arg_ok := ir_type_to_shader_name(arg_type);
-    if !arg_ok return out, false;
     arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
     if !arg_ir_type_ok return out, false;
     array_add(*out.args, .{
