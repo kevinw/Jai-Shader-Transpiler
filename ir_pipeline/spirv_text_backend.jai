@@ -744,7 +744,6 @@ IR_SPV_Buffer_Element_Info :: struct {
 parse_buffer_element_info :: (buffer: IR_Compute_Buffer) -> IR_SPV_Buffer_Element_Info {
   using info: IR_SPV_Buffer_Element_Info;
   element_type_name = buffer.element_type.display_name;
-  if element_type_name.count == 0 element_type_name = buffer.element_type_name;
   elem_kind = spv_kind_from_ir_type_kind(buffer.element_type.kind);
 
   if buffer.element_type.kind == .FIXED_ARRAY {
@@ -812,8 +811,6 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
         elem_type.kind = it.type.pointee_kind;
         elem_type.display_name = it.type.pointee_display_name;
         elem_type.struct_name = it.type.pointee_struct_name;
-        if elem_type.display_name.count == 0 elem_type.display_name = elem_type_name;
-        if elem_type.kind == .STRUCT && elem_type.struct_name.count == 0 elem_type.struct_name = elem_type_name;
         array_add(out_buffers, .{
           name = field_path,
           element_type = elem_type,
