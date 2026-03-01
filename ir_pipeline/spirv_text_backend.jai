@@ -310,6 +310,7 @@ IR_SPV_Gen_Buffer :: struct {
   binding_index: s64;
   is_readonly: bool;
   element_type_name: string;
+  element_struct_name: string;
   element_kind: IR_SPV_Gen_Type;
   element_type_id: s64;
   runtimearr_type_id: s64;
@@ -1062,6 +1063,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     ptr_storage_element_type_id := new_id(s);
 
     buffer_info.element_kind = .STRUCT;
+    buffer_info.element_struct_name = struct_type_name;
     buffer_info.element_type_id = element_struct_type_id;
     buffer_info.runtimearr_type_id = runtimearr_type_id;
     buffer_info.wrapper_struct_type_id = wrapper_struct_type_id;
@@ -2037,8 +2039,8 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
     if source_buffer.element_kind != .STRUCT {
       return true, false, make_diag("helper '%' pointer arg '%' expected struct buffer pointee '%'.", helper_name, arg.name, arg.type.pointee_struct_name);
     }
-    if arg.type.pointee_struct_name.count != 0 && source_buffer.element_type_name != arg.type.pointee_struct_name {
-      return true, false, make_diag("helper '%' pointer arg '%' pointee mismatch (expected '%', got '%').", helper_name, arg.name, arg.type.pointee_struct_name, source_buffer.element_type_name);
+    if arg.type.pointee_struct_name.count != 0 && source_buffer.element_struct_name != arg.type.pointee_struct_name {
+      return true, false, make_diag("helper '%' pointer arg '%' pointee mismatch (expected '%', got '%').", helper_name, arg.name, arg.type.pointee_struct_name, source_buffer.element_struct_name);
     }
   } else {
     if expected_kind == .UNKNOWN {
@@ -2138,7 +2140,7 @@ bind_inline_function_struct_arg :: (s: *IR_SPV_Gen_State, function_name: string,
 
   if arg_expr && arg_expr.kind == .SUBSCRIPT && arg_expr.left && arg_expr.left.kind == .IDENT {
     src_buffer := find_buffer(s, arg_expr.left.text);
-    if src_buffer && src_buffer.element_kind == .STRUCT && src_buffer.element_type_name == arg_struct_name {
+    if src_buffer && src_buffer.element_kind == .STRUCT && src_buffer.element_struct_name == arg_struct_name {
       for arg_struct.fields {
         src_ptr, src_type, src_ok, src_diag := emit_buffer_struct_field_ptr(s, arg_expr, it.name);
         if !src_ok return false, src_diag;
@@ -4126,7 +4128,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             return_err("struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
           buffer := find_buffer(s, buffer_name);
-          if !buffer || buffer.element_kind != .STRUCT || buffer.element_type_name != struct_type_name {
+          if !buffer || buffer.element_kind != .STRUCT || buffer.element_struct_name != struct_type_name {
             return_err("struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
           for struct_def.fields {
@@ -4178,9 +4180,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             if !src_struct {
               return_err("assignment source '%' is not a local struct.", stmt.binary_right.text);
             }
-            if src_struct.type_name != dst_buffer.element_type_name {
+            if src_struct.type_name != dst_buffer.element_struct_name {
               return_err("struct buffer assignment type mismatch ('%' vs '%').",
-                         dst_buffer.element_type_name, src_struct.type_name);
+                         dst_buffer.element_struct_name, src_struct.type_name);
             }
           } else if stmt.binary_right && stmt.binary_right.kind == .CALL &&
                     stmt.binary_right.left && stmt.binary_right.left.kind == .IDENT {
@@ -4191,7 +4193,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
                 helper_return_struct_name = spv_struct_name_from_ir_type(helper.return_type);
               }
             }
-            if !helper || helper_return_struct_name != dst_buffer.element_type_name {
+            if !helper || helper_return_struct_name != dst_buffer.element_struct_name {
               return_err("struct buffer assignment call '%' has incompatible return type.", expr_text(stmt.binary_right));
             }
             tmp_name := tprint("__assign_src_%", new_id(s));
@@ -4204,9 +4206,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
               return_err("inline helper assignment source struct '%' went missing.", tmp_name);
             }
           } else if stmt.binary_right && stmt.binary_right.kind == .CONSTRUCTOR &&
-                    spv_struct_name_from_ir_expr_result(stmt.binary_right) == dst_buffer.element_type_name {
+                    spv_struct_name_from_ir_expr_result(stmt.binary_right) == dst_buffer.element_struct_name {
             tmp_name := tprint("__assign_src_%", new_id(s));
-            tmp_struct, tmp_ok, tmp_diag := alloc_local_struct(s, tmp_name, dst_buffer.element_type_name);
+            tmp_struct, tmp_ok, tmp_diag := alloc_local_struct(s, tmp_name, dst_buffer.element_struct_name);
             if !tmp_ok return false, false, tmp_diag;
             init_ok, init_diag := init_local_struct_from_expr(s, tmp_struct, stmt.binary_right);
             if !init_ok return false, false, init_diag;
