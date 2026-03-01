@@ -121,9 +121,12 @@ Status: In large part fixed (March 1, 2026) across backend hot paths; remaining 
   - Removed broad backend reliance on legacy pointer/type-name mirrors for resource classification and physical-pointer graphics traversal.
   - Migrated helper struct-arg/return matching and struct constructor/init checks to typed struct metadata first.
   - Removed now-unused string-parser helpers that previously inferred semantics from wrapper text.
+  - Removed remaining SPIR-V type-name parser fallbacks (`expr_type_from_decl` / fixed-array type-name parsing family); backend type decisions now use `IR_Type` metadata.
   - Removed remaining IR mirror fields used by backends (`pointer_*`, `original_type_name`, field/arg `type_name`, function `return_type_name`, stmt `decl_type_name`, compute-buffer `element_type_name`) and rewired callsites to typed `IR_Type`.
   - Simplified lowering helpers to typed side-effect collectors (no more string wrapper synthesis when the return text is unused), and centralized typed name selection through one shared utility.
   - Removed the legacy `"<operator_not_supported>"` sentinel TODO path from active codepaths; operator handling now uses explicit success/failure flow.
   - Tightened compute builtin note matching from substring scans to normalized exact-name matching (optional `@` prefix / call-style suffix normalization).
+  - Removed origin-node-based struct-init type fallback in SPIR-V local struct init; constructor type matching now depends on lowered typed result metadata only.
+  - Replaced member-path buffer resolution fallbacks that previously depended on reconstructed expression text with structural IR member-chain resolution.
 - Outcome:
   - Backend semantics now primarily come from lowered type metadata instead of reconstructed strings, with narrow compatibility fallbacks only where lowering completeness is still being finished.

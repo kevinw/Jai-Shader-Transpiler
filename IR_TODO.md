@@ -70,20 +70,9 @@ Direction note:
   - Add explicit `f16` type lowering and capability/extension emission in SPIR-V backend.
   - Validate cross-backend codegen and ABI layout for `half` storage buffers, including transpiler regression tests.
 
-## 16) SPIR-V type decisions still fall back to parsing type-name strings
+## 17) Builtin-note detection still relies on note text parsing
 - Symptom:
-  - Backend frequently calls `expr_type_from_decl(name)` and `parse_fixed_array_type_name(name)` on textual type names.
-- Where hit:
-  - `ir_pipeline/spirv_text_backend.jai`, `ir_pipeline/spirv_text_backend_emitters.jai`.
-- Cost:
-  - Duplicated parser logic, fragility from name spelling/canonicalization, and avoidable type ambiguity.
-- Desired fix:
-  - Carry/use richer IR type metadata (`IR_Type` kind/element/pointee/count) in all backend decision points.
-  - Treat string type names as diagnostics/output only, not as semantic source of truth.
-
-## 17) Builtin-note detection relies on substring matching note text
-- Symptom:
-  - Compute builtin mapping still relies on note text parsing instead of structured note/operator identity.
+  - Compute builtin mapping uses normalized exact note-name text matching instead of structured note/operator identity.
 - Where hit:
   - `ir_pipeline/ir_lowering.jai` `compute_builtin_note_for_member`.
 - Cost:

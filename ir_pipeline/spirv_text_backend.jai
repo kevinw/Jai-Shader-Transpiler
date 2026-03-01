@@ -116,6 +116,20 @@ resolve_member_root_and_field :: (expr: *IR_Expr) -> (root_name: string, field_n
   return root_name, expr.text, true;
 }
 
+resolve_member_path :: (expr: *IR_Expr) -> (path: string, ok: bool) {
+  if !expr return "", false;
+  if expr.kind != .MEMBER {
+    base_name, base_ok := resolve_ident_or_zero_deref(expr);
+    if !base_ok return "", false;
+    return base_name, true;
+  }
+
+  left_path, left_ok := resolve_member_path(expr.left);
+  if !left_ok return "", false;
+  if expr.text.count == 0 return "", false;
+  return tprint("%.%", left_path, expr.text), true;
+}
+
 expr_text :: (expr: *IR_Expr) -> string {
   text, ok := ir_expr_to_slang_from_ir(expr);
   if !ok return "";
@@ -653,8 +667,8 @@ resolve_buffer_name_from_expr :: (expr: *IR_Expr) -> (buffer_name: string, ok: b
   if expr.kind == .MEMBER {
     member_root, member_field, member_ok := resolve_member_root_and_field(expr);
     if member_ok return tprint("%.%", member_root, member_field), true;
-    fallback := expr_text(expr);
-    if fallback.count != 0 return fallback, true;
+    member_path, path_ok := resolve_member_path(expr);
+    if path_ok return member_path, true;
   }
   return "", false;
 }
@@ -1350,12 +1364,6 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
   }
 
   expr_struct_name := spv_struct_name_from_ir_expr_result(expr);
-  if expr_struct_name.count == 0 && expr.origin_node && expr.origin_node.type {
-    origin_type, origin_type_ok := ir_type_from_type_info(expr.origin_node.type);
-    if origin_type_ok && origin_type.kind == .STRUCT {
-      expr_struct_name = ir_string_first_non_empty(origin_type.struct_name, origin_type.display_name);
-    }
-  }
   if expr.kind != .CONSTRUCTOR || expr_struct_name != dst.type_name {
     return false, make_diag("unsupported struct init expression for type '%'.", dst.type_name);
   }
@@ -1444,7 +1452,9 @@ emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, fiel
     if member_ok {
       buffer_name = tprint("%.%", member_root, member_field);
     } else {
-      buffer_name = expr_text(subscript.left);
+      member_path, member_path_ok := resolve_member_path(subscript.left);
+      if !member_path_ok return_err("subscript base must resolve to a buffer identifier/member.");
+      buffer_name = member_path;
     }
   } else {
     return_err("subscript base must resolve to a buffer identifier/member.");
