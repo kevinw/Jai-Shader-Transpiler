@@ -743,7 +743,8 @@ IR_SPV_Buffer_Element_Info :: struct {
 
 parse_buffer_element_info :: (buffer: IR_Compute_Buffer) -> IR_SPV_Buffer_Element_Info {
   using info: IR_SPV_Buffer_Element_Info;
-  element_type_name = buffer.element_type_name;
+  element_type_name = buffer.element_type.display_name;
+  if element_type_name.count == 0 element_type_name = buffer.element_type_name;
   elem_kind = spv_kind_from_ir_type_kind(buffer.element_type.kind);
 
   if buffer.element_type.kind == .FIXED_ARRAY {
