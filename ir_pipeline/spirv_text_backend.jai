@@ -814,7 +814,6 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
         array_add(out_buffers, .{
           name = field_path,
           element_type = elem_type,
-          element_type_name = elem_type_name,
           is_readonly = field_readonly || default_readonly,
         });
       }

@@ -1747,10 +1747,6 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
     if !elem_ir_ok {
         return_err("unsupported typed pointee for argument '%'", arg.name, node=arg);
     }
-    elem_type_name, elem_ok := ir_type_to_shader_name(ptr.pointer_to);
-    if !elem_ok {
-        return_err("unsupported pointee type for argument '%'", arg.name, node=arg);
-    }
     if ptr.pointer_to && ptr.pointer_to.type == .STRUCT {
       struct_type := cast(*Type_Info_Struct) ptr.pointer_to;
       struct_name := jai_to_hlsl_type_name(get_struct_type_name(struct_type));
@@ -1765,7 +1761,6 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
     array_add(*out.buffers, .{
       name = arg.name,
       element_type = elem_ir_type,
-      element_type_name = elem_type_name,
       is_readonly = false,
     });
   }

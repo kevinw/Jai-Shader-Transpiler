@@ -394,7 +394,6 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
           display_name = elem_type_name,
           struct_name = arg.type.pointee_struct_name,
         },
-        element_type_name = elem_type_name,
         is_readonly = arg.is_readonly,
       });
       continue;
@@ -405,19 +404,15 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         display_name = arg.type.pointee_display_name,
         struct_name = arg.type.pointee_struct_name,
       };
-      elem_type_name := arg.type.pointee_display_name;
       if arg.type.pointee_kind == .FIXED_ARRAY {
         elem_type.array_count = arg.type.pointee_array_count;
         elem_type.element_kind = arg.type.pointee_element_kind;
         elem_type.element_display_name = arg.type.pointee_element_display_name;
         elem_type.element_struct_name = arg.type.pointee_element_struct_name;
-        elem_type_name = elem_type.element_display_name;
-        if elem_type_name.count == 0 elem_type_name = elem_type.element_struct_name;
       }
       array_add(*graphics_buffers, .{
         name = arg.name,
         element_type = elem_type,
-        element_type_name = elem_type_name,
         is_readonly = arg.is_readonly,
       });
       continue;

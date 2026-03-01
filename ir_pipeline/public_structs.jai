@@ -97,7 +97,6 @@ IR_Compute_Shader :: struct {
 IR_Compute_Buffer :: struct {
   name: string;
   element_type: IR_Type;
-  element_type_name: string;
   is_readonly: bool;
 }
 
