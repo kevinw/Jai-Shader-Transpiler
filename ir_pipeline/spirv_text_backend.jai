@@ -4076,7 +4076,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 
       struct_type_name := stmt.decl_type.struct_name;
       if struct_type_name.count == 0 {
-        return_err("unsupported declaration type '%': missing typed struct metadata.", stmt.decl_type_name);
+        decl_type_name := stmt.decl_type.display_name;
+        if decl_type_name.count == 0 decl_type_name = "<unknown>";
+        return_err("unsupported declaration type '%': missing typed struct metadata.", decl_type_name);
       }
       struct_def := find_struct(s, struct_type_name);
       if !struct_def {

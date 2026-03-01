@@ -13,8 +13,8 @@ ir_emit_ir_stmt_lines :: (out_lines: *[..] string, stmt: *IR_Stmt, indent: s64) 
 
   if stmt.kind == {
     case .DECL; {
-      decl_type_text := stmt.decl_type_name;
-      if stmt.decl_type.display_name.count != 0 decl_type_text = stmt.decl_type.display_name;
+      decl_type_text := stmt.decl_type.display_name;
+      if decl_type_text.count == 0 decl_type_text = stmt.decl_type.struct_name;
       line := tprint("% % %", ir_shared_stmt_indent(indent), decl_type_text, stmt.decl_name);
       if stmt.decl_init {
         expr_text, ok := ir_expr_to_slang_from_ir(stmt.decl_init);
@@ -244,7 +244,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       }
 
       decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
-      type_name, type_ok := ir_type_to_shader_name(decl_type);
+      _, type_ok := ir_type_to_shader_name(decl_type);
       if !type_ok {
         ir_set_diagnostic(state, tprint("IR lowering: unsupported declaration type for '%'", decl.name), stmt);
         return false;
@@ -252,7 +252,6 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt: IR_Stmt;
       out_stmt.kind = .DECL;
       out_stmt.origin_node = stmt;
-      out_stmt.decl_type_name = type_name;
       decl_ir_type, decl_ir_type_ok := ir_type_from_type_info(decl_type);
       if !decl_ir_type_ok {
         ir_set_diagnostic(state, tprint("IR lowering: unsupported typed declaration info for '%'", decl.name), stmt);
@@ -558,8 +557,8 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           if !source_decl_type_ok {
             return_err("IR lowering: iterable for-loop source has unsupported type", stmt);
           }
-          source_decl_type_name, source_decl_type_name_ok := ir_type_to_shader_name(iterable_source_type);
-          if !source_decl_type_name_ok {
+          _, source_decl_name_ok := ir_type_to_shader_name(iterable_source_type);
+          if !source_decl_name_ok {
             return_err("IR lowering: iterable for-loop source type name lowering failed", stmt);
           }
           source_decl_name := tprint("__for_source_%_%", out_stmt.for_loop_name, out_block.statements.count);
@@ -567,7 +566,6 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
             kind = .DECL,
             origin_node = stmt,
             decl_type = source_decl_type,
-            decl_type_name = source_decl_type_name,
             decl_name = source_decl_name,
             decl_init = iter_source,
           });
@@ -591,8 +589,8 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         if !iter_decl_ir_type_ok {
           return_err(tprint("IR lowering: iterable for-loop iterator '%' has unsupported type", op.ident_decl.name), stmt);
         }
-        iter_decl_type_name, iter_decl_type_name_ok := ir_type_to_shader_name(iter_decl_type);
-        if !iter_decl_type_name_ok {
+        _, iter_decl_type_ok := ir_type_to_shader_name(iter_decl_type);
+        if !iter_decl_type_ok {
           return_err(tprint("IR lowering: iterable for-loop iterator '%' could not be lowered to shader type", op.ident_decl.name), stmt);
         }
 
@@ -600,7 +598,6 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           kind = .DECL,
           origin_node = stmt,
           decl_type = iter_decl_ir_type,
-          decl_type_name = iter_decl_type_name,
           decl_name = op.ident_decl.name,
           decl_init = iter_value_expr,
         });

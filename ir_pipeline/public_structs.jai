@@ -186,7 +186,6 @@ IR_Stmt :: struct {
 
   // DECL
   decl_type: IR_Type;
-  decl_type_name: string;
   decl_name: string;
   decl_init: *IR_Expr;
 

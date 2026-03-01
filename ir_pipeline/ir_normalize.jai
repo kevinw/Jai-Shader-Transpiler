@@ -101,12 +101,6 @@ make_ident_expr :: (name: string) -> *IR_Expr {
   return ident;
 }
 
-ir_type_text_for_decl :: (type: IR_Type) -> string {
-  if type.display_name.count != 0 return type.display_name;
-  if type.struct_name.count != 0 return type.struct_name;
-  return "";
-}
-
 normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type: IR_Type, temp_counter: *s64) -> bool {
   assert(block != null);
   assert(temp_counter != null);
@@ -128,7 +122,6 @@ normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type: IR_Typ
       decl_stmt: IR_Stmt;
       decl_stmt.kind = .DECL;
       decl_stmt.decl_type = return_type;
-      decl_stmt.decl_type_name = ir_type_text_for_decl(return_type);
       decl_stmt.decl_name = temp_name;
       decl_stmt.decl_init = stmt.return_expr;
 
