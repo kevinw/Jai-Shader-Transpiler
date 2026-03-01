@@ -681,7 +681,7 @@ ir_expr_new :: (kind: IR_Expr_Kind, node: *Code_Node = null) -> *IR_Expr {
   e := New(IR_Expr);
   e.kind = kind;
   e.origin_node = node;
-  e.builtin_component = -1;
+  e.builtin_ref.component = -1;
   if node && node.type {
     lowered_type, lowered_ok := ir_type_from_type_info(node.type);
     if lowered_ok e.result_type = lowered_type;
@@ -786,8 +786,8 @@ ir_lower_expr :: (node: *Code_Node,
         out.left = ir_expr_new(.IDENT);
         out.left.text = "input";
         out.text = ident.name;
-        builtin_kind, builtin_ok := ir_lookup_input_builtin_kind(state, ident.name);
-        if builtin_ok out.builtin_kind = builtin_kind;
+        builtin_ref, builtin_ok := ir_lookup_input_builtin_ref(state, ident.name);
+        if builtin_ok out.builtin_ref = builtin_ref;
         return out, true;
       }
 
@@ -817,6 +817,11 @@ ir_lower_expr :: (node: *Code_Node,
         out := ir_expr_new(.MEMBER);
         out.left = base;
         out.text = ident.name;
+        if base && base.builtin_ref.kind != .NONE {
+          out.builtin_ref = base.builtin_ref;
+          component, component_ok := ir_vector_component_index(ident.name);
+          if component_ok out.builtin_ref.component = component;
+        }
         return out, true;
       }
 
@@ -1052,15 +1057,15 @@ ir_lower_expr :: (node: *Code_Node,
           out := ir_expr_new(.MEMBER);
           out.left = left_for_member;
           out.text = right_ident.name;
-          if left_for_member && left_for_member.builtin_kind != .NONE {
-            out.builtin_kind = left_for_member.builtin_kind;
+          if left_for_member && left_for_member.builtin_ref.kind != .NONE {
+            out.builtin_ref = left_for_member.builtin_ref;
             component, component_ok := ir_vector_component_index(right_ident.name);
-            if component_ok out.builtin_component = component;
+            if component_ok out.builtin_ref.component = component;
           } else if left_for_member &&
                     left_for_member.kind == .IDENT &&
                     left_for_member.text == "input" {
-            builtin_kind, builtin_ok := ir_lookup_input_builtin_kind(state, right_ident.name);
-            if builtin_ok out.builtin_kind = builtin_kind;
+            builtin_ref, builtin_ok := ir_lookup_input_builtin_ref(state, right_ident.name);
+            if builtin_ok out.builtin_ref = builtin_ref;
           }
           return out, true;
         }
@@ -1431,12 +1436,12 @@ ir_builtin_kind_from_semantic :: (semantic: string) -> (IR_Expr_Builtin_Kind, bo
   return .NONE, false;
 }
 
-ir_lookup_input_builtin_kind :: (state: *IR_Lowering_State, field_name: string) -> (IR_Expr_Builtin_Kind, bool) {
-  if !state return .NONE, false;
+ir_lookup_input_builtin_ref :: (state: *IR_Lowering_State, field_name: string) -> (IR_Builtin_Ref, bool) {
+  if !state return .{}, false;
   for state.input_builtin_fields {
-    if it.field_name == field_name return it.builtin_kind, true;
+    if it.field_name == field_name return it.builtin_ref, true;
   }
-  return .NONE, false;
+  return .{}, false;
 }
 
 ir_vector_component_index :: (field_name: string) -> (s32, bool) {
@@ -1756,7 +1761,13 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
   for input_struct.fields {
     builtin_kind, builtin_ok := ir_builtin_kind_from_semantic(it.semantic);
     if !builtin_ok continue;
-    array_add(*state.input_builtin_fields, .{field_name = it.name, builtin_kind = builtin_kind});
+    array_add(*state.input_builtin_fields, .{
+      field_name = it.name,
+      builtin_ref = .{
+        kind = builtin_kind,
+        component = -1,
+      },
+    });
   }
 
   out.source_name = ctx.name;

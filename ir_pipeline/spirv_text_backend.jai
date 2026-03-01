@@ -171,10 +171,7 @@ compact_text :: (in: string) -> string {
 
 thread_x_expr :: (expr: *IR_Expr) -> bool {
   if !expr return false;
-  if expr.builtin_component != 0 return false;
-  return expr.builtin_kind == .DISPATCH_THREAD_ID ||
-         expr.builtin_kind == .GROUP_THREAD_ID ||
-         expr.builtin_kind == .GROUP_ID;
+  return expr.builtin_ref.kind == .DISPATCH_THREAD_ID && expr.builtin_ref.component == 0;
 }
 
 match_branch_condition_outer :: (expr: *IR_Expr) -> (u32, bool) {
@@ -2758,34 +2755,19 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
 
     case .MEMBER; {
       path := expr_text(expr);
-      if expr.builtin_component >= 0 && expr.builtin_component <= 2 {
-        if expr.builtin_kind == .DISPATCH_THREAD_ID {
-          return load_builtin_vec3_component(s, s.id_gl_global_invocation_id, expr.builtin_component), .UINT, true, diag;
+      if expr.builtin_ref.component >= 0 && expr.builtin_ref.component <= 2 {
+        if expr.builtin_ref.kind == .DISPATCH_THREAD_ID {
+          return load_builtin_vec3_component(s, s.id_gl_global_invocation_id, expr.builtin_ref.component), .UINT, true, diag;
         }
-        if expr.builtin_kind == .GROUP_THREAD_ID {
-          return load_builtin_vec3_component(s, s.id_gl_local_invocation_id, expr.builtin_component), .UINT, true, diag;
+        if expr.builtin_ref.kind == .GROUP_THREAD_ID {
+          return load_builtin_vec3_component(s, s.id_gl_local_invocation_id, expr.builtin_ref.component), .UINT, true, diag;
         }
-        if expr.builtin_kind == .GROUP_ID {
-          return load_builtin_vec3_component(s, s.id_gl_workgroup_id, expr.builtin_component), .UINT, true, diag;
+        if expr.builtin_ref.kind == .GROUP_ID {
+          return load_builtin_vec3_component(s, s.id_gl_workgroup_id, expr.builtin_ref.component), .UINT, true, diag;
         }
       }
-      if expr.builtin_kind == .GROUP_INDEX && expr.builtin_component == -1 {
+      if expr.builtin_ref.kind == .GROUP_INDEX && expr.builtin_ref.component == -1 {
         return load_builtin_u32(s, s.id_gl_local_invocation_index), .UINT, true, diag;
-      }
-      if expr.left &&
-         (expr.left.builtin_kind == .DISPATCH_THREAD_ID ||
-          expr.left.builtin_kind == .GROUP_THREAD_ID ||
-          expr.left.builtin_kind == .GROUP_ID) &&
-         expr.left.builtin_component == -1 {
-        component: s64 = -1;
-        if expr.text == "x" component = 0;
-        else if expr.text == "y" component = 1;
-        else if expr.text == "z" component = 2;
-        if component != -1 {
-          if expr.left.builtin_kind == .DISPATCH_THREAD_ID return load_builtin_vec3_component(s, s.id_gl_global_invocation_id, component), .UINT, true, diag;
-          if expr.left.builtin_kind == .GROUP_THREAD_ID return load_builtin_vec3_component(s, s.id_gl_local_invocation_id, component), .UINT, true, diag;
-          if expr.left.builtin_kind == .GROUP_ID return load_builtin_vec3_component(s, s.id_gl_workgroup_id, component), .UINT, true, diag;
-        }
       }
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
         helper := find_function(s, expr.left.left.text);

@@ -156,13 +156,17 @@ IR_Expr_Builtin_Kind :: enum {
   GROUP_INDEX;
 }
 
+IR_Builtin_Ref :: struct {
+  kind: IR_Expr_Builtin_Kind;
+  component: s32; // -1 means whole builtin value (for vector builtins).
+}
+
 IR_Expr :: struct {
   kind: IR_Expr_Kind;
   origin_node: *Code_Node;
   result_type: IR_Type;
   unary_op: IR_Unary_Op;
-  builtin_kind: IR_Expr_Builtin_Kind;
-  builtin_component: s32; // -1 means whole builtin value (for vector builtins).
+  builtin_ref: IR_Builtin_Ref;
   binary_operator_type: Operator_Type;
   text: string;
   left: *IR_Expr;
@@ -245,7 +249,7 @@ IR_Diagnostic :: struct {
 
 IR_Input_Builtin_Field :: struct {
   field_name: string;
-  builtin_kind: IR_Expr_Builtin_Kind;
+  builtin_ref: IR_Builtin_Ref;
 }
 
 IR_Lowering_State :: struct {
