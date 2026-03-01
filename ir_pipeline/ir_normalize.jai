@@ -94,30 +94,6 @@ normalize_value_return_if_chains_in_block :: (block: *IR_Block) -> bool {
   return changed_any;
 }
 
-is_struct_like_type_name :: (name: string) -> bool {
-  if name.count == 0 return false;
-  if name == {
-    case "void";
-    case "bool";
-    case "float";
-    case "float2";
-    case "float3";
-    case "float4";
-    case "float2x2";
-    case "Matrix2";
-    case "int";
-    case "s32";
-    case "uint";
-    case "u32";
-    case "int64";
-    case "s64";
-    case "uint64";
-    case "u64";
-      return false;
-  }
-  return true;
-}
-
 make_ident_expr :: (name: string) -> *IR_Expr {
   ident := New(IR_Expr);
   ident.kind = .IDENT;
@@ -125,7 +101,13 @@ make_ident_expr :: (name: string) -> *IR_Expr {
   return ident;
 }
 
-normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type: IR_Type, return_type_name: string, temp_counter: *s64) -> bool {
+ir_type_text_for_decl :: (type: IR_Type) -> string {
+  if type.display_name.count != 0 return type.display_name;
+  if type.struct_name.count != 0 return type.struct_name;
+  return "";
+}
+
+normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type: IR_Type, temp_counter: *s64) -> bool {
   assert(block != null);
   assert(temp_counter != null);
   changed := false;
@@ -133,11 +115,11 @@ normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type: IR_Typ
   i: s64 = 0;
   while i < block.statements.count {
     stmt := *block.statements[i];
-    if stmt.if_then changed = normalize_struct_return_exprs_in_block(stmt.if_then, return_type, return_type_name, temp_counter) || changed;
-    if stmt.if_else changed = normalize_struct_return_exprs_in_block(stmt.if_else, return_type, return_type_name, temp_counter) || changed;
-    for stmt.switch_cases if it.body changed = normalize_struct_return_exprs_in_block(it.body, return_type, return_type_name, temp_counter) || changed;
-    if stmt.for_body changed = normalize_struct_return_exprs_in_block(stmt.for_body, return_type, return_type_name, temp_counter) || changed;
-    if stmt.while_body changed = normalize_struct_return_exprs_in_block(stmt.while_body, return_type, return_type_name, temp_counter) || changed;
+    if stmt.if_then changed = normalize_struct_return_exprs_in_block(stmt.if_then, return_type, temp_counter) || changed;
+    if stmt.if_else changed = normalize_struct_return_exprs_in_block(stmt.if_else, return_type, temp_counter) || changed;
+    for stmt.switch_cases if it.body changed = normalize_struct_return_exprs_in_block(it.body, return_type, temp_counter) || changed;
+    if stmt.for_body changed = normalize_struct_return_exprs_in_block(stmt.for_body, return_type, temp_counter) || changed;
+    if stmt.while_body changed = normalize_struct_return_exprs_in_block(stmt.while_body, return_type, temp_counter) || changed;
 
     if stmt.kind == .RETURN && stmt.return_expr {
       temp_name := tprint("__ret_struct_%", temp_counter.*);
@@ -146,7 +128,7 @@ normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type: IR_Typ
       decl_stmt: IR_Stmt;
       decl_stmt.kind = .DECL;
       decl_stmt.decl_type = return_type;
-      decl_stmt.decl_type_name = return_type_name;
+      decl_stmt.decl_type_name = ir_type_text_for_decl(return_type);
       decl_stmt.decl_name = temp_name;
       decl_stmt.decl_init = stmt.return_expr;
 
@@ -168,16 +150,9 @@ normalize_struct_return_exprs_in_block :: (block: *IR_Block, return_type: IR_Typ
 
 normalize_function_struct_returns_to_temp :: (ir_function: *IR_Function) -> bool {
   assert(ir_function != null);
-  return_type := ir_function.return_type;
-  if return_type.kind != .STRUCT {
-    if return_type.kind != .UNKNOWN || !is_struct_like_type_name(ir_function.return_type_name) return false;
-    // Legacy compatibility for callers that still only set return_type_name.
-    return_type.kind = .STRUCT;
-    return_type.display_name = ir_function.return_type_name;
-    return_type.struct_name = ir_function.return_type_name;
-  }
+  if ir_function.return_type.kind != .STRUCT return false;
   counter: s64 = 0;
-  return normalize_struct_return_exprs_in_block(*ir_function.body, return_type, ir_function.return_type_name, *counter);
+  return normalize_struct_return_exprs_in_block(*ir_function.body, ir_function.return_type, *counter);
 }
 
 #scope_file

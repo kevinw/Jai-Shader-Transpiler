@@ -107,7 +107,6 @@ IR_Function_Arg :: struct {
 IR_Function :: struct {
   name: string;
   return_type: IR_Type;
-  return_type_name: string;
   args: [..] IR_Function_Arg;
   body: IR_Block;
 }

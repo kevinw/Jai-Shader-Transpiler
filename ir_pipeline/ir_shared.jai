@@ -1051,13 +1051,9 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
     ret_type := ifx ret.type_inst then ret.type_inst.result else ifx ret.expression then ret.expression.type else null;
     ret_ir_type, ret_ir_ok := ir_type_from_type_info(ret_type);
     if !ret_ir_ok return out, false;
-    ret_name, ret_ok := ir_type_to_shader_name(ret_type);
-    if !ret_ok return out, false;
     out.return_type = ret_ir_type;
-    out.return_type_name = ret_name;
   } else {
     out.return_type = .{kind = .UNKNOWN, display_name = "void"};
-    out.return_type_name = "void";
   }
 
   for header.arguments {
@@ -1103,8 +1099,9 @@ ir_shared_collect_functions_recursive :: (header: *Code_Procedure_Header,
 
 ir_function_signature_string :: (ir_function: *IR_Function, include_arg_names: bool) -> string {
   b: String_Builder;
-  ret_type_name := ir_function.return_type_name;
-  if ir_function.return_type.display_name.count != 0 ret_type_name = ir_function.return_type.display_name;
+  ret_type_name := ir_function.return_type.display_name;
+  if ret_type_name.count == 0 ret_type_name = ir_function.return_type.struct_name;
+  if ret_type_name.count == 0 ret_type_name = "void";
   append(*b, ret_type_name, " ", ir_function.name, "(");
   for ir_function.args {
     if it_index != 0 append(*b, ", ");
