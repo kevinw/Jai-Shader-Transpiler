@@ -1987,16 +1987,39 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
   if expr && expr.kind == .CAST && expr.left expr = expr.left;
   if expr && expr.kind == .UNARY && expr.left && expr.unary_op == .ADDRESS_OF expr = expr.left;
 
+  expected_kind := spv_kind_from_ir_type_kind(arg.type.pointee_kind);
+
+  // Local pointer args: allow lvalue addresses of locals/struct fields/components.
+  if expr && !lvalue_hits_storage_buffer(s, expr) {
+    ptr_id, ptr_type, ptr_ok, _ := emit_lvalue_ptr(s, expr);
+    if ptr_ok {
+      if arg.type.pointee_kind == .STRUCT || expected_kind == .STRUCT {
+        return true, false, make_diag("helper '%' pointer arg '%' local struct pointees are not supported yet.", helper_name, arg.name);
+      }
+      if expected_kind == .UNKNOWN {
+        return true, false, make_diag("helper '%' pointer arg '%' has unsupported pointee kind %.", helper_name, arg.name, arg.type.pointee_kind);
+      }
+      if ptr_type != expected_kind {
+        return true, false, make_diag("helper '%' pointer arg '%' pointee mismatch (expected %, got %).", helper_name, arg.name, expected_kind, ptr_type);
+      }
+
+      array_add(*s.locals, .{
+        name = arg.name,
+        ptr_id = ptr_id,
+        type = ptr_type,
+      });
+      return true, true, diag;
+    }
+  }
+
   buffer_name, buffer_name_ok := resolve_buffer_name_from_expr(expr);
   if !buffer_name_ok {
-    return true, false, make_diag("helper '%' pointer arg '%' must be a buffer identifier/subscript.", helper_name, arg.name);
+    return true, false, make_diag("helper '%' pointer arg '%' must be a buffer identifier/subscript or local lvalue.", helper_name, arg.name);
   }
   source_buffer := find_buffer(s, buffer_name);
   if !source_buffer {
     return true, false, make_diag("helper '%' pointer arg '%' expected storage buffer identifier, got '%'.", helper_name, arg.name, buffer_name);
   }
-
-  expected_kind := spv_kind_from_ir_type_kind(arg.type.pointee_kind);
   if arg.type.pointee_kind == .STRUCT || expected_kind == .STRUCT {
     if source_buffer.element_kind != .STRUCT {
       return true, false, make_diag("helper '%' pointer arg '%' expected struct buffer pointee '%'.", helper_name, arg.name, arg.type.pointee_struct_name);

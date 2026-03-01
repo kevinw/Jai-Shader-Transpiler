@@ -108,6 +108,8 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"int64_loop_cast_mod", .Bare},
   {"matrix_ctor_scalar_chain", .Bare},
   {"helper_vector_return_swizzle", .Bare},
+  {"helper_local_pointer_scalar_arg", .Bare},
+  {"helper_local_pointer_float_arg", .Bare},
   {"defer_continue_return_nested", .Bare},
   {"switch_dense_sparse_through_default", .Bare},
   {"local_fixed_array_complex_index", .Bare},
@@ -1686,6 +1688,30 @@ helper_vector_return_swizzle :: (using in: Compute_Semantics_In, values: *u32) {
   v := helper_make_vec4(cast(float) (idx % 9));
   xy := v.xy;
   values[idx] = cast(u32) floor(xy.x * 2.0 + xy.y + v.z);
+} @compute_shader
+
+helper_local_pointer_scalar_add :: (v: *u32) {
+  v.* += 1;
+}
+
+helper_local_pointer_scalar_arg :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  tmp := values[idx];
+  helper_local_pointer_scalar_add(*tmp);
+  values[idx] = tmp;
+} @compute_shader
+
+helper_local_pointer_float_scale :: (v: *float) {
+  v.* = v.* * 2.0 + 1.0;
+}
+
+helper_local_pointer_float_arg :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  tmp := cast(float) (idx % 9);
+  helper_local_pointer_float_scale(*tmp);
+  values[idx] = cast(u32) floor(tmp * 4.0);
 } @compute_shader
 
 defer_continue_return_nested :: (using in: Compute_Semantics_In, values: *u32) {

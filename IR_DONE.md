@@ -156,6 +156,19 @@ Status: Fixed (February 28, 2026) for compute helper return-chain lowering.
   - `bash headless_ir/test_ir_compute_semantics.sh` passes with the new regression case.
   - `jai modules/Jai-Shader-Transpiler/build.jai - -run_tests` passes.
 
+## 11) Helper pointer arguments can now target local scalar lvalues in compute helper inlining
+Status: Fixed (March 1, 2026) for local scalar/vector lvalue pointer args.
+- Symptom before:
+  - `SPIR-V backend: helper '<name>' pointer arg '<arg>' expected storage buffer identifier, got '<local>'.`
+- Implemented:
+  - Extended inline helper pointer-arg binding to accept local lvalue sources (e.g. `*tmp`) in addition to storage-buffer identifiers/subscripts.
+  - Added local pointer-arg aliasing path and unary `*` lvalue support for helper pointer identifiers backed by local pointers.
+- Regression coverage:
+  - `helper_local_pointer_scalar_arg`
+  - `helper_local_pointer_float_arg`
+- Verification:
+  - `jai -quiet build.jai - -run_tests` passes.
+
 ## 18) Typed-first SPIR-V backend simplification (string-heuristic reduction)
 Status: In large part fixed (March 1, 2026) across backend hot paths; remaining small cleanup is tracked in `IR_TODO.md` #18.
 - Implemented:

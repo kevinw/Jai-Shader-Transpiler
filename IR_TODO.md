@@ -23,18 +23,6 @@ Direction note:
   - Optional: add shader-safe overload mapping for pointer-style convenience helpers, or
   - Improve diagnostics to explicitly call out host-only helper signatures.
 
-## 11) Helper pointer arguments cannot target local variables in shader IR
-- Symptom at compile time:
-  - `SPIR-V backend: helper 'tm_emit_vertex' pointer arg 'out_count' must be a buffer identifier.`
-- Where hit:
-  - Attempted robust emission pattern in terrain compute shader:
-    - `tm_emit_vertex(..., out_count: *u32, ...)` with `*count` where `count` is local.
-- Current workaround:
-  - Keep counter flow in return values (`out_count = tm_emit_vertex(...)`) instead of pointer mutation helpers.
-- Desired fix:
-  - Clarify this as an explicit language/IR restriction in diagnostics/docs, and/or
-  - Support pointer-to-function-local arguments for simple scalar mutation in helper calls.
-
 ## 12) Storage-buffer struct fields cannot be nested struct types (layout/type emission gap)
 - Symptom at compile time:
   - `SPIR-V backend mode failed for shader 'terrain_apply_brush_compute' (Compute).`

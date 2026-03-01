@@ -9,13 +9,17 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
   if expr.kind == .UNARY {
     if expr.unary_op == .DEREF {
       if !expr.left return_err("unary '*' missing operand.");
+      if expr.left.kind == .IDENT {
+        local_ptr := find_local(s, expr.left.text);
+        if local_ptr return local_ptr.ptr_id, local_ptr.type, true, diag;
+      }
       buffer_name, buffer_name_ok := resolve_buffer_name_from_expr(expr.left);
       if !buffer_name_ok return_err("unsupported unary '*' lvalue base.");
-    buffer := find_buffer(s, buffer_name);
-    if !buffer return_err("unknown unary '*' lvalue base '%'.", buffer_name);
-    if buffer.element_kind == .STRUCT return_err("struct buffer '%' requires member access on lvalue.", buffer.name);
-    idx := ifx buffer.has_base_index then buffer.base_index_id else s.id_uint_0;
-    ptr := new_id(s);
+      buffer := find_buffer(s, buffer_name);
+      if !buffer return_err("unknown unary '*' lvalue base '%'.", buffer_name);
+      if buffer.element_kind == .STRUCT return_err("struct buffer '%' requires member access on lvalue.", buffer.name);
+      idx := ifx buffer.has_base_index then buffer.base_index_id else s.id_uint_0;
+      ptr := new_id(s);
       add_op(s, ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
       return ptr, buffer.element_kind, true, diag;
     }
