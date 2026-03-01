@@ -80,34 +80,6 @@ SPV_KIND_INFO :: IR_SPV_Kind_Info.[
   .{kind=.BOOL,   type_slot=.TYPE_BOOL,   storage_ptr_slot=.NONE,               input_ptr_slot=.NONE,             output_ptr_slot=.NONE,               uniform_ptr_slot=.NONE,               func_ptr_slot=.PTR_FUNC_BOOL,   byte_size=0,  is_integral=false, is_signed=false},
 ];
 
-IR_SPV_Decl_Alias :: struct {
-  name: string;
-  kind: IR_SPV_Gen_Type;
-}
-
-SPV_DECL_ALIASES :: IR_SPV_Decl_Alias.[
-  .{name="int", kind=.INT64},
-  .{name="s64", kind=.INT64},
-  .{name="int64_t", kind=.INT64},
-  .{name="u64", kind=.UINT64},
-  .{name="uint64_t", kind=.UINT64},
-  .{name="s32", kind=.INT},
-  .{name="int32_t", kind=.INT},
-  .{name="uint", kind=.UINT},
-  .{name="u32", kind=.UINT},
-  .{name="uint32_t", kind=.UINT},
-  .{name="float", kind=.FLOAT},
-  .{name="float2", kind=.FLOAT2},
-  .{name="float3", kind=.FLOAT3},
-  .{name="float4", kind=.FLOAT4},
-  .{name="float2x2", kind=.FLOAT2X2},
-  .{name="Vector2", kind=.FLOAT2},
-  .{name="Vector3", kind=.FLOAT3},
-  .{name="Vector4", kind=.FLOAT4},
-  .{name="Matrix2", kind=.FLOAT2X2},
-  .{name="bool", kind=.BOOL},
-];
-
 kind_info :: (kind: IR_SPV_Gen_Type) -> *IR_SPV_Kind_Info {
   for *SPV_KIND_INFO if it.kind == kind return it;
   return null;
@@ -164,12 +136,6 @@ state_id_from_slot :: (s: *IR_SPV_Gen_State, slot: IR_SPV_Id_Slot) -> s64 {
     case .PTR_FUNC_BOOL; return s.id_ptr_func_bool;
   }
   return 0;
-}
-
-expr_type_from_decl :: (name: string) -> IR_SPV_Gen_Type {
-  compact := compact_text(name);
-  for SPV_DECL_ALIASES if it.name == compact return it.kind;
-  return .UNKNOWN;
 }
 
 type_id_from_kind :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {

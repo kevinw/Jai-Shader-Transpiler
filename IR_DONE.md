@@ -129,5 +129,6 @@ Status: In large part fixed (March 1, 2026) across backend hot paths; remaining 
   - Removed origin-node-based struct-init type fallback in SPIR-V local struct init; constructor type matching now depends on lowered typed result metadata only.
   - Replaced member-path buffer resolution fallbacks that previously depended on reconstructed expression text with structural IR member-chain resolution.
   - Switched thread-id branch-pattern matching and storage-buffer lvalue classification from expression-text reconstruction to structural member-path matching.
+  - Removed dead SPIR-V decl-alias type parser tables/helpers (`SPV_DECL_ALIASES`, `expr_type_from_decl`) that were no longer referenced after typed lowering migration.
 - Outcome:
   - Backend semantics now primarily come from lowered type metadata instead of reconstructed strings, with narrow compatibility fallbacks only where lowering completeness is still being finished.
