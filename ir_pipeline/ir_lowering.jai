@@ -193,30 +193,25 @@ declaration_get_semantic :: (decl: *Code_Declaration) -> (string, bool) {
   return "", false;
 }
 
-ir_lower_struct_member_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> (string, bool) {
-  if !type return "", false;
+ir_collect_nested_structs_for_member_type :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> bool {
+  if !type return false;
 
   if type.type == .POINTER {
     ptr := cast(*Type_Info_Pointer) type;
-    if !ptr.pointer_to return "", false;
+    if !ptr.pointer_to return false;
     if ptr.pointer_to.type == .STRUCT {
       st := cast(*Type_Info_Struct) ptr.pointer_to;
       nested_name := jai_to_hlsl_type_name(get_struct_type_name(st));
       if !ir_is_builtin_shader_type_name(nested_name) {
         nested_struct, nested_ok := ir_lower_struct_with_pointer_members_from_type(nested_name, ptr.pointer_to, extra_structs);
-        if !nested_ok return "", false;
+        if !nested_ok return false;
         ir_add_struct_unique_by_name(extra_structs, nested_struct);
       }
-      if ir_struct_has_pointer_members(ptr.pointer_to) {
-        // Model pointers-to-parameter-block structs as direct struct values.
-        return nested_name, true;
-      }
-      return tprint("StructuredBuffer<%>", nested_name), true;
+      return true;
     }
 
-    elem_name, elem_ok := ir_type_to_shader_name(ptr.pointer_to);
-    if !elem_ok return "", false;
-    return tprint("StructuredBuffer<%>", elem_name), true;
+    _, elem_ok := ir_type_to_shader_name(ptr.pointer_to);
+    return elem_ok;
   }
 
   if type.type == .STRUCT {
@@ -224,14 +219,14 @@ ir_lower_struct_member_type_name :: (type: *Type_Info, extra_structs: *[..] IR_S
     nested_name := jai_to_hlsl_type_name(get_struct_type_name(st));
     if !ir_is_builtin_shader_type_name(nested_name) {
       nested_struct, nested_ok := ir_lower_struct_with_pointer_members_from_type(nested_name, type, extra_structs);
-      if !nested_ok return "", false;
+      if !nested_ok return false;
       ir_add_struct_unique_by_name(extra_structs, nested_struct);
     }
-    return nested_name, true;
+    return true;
   }
 
-  type_name, type_ok := ir_type_to_shader_name(type);
-  return type_name, type_ok;
+  _, type_ok := ir_type_to_shader_name(type);
+  return type_ok;
 }
 
 ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Info, extra_structs: *[..] IR_Struct) -> (IR_Struct, bool) {
@@ -244,7 +239,7 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
   for *st.members {
     ir_type, ir_type_ok := ir_type_from_type_info(it.type);
     if !ir_type_ok return out, false;
-    _, ok := ir_lower_struct_member_type_name(it.type, extra_structs);
+    ok := ir_collect_nested_structs_for_member_type(it.type, extra_structs);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
     array_add(*out.fields, .{
@@ -475,39 +470,36 @@ ir_validate_parameter_block_layout :: (arg_name: string, struct_type: *Type_Info
   return false;
 }
 
-ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> (string, bool) {
-  if !type return "", false;
+ir_collect_nested_structs_for_shader_arg_type :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> bool {
+  if !type return false;
   if type.type == .POINTER {
     ptr := cast(*Type_Info_Pointer) type;
-    if !ptr.pointer_to return "", false;
+    if !ptr.pointer_to return false;
     if ptr.pointer_to.type == .STRUCT {
       st := cast(*Type_Info_Struct) ptr.pointer_to;
       struct_name := jai_to_hlsl_type_name(get_struct_type_name(st));
       if !ir_is_builtin_shader_type_name(struct_name) {
         lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, ptr.pointer_to, extra_structs);
-        if !lowered_ok return "", false;
+        if !lowered_ok return false;
         ir_add_struct_unique_by_name(extra_structs, lowered_struct);
       }
-      if ir_struct_has_pointer_members(ptr.pointer_to) return struct_name, true;
-      return tprint("StructuredBuffer<%>", struct_name), true;
+      return true;
     }
-    elem_name, elem_ok := ir_type_to_shader_name(ptr.pointer_to);
-    if !elem_ok return "", false;
-    return tprint("StructuredBuffer<%>", elem_name), true;
+    _, elem_ok := ir_type_to_shader_name(ptr.pointer_to);
+    return elem_ok;
   }
   if type.type == .STRUCT {
     st := cast(*Type_Info_Struct) type;
     struct_name := jai_to_hlsl_type_name(get_struct_type_name(st));
     if !ir_is_builtin_shader_type_name(struct_name) {
       lowered_struct, lowered_ok := ir_lower_struct_with_pointer_members_from_type(struct_name, type, extra_structs);
-      if !lowered_ok return "", false;
+      if !lowered_ok return false;
       ir_add_struct_unique_by_name(extra_structs, lowered_struct);
     }
-    // For graphics stages, extra struct args represent uniforms/resources, not stage input varyings.
-    return tprint("ParameterBlock<%>", struct_name), true;
+    return true;
   }
-  type_name, type_ok := ir_type_to_shader_name(type);
-  return type_name, type_ok;
+  _, type_ok := ir_type_to_shader_name(type);
+  return type_ok;
 }
 
 op_to_text :: (op: Operator_Type) -> (string, bool) {
@@ -1491,7 +1483,7 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
   for i: 1..ctx.header.arguments.count-1 {
     arg := ctx.header.arguments[i];
     arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
-    _, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
+    arg_ok := ir_collect_nested_structs_for_shader_arg_type(arg_type, *out.extra_structs);
     if !arg_ok return_err("unsupported extra argument '%'", arg.name);
     arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
     if !arg_ir_type_ok return_err("unsupported typed IR argument '%'", arg.name);
@@ -1601,7 +1593,7 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   for i: 1..ctx.header.arguments.count-1 {
     arg := ctx.header.arguments[i];
     arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
-    _, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
+    arg_ok := ir_collect_nested_structs_for_shader_arg_type(arg_type, *out.extra_structs);
     if !arg_ok {
         return_err("unsupported extra argument '%'", arg.name);
     }
