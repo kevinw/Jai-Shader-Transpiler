@@ -1620,59 +1620,11 @@ emit_int_binary_op :: (s: *IR_SPV_Gen_State, op: string, kind: IR_SPV_Gen_Type, 
   return 0, .UNKNOWN, false, make_diag("unsupported integer binary op '%' for kind %.", op, kind);
 }
 
-coerce_to_float :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
-  diag: IR_Diagnostic;
-  if value_type == .FLOAT return value_id, true, diag;
-  if value_type == .FLOAT16 {
-    converted := new_id(s);
-    add_op(s, converted, "OpFConvert", s.id_float, value_id);
-    return converted, true, diag;
-  }
-  if value_type == .UINT || value_type == .UINT64 {
-    converted := new_id(s);
-    add_op(s, converted, "OpConvertUToF", s.id_float, value_id);
-    return converted, true, diag;
-  }
-  if value_type == .INT || value_type == .INT64 {
-    converted := new_id(s);
-    add_op(s, converted, "OpConvertSToF", s.id_float, value_id);
-    return converted, true, diag;
-  }
-  diag.message = "cannot coerce value to float.";
-  return 0, false, diag;
-}
-
-coerce_to_float2 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float2_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
-  diag: IR_Diagnostic;
-  if value_type == .FLOAT2 return value_id, true, diag;
-  if value_type == .FLOAT return splat_float2(s, value_id), true, diag;
-  diag.message = "cannot coerce value to float2.";
-  return 0, false, diag;
-}
-
-coerce_to_float3 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float3_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
-  if value_type == .FLOAT3 return value_id, true, {};
-  if value_type == .FLOAT  return splat_float3(s, value_id), true, {};
-  return 0, false, make_diag("cannot coerce value to float3.");
-}
-
-coerce_to_float4 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float4_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
-  if value_type == .FLOAT4 return value_id, true, {};
-  if value_type == .FLOAT return splat_float4(s, value_id), true, {};
-  return 0, false, make_diag("cannot coerce value to float4.");
-}
-
-coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, ok: bool, diag: IR_Diagnostic) {
+spv_emit_scalar_conversion :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   if src_type == dst_type return value_id, true, {};
   dst_type_id := type_id_from_kind(s, dst_type);
-  if dst_type_id == 0 {
-    return 0, false, make_diag("unsupported coercion destination type %.", dst_type);
-  }
+  if dst_type_id == 0 return 0, false, make_diag("unsupported conversion destination type %.", dst_type);
 
   out := new_id(s);
   if dst_type == .FLOAT {
@@ -1705,8 +1657,6 @@ coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Typ
     }
   }
 
-  if dst_type == .BOOL && src_type == .BOOL return value_id, true, {};
-
   if is_integral_kind(dst_type) {
     if src_type == .FLOAT || src_type == .FLOAT16 {
       add_op(s, out, ifx is_signed_integral_kind(dst_type) then "OpConvertFToS" else "OpConvertFToU", dst_type_id, value_id);
@@ -1727,7 +1677,45 @@ coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Typ
       return out, true, {};
     }
   }
-  return 0, false, make_diag("unsupported coercion from % to %.", src_type, dst_type);
+
+  if dst_type == .BOOL && src_type == .BOOL return value_id, true, {};
+  return 0, false, make_diag("unsupported conversion from % to %.", src_type, dst_type);
+}
+
+coerce_to_float :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float_id: s64, ok: bool, diag: IR_Diagnostic) {
+  out_id, ok, diag := spv_emit_scalar_conversion(s, value_id, value_type, .FLOAT);
+  if !ok return 0, false, diag;
+  return out_id, true, {};
+}
+
+coerce_to_float2 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float2_id: s64, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if value_type == .FLOAT2 return value_id, true, diag;
+  if value_type == .FLOAT return splat_float2(s, value_id), true, diag;
+  diag.message = "cannot coerce value to float2.";
+  return 0, false, diag;
+}
+
+coerce_to_float3 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float3_id: s64, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  if value_type == .FLOAT3 return value_id, true, {};
+  if value_type == .FLOAT  return splat_float3(s, value_id), true, {};
+  return 0, false, make_diag("cannot coerce value to float3.");
+}
+
+coerce_to_float4 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float4_id: s64, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  if value_type == .FLOAT4 return value_id, true, {};
+  if value_type == .FLOAT return splat_float4(s, value_id), true, {};
+  return 0, false, make_diag("cannot coerce value to float4.");
+}
+
+coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  if src_type == dst_type return value_id, true, {};
+  out_id, ok, diag := spv_emit_scalar_conversion(s, value_id, src_type, dst_type);
+  return out_id, ok, diag;
 }
 
 coerce_to_exact_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, out_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
