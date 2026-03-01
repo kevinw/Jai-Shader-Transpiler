@@ -2702,10 +2702,12 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
     }
 
     case .MEMBER; {
-      path := expr_text(expr);
-      if path == "thread_id.x" || path == "input.thread_id.x" return load_thread_component(s, 0), .UINT, true, diag;
-      if path == "thread_id.y" || path == "input.thread_id.y" return load_thread_component(s, 1), .UINT, true, diag;
-      if path == "thread_id.z" || path == "input.thread_id.z" return load_thread_component(s, 2), .UINT, true, diag;
+      path, path_ok := resolve_member_path(expr);
+      if path_ok {
+        if path == "thread_id.x" || path == "input.thread_id.x" return load_thread_component(s, 0), .UINT, true, diag;
+        if path == "thread_id.y" || path == "input.thread_id.y" return load_thread_component(s, 1), .UINT, true, diag;
+        if path == "thread_id.z" || path == "input.thread_id.z" return load_thread_component(s, 2), .UINT, true, diag;
+      }
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
         helper := find_function(s, expr.left.left.text);
         if !helper return_err("unknown helper '%'.", expr.left.left.text);
