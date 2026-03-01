@@ -846,15 +846,16 @@ expand_compute_resource_root_buffers :: (s: *IR_SPV_Gen_State, in_buffers: [] IR
 
   for in_buffers {
     buf := it;
-    struct_name := buf.element_type.struct_name;
-    if buf.element_type.kind == .STRUCT && struct_name.count == 0 {
-      return_err("SPIR-V generic backend: compute root '%' struct buffer is missing typed struct metadata.", buf.name);
-    }
-    struct_def := find_struct(s, struct_name);
-    if !struct_def {
+    if buf.element_type.kind != .STRUCT {
       array_add(out_buffers, buf);
       continue;
     }
+    struct_name := buf.element_type.struct_name;
+    if struct_name.count == 0 {
+      return_err("SPIR-V generic backend: compute root '%' struct buffer is missing typed struct metadata.", buf.name);
+    }
+    struct_def := find_struct(s, struct_name);
+    if !struct_def return_err("SPIR-V generic backend: compute root '%' references missing struct '%'.", buf.name, struct_name);
 
     saw_resource, saw_non_resource := collect_struct_resource_fields(s, struct_def, buf.name, out_buffers, buf.is_readonly);
     if saw_resource {
