@@ -808,19 +808,11 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
       has_resource = true;
       if out_buffers {
         elem_type: IR_Type;
-        if it.type.kind == .POINTER {
-          elem_type.kind = it.type.pointee_kind;
-          elem_type.display_name = it.type.pointee_display_name;
-          elem_type.struct_name = it.type.pointee_struct_name;
-          if elem_type.display_name.count == 0 elem_type.display_name = elem_type_name;
-          if elem_type.kind == .STRUCT && elem_type.struct_name.count == 0 elem_type.struct_name = elem_type_name;
-        } else {
-          elem_type.display_name = elem_type_name;
-          if find_struct(s, elem_type_name) {
-            elem_type.kind = .STRUCT;
-            elem_type.struct_name = elem_type_name;
-          }
-        }
+        elem_type.kind = it.type.pointee_kind;
+        elem_type.display_name = it.type.pointee_display_name;
+        elem_type.struct_name = it.type.pointee_struct_name;
+        if elem_type.display_name.count == 0 elem_type.display_name = elem_type_name;
+        if elem_type.kind == .STRUCT && elem_type.struct_name.count == 0 elem_type.struct_name = elem_type_name;
         array_add(out_buffers, .{
           name = field_path,
           element_type = elem_type,
@@ -855,7 +847,9 @@ expand_compute_resource_root_buffers :: (s: *IR_SPV_Gen_State, in_buffers: [] IR
   for in_buffers {
     buf := it;
     struct_name := buf.element_type.struct_name;
-    if struct_name.count == 0 struct_name = buf.element_type_name;
+    if buf.element_type.kind == .STRUCT && struct_name.count == 0 {
+      return_err("SPIR-V generic backend: compute root '%' struct buffer is missing typed struct metadata.", buf.name);
+    }
     struct_def := find_struct(s, struct_name);
     if !struct_def {
       array_add(out_buffers, buf);
@@ -1047,11 +1041,14 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       continue;
     }
 
-    struct_type_name := element_type_name;
-    if it.element_type.kind == .STRUCT && it.element_type.struct_name.count != 0 {
+    struct_type_name := "";
+    if it.element_type.kind == .STRUCT {
       struct_type_name = it.element_type.struct_name;
-    } else if it.element_type.kind == .FIXED_ARRAY && it.element_type.element_kind == .STRUCT && it.element_type.element_struct_name.count != 0 {
+    } else if it.element_type.kind == .FIXED_ARRAY && it.element_type.element_kind == .STRUCT {
       struct_type_name = it.element_type.element_struct_name;
+    }
+    if struct_type_name.count == 0 {
+      return_err("SPIR-V generic backend: buffer '%' struct element is missing typed struct metadata.", it.name);
     }
 
     struct_def := find_struct(s, struct_type_name);
