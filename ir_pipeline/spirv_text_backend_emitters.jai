@@ -736,7 +736,13 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   sb: String_Builder;
   spv_append_module_preamble(*sb, *state, "Logical GLSL450");
   entry_point_sb: String_Builder;
-  append(*entry_point_sb, tprint("               OpEntryPoint GLCompute % \"%\" %", id_text(state.id_main), shader.entry_name, id_text(state.id_gl_global_invocation_id)));
+  append(*entry_point_sb, tprint("               OpEntryPoint GLCompute % \"%\" % % % %",
+                                 id_text(state.id_main),
+                                 shader.entry_name,
+                                 id_text(state.id_gl_global_invocation_id),
+                                 id_text(state.id_gl_local_invocation_id),
+                                 id_text(state.id_gl_workgroup_id),
+                                 id_text(state.id_gl_local_invocation_index)));
   spv_append_var_ids(*entry_point_sb, state.buffers);
   if state.uses_write_2d append(*entry_point_sb, " ", id_text(state.id_write_2d_textures_var));
   append(*entry_point_sb, "\n");
@@ -745,11 +751,17 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   append(*sb, "               OpSource Unknown 100000\n");
   append(*sb, tprint("               OpName % \"ComputeMain\"\n", id_text(state.id_main)));
   append(*sb, tprint("               OpName % \"gl_GlobalInvocationID\"\n", id_text(state.id_gl_global_invocation_id)));
+  append(*sb, tprint("               OpName % \"gl_LocalInvocationID\"\n", id_text(state.id_gl_local_invocation_id)));
+  append(*sb, tprint("               OpName % \"gl_WorkGroupID\"\n", id_text(state.id_gl_workgroup_id)));
+  append(*sb, tprint("               OpName % \"gl_LocalInvocationIndex\"\n", id_text(state.id_gl_local_invocation_index)));
   for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   if state.uses_write_2d append(*sb, tprint("               OpName % \"write_2d_textures\"\n", id_text(state.id_write_2d_textures_var)));
   for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
   for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
   append(*sb, tprint("               OpDecorate % BuiltIn GlobalInvocationId\n", id_text(state.id_gl_global_invocation_id)));
+  append(*sb, tprint("               OpDecorate % BuiltIn LocalInvocationId\n", id_text(state.id_gl_local_invocation_id)));
+  append(*sb, tprint("               OpDecorate % BuiltIn WorkgroupId\n", id_text(state.id_gl_workgroup_id)));
+  append(*sb, tprint("               OpDecorate % BuiltIn LocalInvocationIndex\n", id_text(state.id_gl_local_invocation_index)));
   spv_append_base_buffer_decorations(*sb, *state);
   spv_append_buffer_layout_decorations(*sb, *state);
   spv_append_buffer_binding_decorations(*sb, *state);
@@ -763,6 +775,9 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   spv_append_numeric_constants(*sb, *state);
   spv_append_write_2d_type_decls(*sb, *state);
   append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_global_invocation_id), id_text(state.id_ptr_input_v3uint)));
+  append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_local_invocation_id), id_text(state.id_ptr_input_v3uint)));
+  append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_workgroup_id), id_text(state.id_ptr_input_v3uint)));
+  append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_local_invocation_index), id_text(state.id_ptr_input_uint)));
   spv_append_buffer_type_decls(*sb, *state, "StorageBuffer");
   spv_append_buffer_vars(*sb, *state, "StorageBuffer");
   spv_append_write_2d_vars(*sb, *state);

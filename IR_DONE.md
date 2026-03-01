@@ -130,5 +130,7 @@ Status: In large part fixed (March 1, 2026) across backend hot paths; remaining 
   - Replaced member-path buffer resolution fallbacks that previously depended on reconstructed expression text with structural IR member-chain resolution.
   - Switched thread-id branch-pattern matching and storage-buffer lvalue classification from expression-text reconstruction to structural member-path matching.
   - Removed dead SPIR-V decl-alias type parser tables/helpers (`SPV_DECL_ALIASES`, `expr_type_from_decl`) that were no longer referenced after typed lowering migration.
+  - Added initial scalar `Float16`/`half` lowering path through IR -> SPIR-V (typed `F16` kind, `OpTypeFloat 16`, `Float16` capability gating, and cast/coercion support via `OpFConvert`/`OpConvert*ToF`) with compute semantics coverage.
+  - Removed compute thread builtin dependence on hardcoded identifier text (`thread_id.x` style): lowering now tags builtin provenance/components on IR expressions, and SPIR-V backend dispatch-thread handling consumes those tags.
 - Outcome:
   - Backend semantics now primarily come from lowered type metadata instead of reconstructed strings, with narrow compatibility fallbacks only where lowering completeness is still being finished.

@@ -16,6 +16,7 @@ IR_Type_Kind :: enum {
   U32;
   I64;
   U64;
+  F16;
   F32;
   F32x2;
   F32x3;
@@ -147,11 +148,21 @@ IR_Unary_Op :: enum {
   DEREF;
 }
 
+IR_Expr_Builtin_Kind :: enum {
+  NONE;
+  DISPATCH_THREAD_ID;
+  GROUP_THREAD_ID;
+  GROUP_ID;
+  GROUP_INDEX;
+}
+
 IR_Expr :: struct {
   kind: IR_Expr_Kind;
   origin_node: *Code_Node;
   result_type: IR_Type;
   unary_op: IR_Unary_Op;
+  builtin_kind: IR_Expr_Builtin_Kind;
+  builtin_component: s32; // -1 means whole builtin value (for vector builtins).
   binary_operator_type: Operator_Type;
   text: string;
   left: *IR_Expr;
@@ -232,8 +243,14 @@ IR_Diagnostic :: struct {
   has_location: bool;
 }
 
+IR_Input_Builtin_Field :: struct {
+  field_name: string;
+  builtin_kind: IR_Expr_Builtin_Kind;
+}
+
 IR_Lowering_State :: struct {
   first_error: IR_Diagnostic;
+  input_builtin_fields: [..] IR_Input_Builtin_Field;
 }
 
 Toolchain_Target :: enum { METAL; VULKAN_GLSL; }

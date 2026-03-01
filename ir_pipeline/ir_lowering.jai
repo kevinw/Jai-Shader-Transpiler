@@ -7,6 +7,7 @@
 
 ir_reset_diagnostic :: (using state: *IR_Lowering_State) {
     first_error = .{};
+    array_reset(*input_builtin_fields);
 } @jdll_export
 
 ir_set_diagnostic :: (using state: *IR_Lowering_State, message: string, node: *Code_Node = null) #c_call {
@@ -32,6 +33,16 @@ ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
 
 ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
   if !type return "", false;
+
+  if type.type == .VARIANT {
+    variant := cast(*Type_Info_Variant) type;
+    if variant.name == "Float16" return "half", true;
+    if variant.variant_of {
+      resolved_name, resolved_ok := ir_type_to_shader_name(variant.variant_of);
+      return resolved_name, resolved_ok;
+    }
+    return "", false;
+  }
 
   if type.type == .POINTER {
     ptr := cast(*Type_Info_Pointer) type;
@@ -62,7 +73,12 @@ ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
         return "", false;
       }
     }
-    case .FLOAT; return ifx type.runtime_size == 64 then "double" else "float", true;
+    case .FLOAT; {
+      if type.runtime_size == 8 return "double", true;
+      if type.runtime_size == 4 return "float", true;
+      if type.runtime_size == 2 return "half", true;
+      return "", false;
+    }
     case .BOOL; return "bool", true;
     case .STRUCT; {
       structtype := cast(*Type_Info_Struct) type;
@@ -79,6 +95,7 @@ ir_type_kind_from_slang_name :: (name: string) -> IR_Type_Kind {
   if name == "uint" || name == "u32" return .U32;
   if name == "int64_t" return .I64;
   if name == "uint64_t" return .U64;
+  if name == "half" return .F16;
   if name == "float" return .F32;
   if name == "float2" return .F32x2;
   if name == "float3" return .F32x3;
@@ -664,6 +681,7 @@ ir_expr_new :: (kind: IR_Expr_Kind, node: *Code_Node = null) -> *IR_Expr {
   e := New(IR_Expr);
   e.kind = kind;
   e.origin_node = node;
+  e.builtin_component = -1;
   if node && node.type {
     lowered_type, lowered_ok := ir_type_from_type_info(node.type);
     if lowered_ok e.result_type = lowered_type;
@@ -768,6 +786,8 @@ ir_lower_expr :: (node: *Code_Node,
         out.left = ir_expr_new(.IDENT);
         out.left.text = "input";
         out.text = ident.name;
+        builtin_kind, builtin_ok := ir_lookup_input_builtin_kind(state, ident.name);
+        if builtin_ok out.builtin_kind = builtin_kind;
         return out, true;
       }
 
@@ -1032,6 +1052,16 @@ ir_lower_expr :: (node: *Code_Node,
           out := ir_expr_new(.MEMBER);
           out.left = left_for_member;
           out.text = right_ident.name;
+          if left_for_member && left_for_member.builtin_kind != .NONE {
+            out.builtin_kind = left_for_member.builtin_kind;
+            component, component_ok := ir_vector_component_index(right_ident.name);
+            if component_ok out.builtin_component = component;
+          } else if left_for_member &&
+                    left_for_member.kind == .IDENT &&
+                    left_for_member.text == "input" {
+            builtin_kind, builtin_ok := ir_lookup_input_builtin_kind(state, right_ident.name);
+            if builtin_ok out.builtin_kind = builtin_kind;
+          }
           return out, true;
         }
         ir_set_diagnostic(state, "IR lowering: member access requires identifier on right-hand side", node);
@@ -1393,6 +1423,30 @@ ir_compute_builtin_to_semantic :: (builtin_name: string) -> (string, bool) {
   return "", false;
 }
 
+ir_builtin_kind_from_semantic :: (semantic: string) -> (IR_Expr_Builtin_Kind, bool) {
+  if semantic == "SV_DispatchThreadID" return .DISPATCH_THREAD_ID, true;
+  if semantic == "SV_GroupThreadID" return .GROUP_THREAD_ID, true;
+  if semantic == "SV_GroupID" return .GROUP_ID, true;
+  if semantic == "SV_GroupIndex" return .GROUP_INDEX, true;
+  return .NONE, false;
+}
+
+ir_lookup_input_builtin_kind :: (state: *IR_Lowering_State, field_name: string) -> (IR_Expr_Builtin_Kind, bool) {
+  if !state return .NONE, false;
+  for state.input_builtin_fields {
+    if it.field_name == field_name return it.builtin_kind, true;
+  }
+  return .NONE, false;
+}
+
+ir_vector_component_index :: (field_name: string) -> (s32, bool) {
+  if field_name == "x" return 0, true;
+  if field_name == "y" return 1, true;
+  if field_name == "z" return 2, true;
+  if field_name == "w" return 3, true;
+  return -1, false;
+}
+
 ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct, bool) {
   out: IR_Struct;
   out.name = name;
@@ -1699,6 +1753,11 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
   input_type := ifx input_arg.type_inst then input_arg.type_inst.result else ifx input_arg.expression then input_arg.expression.type else null;
   input_struct, input_ok := ir_lower_compute_input_struct(tprint("%_In", ctx.name), input_type);
   if !input_ok return_err("could not lower compute input struct/builtins");
+  for input_struct.fields {
+    builtin_kind, builtin_ok := ir_builtin_kind_from_semantic(it.semantic);
+    if !builtin_ok continue;
+    array_add(*state.input_builtin_fields, .{field_name = it.name, builtin_kind = builtin_kind});
+  }
 
   out.source_name = ctx.name;
   out.entry_name = "ComputeMain";

@@ -65,6 +65,8 @@ Direction note:
   - Terrain meshing/compaction memory planning (wanted to cut arena bandwidth/size by moving positions/normals to f16).
 - Current workaround:
   - Keep density/mesh buffers as `float` (`f32`) everywhere.
+- Current status:
+  - Initial scalar `Float16`/`half` path is now wired for local values/casts in compute semantics (typed IR `F16`, SPIR-V `OpTypeFloat 16`, capability gating, and basic coercions).
 - Desired fix:
   - Map "Float16" Jai module type Float16 to proper 16 bit float in the gpu
   - Add explicit `f16` type lowering and capability/extension emission in SPIR-V backend.

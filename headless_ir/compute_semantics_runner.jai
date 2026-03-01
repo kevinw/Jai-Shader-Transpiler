@@ -63,11 +63,13 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"vector_component_swap", .Boids},
   {"matrix_reassign_chain", .Bare},
   {"thread_id_y_component", .Bare},
+  {"thread_id_renamed_field", .Bare},
   {"global_constants_subscript", .Bare},
   {"local_float3_components", .Bare},
   {"wrap_helper_constants", .Bare},
   {"wrap_xy_cell_index", .Bare},
   {"float_constant_division", .Bare},
+  {"float16_roundtrip", .Bare},
   {"local_array_index_expression", .Bare},
   {"for_continue_break_mix", .Bare},
   {"switch_through_default", .Bare},
@@ -186,6 +188,7 @@ Compute_Table_Kind :: enum {
 
 Compute_Semantics_In :: struct {
   thread_id: UVector3; @thread_position_in_grid
+  #overlay (thread_id) dispatch_xyz: UVector3; @thread_position_in_grid
 }
 
 compute_bindless_write_2d :: (using in: Compute_Semantics_In, values: *u32) {
@@ -1036,6 +1039,11 @@ thread_id_y_component :: (using in: Compute_Semantics_In, values: *u32) {
   values[thread_id.x] = values[thread_id.x] + thread_id.y + 1;
 } @compute_shader
 
+thread_id_renamed_field :: (using in: Compute_Semantics_In, values: *u32) {
+  if dispatch_xyz.x >= 64 return;
+  values[dispatch_xyz.x] = values[dispatch_xyz.x] + dispatch_xyz.y + dispatch_xyz.z + 3;
+} @compute_shader
+
 EDGE_CONST_MUL :: 5;
 EDGE_CONST_ADD :: 11;
 
@@ -1116,6 +1124,15 @@ float_constant_division :: (using in: Compute_Semantics_In, values: *u32) {
   idx := thread_id.x;
   v := cast(float) (idx + 1) * EDGE_FLOAT_DT * 120.0;
   values[idx] = cast(u32) (v * 1000.0);
+} @compute_shader
+
+float16_roundtrip :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  base := (idx * 3 + 5) % 29;
+  h: Float16 = cast(Float16) base;
+  back := cast(float) h;
+  values[idx] = cast(u32) (back * 7.0 + 1.0);
 } @compute_shader
 
 local_array_index_expression :: (using in: Compute_Semantics_In, values: *u32) {
@@ -2767,6 +2784,7 @@ log_nserror :: (label: string, error: *NSError) -> bool {
 #import "Basic";
 #import "String";
 #import "Math";
+#import "Float16";
 #import "Metal";
 #import "Objective_C";
 #import "Compiler";

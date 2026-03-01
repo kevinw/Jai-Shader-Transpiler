@@ -169,14 +169,12 @@ compact_text :: (in: string) -> string {
   return string.{data=out.data, count=out.count};
 }
 
-is_thread_x_text :: (text: string) -> bool {
-  return text == "thread_id.x" || text == "input.thread_id.x";
-}
-
 thread_x_expr :: (expr: *IR_Expr) -> bool {
-  path, path_ok := resolve_member_path(expr);
-  if !path_ok return false;
-  return is_thread_x_text(path);
+  if !expr return false;
+  if expr.builtin_component != 0 return false;
+  return expr.builtin_kind == .DISPATCH_THREAD_ID ||
+         expr.builtin_kind == .GROUP_THREAD_ID ||
+         expr.builtin_kind == .GROUP_ID;
 }
 
 match_branch_condition_outer :: (expr: *IR_Expr) -> (u32, bool) {
@@ -200,6 +198,7 @@ IR_SPV_Gen_Type :: enum {
   UINT;
   INT64;
   UINT64;
+  FLOAT16;
   FLOAT;
   FLOAT2;
   FLOAT3;
@@ -315,6 +314,11 @@ IR_SPV_Gen_Const_F32 :: struct {
   id: s64;
 }
 
+IR_SPV_Gen_Const_F16 :: struct {
+  text: string;
+  id: s64;
+}
+
 IR_SPV_Gen_Const_Null :: struct {
   type_id: s64;
   id: s64;
@@ -385,6 +389,7 @@ IR_SPV_Gen_State :: struct {
   const_i64: [..] IR_SPV_Gen_Const_I64;
   const_u64: [..] IR_SPV_Gen_Const_U64;
   const_f32: [..] IR_SPV_Gen_Const_F32;
+  const_f16: [..] IR_SPV_Gen_Const_F16;
   const_null: [..] IR_SPV_Gen_Const_Null;
   buffers: [..] IR_SPV_Gen_Buffer;
   uniform_blocks: [..] IR_SPV_Gen_Uniform_Block;
@@ -423,6 +428,7 @@ IR_SPV_Gen_State :: struct {
     id_void: s64;
     id_fn_void: s64;
     id_uint: s64;
+    id_half: s64;
     id_float: s64;
     id_float2: s64;
     id_float3: s64;
@@ -435,7 +441,11 @@ IR_SPV_Gen_State :: struct {
     id_v2uint: s64;
     id_ptr_input_v3uint: s64;
     id_gl_global_invocation_id: s64;
+    id_gl_local_invocation_id: s64;
+    id_gl_workgroup_id: s64;
+    id_gl_local_invocation_index: s64;
     id_ptr_input_uint: s64;
+    id_ptr_input_half: s64;
     id_int: s64;
     id_int64: s64;
     id_uint64: s64;
@@ -446,6 +456,7 @@ IR_SPV_Gen_State :: struct {
     id_ptr_storage_int: s64;
     id_ptr_storage_int64: s64;
     id_ptr_storage_uint64: s64;
+    id_ptr_storage_half: s64;
     id_ptr_storage_float: s64;
     id_ptr_storage_float2: s64;
     id_ptr_storage_float3: s64;
@@ -458,6 +469,7 @@ IR_SPV_Gen_State :: struct {
     id_ptr_output_float2: s64;
     id_ptr_output_float3: s64;
     id_ptr_output_float4: s64;
+    id_ptr_uniform_half: s64;
     id_ptr_uniform_float: s64;
     id_ptr_uniform_float2: s64;
     id_ptr_uniform_float3: s64;
@@ -492,6 +504,7 @@ IR_SPV_Gen_State :: struct {
     id_ptr_func_uint: s64;
     id_ptr_func_int64: s64;
     id_ptr_func_uint64: s64;
+    id_ptr_func_half: s64;
     id_main: s64;
   };
 
@@ -940,6 +953,13 @@ get_f32_const :: (s: *IR_SPV_Gen_State, text: string) -> s64 {
   return id;
 }
 
+get_f16_const :: (s: *IR_SPV_Gen_State, text: string) -> s64 {
+  for s.const_f16 if it.text == text return it.id;
+  id := new_id(s);
+  array_add(*s.const_f16, .{text=text, id=id});
+  return id;
+}
+
 get_null_const :: (s: *IR_SPV_Gen_State, type_id: s64) -> s64 {
   if type_id == 0 return 0;
   for s.const_null if it.type_id == type_id return it.id;
@@ -1142,12 +1162,21 @@ load_thread_x :: (s: *IR_SPV_Gen_State) -> s64 {
   return load_thread_component(s, 0);
 }
 
-load_thread_component :: (s: *IR_SPV_Gen_State, component_index: s64) -> s64 {
+load_builtin_vec3_component :: (s: *IR_SPV_Gen_State, builtin_var_id: s64, component_index: s64) -> s64 {
   assert(s != null);
   assert(component_index >= 0 && component_index <= 2);
-  thread_id_ptr := new_id(s);
-  add_op(s, thread_id_ptr, "OpAccessChain", s.id_ptr_input_uint, s.id_gl_global_invocation_id, get_u32_const(s, cast(u32) component_index));
-  return add_op(s, new_id(s), "OpLoad", s.id_uint, thread_id_ptr);
+  ptr := new_id(s);
+  add_op(s, ptr, "OpAccessChain", s.id_ptr_input_uint, builtin_var_id, get_u32_const(s, cast(u32) component_index));
+  return add_op(s, new_id(s), "OpLoad", s.id_uint, ptr);
+}
+
+load_builtin_u32 :: (s: *IR_SPV_Gen_State, builtin_var_id: s64) -> s64 {
+  assert(s != null);
+  return add_op(s, new_id(s), "OpLoad", s.id_uint, builtin_var_id);
+}
+
+load_thread_component :: (s: *IR_SPV_Gen_State, component_index: s64) -> s64 {
+  return load_builtin_vec3_component(s, s.id_gl_global_invocation_id, component_index);
 }
 
 physical_aligned_suffix :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> string {
@@ -1239,6 +1268,7 @@ align_up :: (value: s64, alignment: s64) -> s64 {
 }
 
 host_blit_align_for_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .FLOAT16 return 2;
   if kind == .INT64 || kind == .UINT64 return 8;
   if kind == .INT || kind == .UINT || kind == .FLOAT || kind == .FLOAT2 ||
      kind == .FLOAT3 || kind == .FLOAT4 || kind == .FLOAT2X2 || kind == .BOOL return 4;
@@ -1571,6 +1601,11 @@ coerce_to_float :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_
   assert(s != null);
   diag: IR_Diagnostic;
   if value_type == .FLOAT return value_id, true, diag;
+  if value_type == .FLOAT16 {
+    converted := new_id(s);
+    add_op(s, converted, "OpFConvert", s.id_float, value_id);
+    return converted, true, diag;
+  }
   if value_type == .UINT || value_type == .UINT64 {
     converted := new_id(s);
     add_op(s, converted, "OpConvertUToF", s.id_float, value_id);
@@ -1618,6 +1653,10 @@ coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Typ
 
   out := new_id(s);
   if dst_type == .FLOAT {
+    if src_type == .FLOAT16 {
+      add_op(s, out, "OpFConvert", s.id_float, value_id);
+      return out, true, {};
+    }
     if src_type == .UINT || src_type == .UINT64 {
       add_op(s, out, "OpConvertUToF", s.id_float, value_id);
       return out, true, {};
@@ -1628,10 +1667,25 @@ coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Typ
     }
   }
 
+  if dst_type == .FLOAT16 {
+    if src_type == .FLOAT {
+      add_op(s, out, "OpFConvert", s.id_half, value_id);
+      return out, true, {};
+    }
+    if src_type == .UINT || src_type == .UINT64 {
+      add_op(s, out, "OpConvertUToF", s.id_half, value_id);
+      return out, true, {};
+    }
+    if src_type == .INT || src_type == .INT64 {
+      add_op(s, out, "OpConvertSToF", s.id_half, value_id);
+      return out, true, {};
+    }
+  }
+
   if dst_type == .BOOL && src_type == .BOOL return value_id, true, {};
 
   if is_integral_kind(dst_type) {
-    if src_type == .FLOAT {
+    if src_type == .FLOAT || src_type == .FLOAT16 {
       add_op(s, out, ifx is_signed_integral_kind(dst_type) then "OpConvertFToS" else "OpConvertFToU", dst_type_id, value_id);
       return out, true, {};
     }
@@ -1994,6 +2048,7 @@ spv_kind_from_ir_type_kind :: (kind: IR_Type_Kind) -> IR_SPV_Gen_Type {
   if kind == .U32 return .UINT;
   if kind == .I64 return .INT64;
   if kind == .U64 return .UINT64;
+  if kind == .F16 return .FLOAT16;
   if kind == .F32 return .FLOAT;
   if kind == .F32x2 return .FLOAT2;
   if kind == .F32x3 return .FLOAT3;
@@ -2702,11 +2757,35 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
     }
 
     case .MEMBER; {
-      path, path_ok := resolve_member_path(expr);
-      if path_ok {
-        if path == "thread_id.x" || path == "input.thread_id.x" return load_thread_component(s, 0), .UINT, true, diag;
-        if path == "thread_id.y" || path == "input.thread_id.y" return load_thread_component(s, 1), .UINT, true, diag;
-        if path == "thread_id.z" || path == "input.thread_id.z" return load_thread_component(s, 2), .UINT, true, diag;
+      path := expr_text(expr);
+      if expr.builtin_component >= 0 && expr.builtin_component <= 2 {
+        if expr.builtin_kind == .DISPATCH_THREAD_ID {
+          return load_builtin_vec3_component(s, s.id_gl_global_invocation_id, expr.builtin_component), .UINT, true, diag;
+        }
+        if expr.builtin_kind == .GROUP_THREAD_ID {
+          return load_builtin_vec3_component(s, s.id_gl_local_invocation_id, expr.builtin_component), .UINT, true, diag;
+        }
+        if expr.builtin_kind == .GROUP_ID {
+          return load_builtin_vec3_component(s, s.id_gl_workgroup_id, expr.builtin_component), .UINT, true, diag;
+        }
+      }
+      if expr.builtin_kind == .GROUP_INDEX && expr.builtin_component == -1 {
+        return load_builtin_u32(s, s.id_gl_local_invocation_index), .UINT, true, diag;
+      }
+      if expr.left &&
+         (expr.left.builtin_kind == .DISPATCH_THREAD_ID ||
+          expr.left.builtin_kind == .GROUP_THREAD_ID ||
+          expr.left.builtin_kind == .GROUP_ID) &&
+         expr.left.builtin_component == -1 {
+        component: s64 = -1;
+        if expr.text == "x" component = 0;
+        else if expr.text == "y" component = 1;
+        else if expr.text == "z" component = 2;
+        if component != -1 {
+          if expr.left.builtin_kind == .DISPATCH_THREAD_ID return load_builtin_vec3_component(s, s.id_gl_global_invocation_id, component), .UINT, true, diag;
+          if expr.left.builtin_kind == .GROUP_THREAD_ID return load_builtin_vec3_component(s, s.id_gl_local_invocation_id, component), .UINT, true, diag;
+          if expr.left.builtin_kind == .GROUP_ID return load_builtin_vec3_component(s, s.id_gl_workgroup_id, component), .UINT, true, diag;
+        }
       }
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
         helper := find_function(s, expr.left.left.text);
@@ -3085,7 +3164,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         result_id, result_type, result_ok, result_diag := emit_float4_binary_op(s, op, left_v4, right_id);
         return result_id, result_type, result_ok, result_diag;
       }
-      if left_type == .FLOAT || right_type == .FLOAT {
+      if left_type == .FLOAT || left_type == .FLOAT16 || right_type == .FLOAT || right_type == .FLOAT16 {
         left_float, left_float_ok, left_float_diag := coerce_to_float(s, left_id, left_type);
         if !left_float_ok return 0, .UNKNOWN, false, left_float_diag;
         right_float, right_float_ok, right_float_diag := coerce_to_float(s, right_id, right_type);
@@ -4001,7 +4080,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
     case .DECL; {
       decl_type := spv_kind_from_ir_type(stmt.decl_type);
       if decl_type == .INT || decl_type == .UINT || decl_type == .INT64 || decl_type == .UINT64 ||
-         decl_type == .BOOL || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT3 || decl_type == .FLOAT4 || decl_type == .FLOAT2X2 {
+         decl_type == .BOOL || decl_type == .FLOAT16 || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT3 || decl_type == .FLOAT4 || decl_type == .FLOAT2X2 {
         ptr_id := new_id(s);
         ptr_type_id := func_ptr_type_id_from_kind(s, decl_type);
         assert(ptr_type_id != 0);
