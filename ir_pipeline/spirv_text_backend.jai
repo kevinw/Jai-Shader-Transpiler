@@ -174,7 +174,9 @@ is_thread_x_text :: (text: string) -> bool {
 }
 
 thread_x_expr :: (expr: *IR_Expr) -> bool {
-  return is_thread_x_text(expr_text(expr));
+  path, path_ok := resolve_member_path(expr);
+  if !path_ok return false;
+  return is_thread_x_text(path);
 }
 
 match_branch_condition_outer :: (expr: *IR_Expr) -> (u32, bool) {
@@ -3972,7 +3974,9 @@ lvalue_hits_storage_buffer :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> bool {
     if expr.left && expr.left.kind == .MEMBER {
       member_root, member_field, member_ok := resolve_member_root_and_field(expr.left);
       if member_ok return find_buffer(s, tprint("%.%", member_root, member_field)) != null;
-      return find_buffer(s, expr_text(expr.left)) != null;
+      member_path, path_ok := resolve_member_path(expr.left);
+      if path_ok return find_buffer(s, member_path) != null;
+      return false;
     }
     return false;
   }
