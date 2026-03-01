@@ -1113,7 +1113,11 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     if cpu_stride != buffer_info.array_stride {
       return_err("SPIR-V generic backend: buffer struct '%' is not CPU-blittable (cpu stride %, gpu stride %).", struct_def.name, cpu_stride, buffer_info.array_stride);
     }
-    add_debug_name(s, buffer_info.element_type_id, debug_type_name(s, element_type_name));
+    debug_element_type_name := element_type_name;
+    if buffer_info.element_kind == .STRUCT && buffer_info.element_struct_name.count != 0 {
+      debug_element_type_name = buffer_info.element_struct_name;
+    }
+    add_debug_name(s, buffer_info.element_type_id, debug_type_name(s, debug_element_type_name));
     add_debug_name(s, buffer_info.runtimearr_type_id, debug_type_name(s, tprint("%_data_array", buffer_info.name)));
     add_debug_name(s, buffer_info.wrapper_struct_type_id, debug_type_name(s, tprint("%_buffer", buffer_info.name)));
     add_debug_member_name(s, buffer_info.wrapper_struct_type_id, 0, "data");
