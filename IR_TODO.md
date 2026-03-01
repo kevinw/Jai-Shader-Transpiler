@@ -75,10 +75,12 @@ Direction note:
   - Compute builtin mapping uses normalized exact note-name text matching instead of structured note/operator identity.
 - Where hit:
   - `ir_pipeline/ir_lowering.jai` `compute_builtin_note_for_member`.
+- Current constraint:
+  - In this path we consume `Type_Info_Struct_Member.notes`, which is `[] string` in `Preload.jai`; structured `Code_Note` pointers are not currently carried through this ABI.
 - Cost:
   - Even with strict name matching, text parsing can drift from compiler note semantics.
 - Desired fix:
-  - Consume structured note/operator info from Compiler AST/note nodes instead of string search.
+  - Thread source-declaration provenance for compute input members so lowering can read structured `Code_Note` info when available.
   - Emit diagnostics that include exact source note location/operator when unsupported.
 
 ## 18) IR still duplicates some frontend shape that can be referenced directly during lowering
