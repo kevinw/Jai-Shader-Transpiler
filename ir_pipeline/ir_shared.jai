@@ -1064,15 +1064,12 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
     arg_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
     arg_type_name, arg_ok := ir_type_to_shader_name(arg_type);
     if !arg_ok return out, false;
-    original_type_name, original_ok := ir_type_to_original_name(arg_type);
-    if !original_ok return out, false;
     arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
     if !arg_ir_type_ok return out, false;
     array_add(*out.args, .{
       name = it.name,
       type = arg_ir_type,
       type_name = arg_type_name,
-      original_type_name = original_type_name,
     });
   }
 

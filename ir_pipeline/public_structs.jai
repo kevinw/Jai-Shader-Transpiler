@@ -54,7 +54,6 @@ IR_Field :: struct {
   type: IR_Type;
   type_name: string;
   semantic: string;
-  original_type_name: string;
 }
 
 IR_Struct :: struct {
@@ -105,7 +104,6 @@ IR_Function_Arg :: struct {
   type: IR_Type;
   type_name: string;
   is_readonly: bool;
-  original_type_name: string;
 }
 
 IR_Function :: struct {

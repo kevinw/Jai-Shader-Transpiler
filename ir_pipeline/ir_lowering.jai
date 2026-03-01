@@ -73,29 +73,6 @@ ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
   return "", false;
 }
 
-ir_type_to_original_name :: (type: *Type_Info) -> (string, bool) {
-  if !type return "", false;
-
-  if type.type == .POINTER {
-    ptr := cast(*Type_Info_Pointer) type;
-    if !ptr.pointer_to return "", false;
-    pointee_name, pointee_ok := ir_type_to_original_name(ptr.pointer_to);
-    if !pointee_ok return "", false;
-    return tprint("*%", pointee_name), true;
-  }
-
-  if type.type == .ARRAY {
-    base_type, suffix := split_array_type_and_suffix("IR lowering", type);
-    if !base_type return "", false;
-    base_name, base_ok := ir_type_to_original_name(base_type);
-    if !base_ok return "", false;
-    return tprint("%%", base_name, suffix), true;
-  }
-
-  type_name, type_ok := ir_type_to_shader_name(type);
-  return type_name, type_ok;
-}
-
 ir_type_kind_from_slang_name :: (name: string) -> IR_Type_Kind {
   if name == "bool" return .BOOL;
   if name == "int" || name == "int32_t" return .I32;
@@ -190,14 +167,11 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
     type_name, ok := ir_type_to_shader_name(it.type);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
-    original_type_name, original_ok := ir_type_to_original_name(it.type);
-    if !original_ok return out, false;
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
       type_name = type_name,
       semantic = field_semantic,
-      original_type_name = original_type_name,
     });
   }
 
@@ -276,14 +250,11 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
     type_name, ok := ir_lower_struct_member_type_name(it.type, extra_structs);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
-    original_type_name, original_ok := ir_type_to_original_name(it.type);
-    if !original_ok return out, false;
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
       type_name = type_name,
       semantic = field_semantic,
-      original_type_name = original_type_name,
     });
   }
 
@@ -1417,14 +1388,11 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
     if !sem_ok return out, false;
     type_name, type_ok := ir_type_to_shader_name(it.type);
     if !type_ok return out, false;
-    original_type_name, original_ok := ir_type_to_original_name(it.type);
-    if !original_ok return out, false;
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
       type_name = type_name,
       semantic = semantic,
-      original_type_name = original_type_name,
     });
   }
 
@@ -1543,8 +1511,6 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
     arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
     arg_type_name, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
     if !arg_ok return_err("unsupported extra argument '%'", arg.name);
-    original_type_name, original_ok := ir_type_to_original_name(arg_type);
-    if !original_ok return_err("unsupported original type for argument '%'", arg.name);
     arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
     if !arg_ir_type_ok return_err("unsupported typed IR argument '%'", arg.name);
     if arg_type && arg_type.type == .STRUCT {
@@ -1558,7 +1524,6 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
       type = arg_ir_type,
       type_name = arg_type_name,
       is_readonly = true,
-      original_type_name = original_type_name,
     });
   }
   seen_headers: [..] *Code_Procedure_Header;
@@ -1639,17 +1604,12 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
     if !out_type_name_ok {
         return_err("unsupported non-struct return type name.", node=ret0);
     }
-    original_type_name, original_ok := ir_type_to_original_name(out_type);
-    if !original_ok {
-        return_err("unsupported original non-struct return type.", node=ret0);
-    }
     out_struct.name = tprint("%_Out", ctx.name);
     array_add(*out_struct.fields, .{
       name = "out_color",
       type = ret_ir_type,
       type_name = ret_type_name,
       semantic = ret_semantic,
-      original_type_name = original_type_name,
     });
   }
 
@@ -1664,10 +1624,6 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
     arg_type_name, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
     if !arg_ok {
         return_err("unsupported extra argument '%'", arg.name);
-    }
-    original_type_name, original_ok := ir_type_to_original_name(arg_type);
-    if !original_ok {
-        return_err("unsupported original type for argument '%'", arg.name);
     }
     arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
     if !arg_ir_type_ok {
@@ -1684,7 +1640,6 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
       type = arg_ir_type,
       type_name = arg_type_name,
       is_readonly = true,
-      original_type_name = original_type_name,
     });
   }
   seen_headers: [..] *Code_Procedure_Header;
