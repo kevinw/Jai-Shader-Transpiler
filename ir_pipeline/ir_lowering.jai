@@ -707,6 +707,7 @@ compute_builtin_note_for_member :: (member: *Type_Info_Struct_Member) -> (string
 ir_expr_new :: (kind: IR_Expr_Kind, node: *Code_Node = null) -> *IR_Expr {
   e := New(IR_Expr);
   e.kind = kind;
+  e.origin_node = node;
   if node && node.type {
     lowered_type, lowered_ok := ir_type_from_type_info(node.type);
     if lowered_ok e.result_type = lowered_type;

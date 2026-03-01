@@ -251,6 +251,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       }
       out_stmt: IR_Stmt;
       out_stmt.kind = .DECL;
+      out_stmt.origin_node = stmt;
       out_stmt.decl_type_name = type_name;
       decl_ir_type, decl_ir_type_ok := ir_type_from_type_info(decl_type);
       if !decl_ir_type_ok {
@@ -404,6 +405,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       if !right_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .BINARY;
+      out_stmt.origin_node = stmt;
       out_stmt.binary_left = left;
       out_stmt.binary_operator_type = bn.operator_type;
       out_stmt.binary_right = right;
@@ -423,6 +425,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
 
         out_stmt: IR_Stmt;
         out_stmt.kind = .SWITCH;
+        out_stmt.origin_node = stmt;
         out_stmt.switch_condition = cond;
 
         for op.then_block.statements {
@@ -455,6 +458,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       if !cond_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .IF;
+      out_stmt.origin_node = stmt;
       out_stmt.if_condition = cond;
       out_stmt.if_then = New(IR_Block);
       if !ir_shared_lower_block(op.then_block, out_stmt.if_then, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
@@ -474,6 +478,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
 
       out_stmt: IR_Stmt;
       out_stmt.kind = .FOR;
+      out_stmt.origin_node = stmt;
       out_stmt.for_cmp = "<=";
       out_stmt.for_step = "+= 1";
       iterable_element_type: *Type_Info = null;
@@ -560,6 +565,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           source_decl_name := tprint("__for_source_%_%", out_stmt.for_loop_name, out_block.statements.count);
           array_add(*out_block.statements, {
             kind = .DECL,
+            origin_node = stmt,
             decl_type = source_decl_type,
             decl_type_name = source_decl_type_name,
             decl_name = source_decl_name,
@@ -592,6 +598,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
 
         array_add(*out_stmt.for_body.statements, {
           kind = .DECL,
+          origin_node = stmt,
           decl_type = iter_decl_ir_type,
           decl_type_name = iter_decl_type_name,
           decl_name = op.ident_decl.name,
@@ -610,6 +617,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       if !cond_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .WHILE;
+      out_stmt.origin_node = stmt;
       out_stmt.while_condition = cond;
       out_stmt.while_body = New(IR_Block);
       if !ir_shared_lower_block(op.block, out_stmt.while_body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, scope_depth + 1) return false;
@@ -628,6 +636,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       if nearest_loop_scope_depth < 0 {
         return_err("IR lowering: break/continue outside of loop is unsupported", stmt);
       }
+      out_stmt.origin_node = stmt;
       ir_shared_emit_deferred_for_exit(out_block, active_defer_entries.*, nearest_loop_scope_depth);
       array_add(*out_block.statements, out_stmt);
       return true;
@@ -638,6 +647,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       if !call_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .CALL;
+      out_stmt.origin_node = stmt;
       out_stmt.call_expr = call_expr;
       array_add(*out_block.statements, out_stmt);
       return true;
@@ -657,6 +667,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       op := cast(*Code_Return) stmt;
       out_stmt: IR_Stmt;
       out_stmt.kind = .RETURN;
+      out_stmt.origin_node = stmt;
       if op.arguments_sorted.count == 1 {
         if !allow_return_value {
           return_err("IR lowering: return value not allowed in this context", stmt);
@@ -707,6 +718,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
 
               assign_stmt: IR_Stmt;
               assign_stmt.kind = .BINARY;
+              assign_stmt.origin_node = stmt;
               assign_stmt.binary_left = lhs;
               assign_stmt.binary_operator_type = cast(Operator_Type) #char "=";
               assign_stmt.binary_right = rhs;

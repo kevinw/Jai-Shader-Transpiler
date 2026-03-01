@@ -161,6 +161,7 @@ IR_Unary_Op :: enum {
 
 IR_Expr :: struct {
   kind: IR_Expr_Kind;
+  origin_node: *Code_Node;
   result_type: IR_Type;
   unary_op: IR_Unary_Op;
   binary_operator_type: Operator_Type;
@@ -191,6 +192,7 @@ IR_Switch_Case :: struct {
 
 IR_Stmt :: struct {
   kind: IR_Stmt_Kind;
+  origin_node: *Code_Node;
   
   // TODO: union
 

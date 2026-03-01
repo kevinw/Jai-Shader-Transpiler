@@ -1354,6 +1354,13 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
   }
 
   expr_struct_name := spv_struct_name_from_ir_expr_result(expr);
+  if expr_struct_name.count == 0 && expr.origin_node && expr.origin_node.type {
+    origin_type, origin_type_ok := ir_type_from_type_info(expr.origin_node.type);
+    if origin_type_ok && origin_type.kind == .STRUCT {
+      expr_struct_name = origin_type.struct_name;
+      if expr_struct_name.count == 0 expr_struct_name = origin_type.display_name;
+    }
+  }
   if expr.kind != .CONSTRUCTOR || expr_struct_name != dst.type_name {
     return false, make_diag("unsupported struct init expression for type '%'.", dst.type_name);
   }
