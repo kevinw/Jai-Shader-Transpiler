@@ -749,8 +749,7 @@ parse_buffer_element_info :: (buffer: IR_Compute_Buffer) -> IR_SPV_Buffer_Elemen
   if buffer.element_type.kind == .FIXED_ARRAY {
     parsed_fixed_array = true;
     parsed_array_count = buffer.element_type.array_count;
-    element_type_name = buffer.element_type.element_display_name;
-    if element_type_name.count == 0 element_type_name = buffer.element_type.element_struct_name;
+    element_type_name = ir_string_first_non_empty(buffer.element_type.element_display_name, buffer.element_type.element_struct_name);
     elem_kind = spv_kind_from_ir_type_kind(buffer.element_type.element_kind);
   }
 
@@ -768,8 +767,7 @@ resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> 
   assert(field != null);
 
   if field.type.kind == .POINTER {
-    pointee_name := field.type.pointee_struct_name;
-    if pointee_name.count == 0 pointee_name = field.type.pointee_display_name;
+    pointee_name := ir_string_first_non_empty(field.type.pointee_struct_name, field.type.pointee_display_name);
     if pointee_name.count == 0 return "", false, false;
     if field.type.pointee_kind == .STRUCT {
       nested_struct := find_struct(s, pointee_name);
@@ -1074,8 +1072,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     cpu_max_align: s64 = 1;
     for struct_def.fields {
       field_type := spv_kind_from_ir_type(it.type);
-      field_type_name := it.type.display_name;
-      if field_type_name.count == 0 field_type_name = it.type.struct_name;
+      field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
       if field_type == .UNKNOWN {
         return_err("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, field_type_name);
       }
@@ -1253,8 +1250,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
   local_struct.type_name = type_name;
   for struct_def.fields {
     field_type := spv_kind_from_ir_type(it.type);
-    field_type_name := it.type.display_name;
-    if field_type_name.count == 0 field_type_name = it.type.struct_name;
+    field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
     if field_type == .UNKNOWN || field_type == .STRUCT {
       nested_type_name := spv_struct_name_from_ir_type(it.type);
       nested_def := find_struct(s, nested_type_name);
@@ -1357,8 +1353,7 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
   if expr_struct_name.count == 0 && expr.origin_node && expr.origin_node.type {
     origin_type, origin_type_ok := ir_type_from_type_info(expr.origin_node.type);
     if origin_type_ok && origin_type.kind == .STRUCT {
-      expr_struct_name = origin_type.struct_name;
-      if expr_struct_name.count == 0 expr_struct_name = origin_type.display_name;
+      expr_struct_name = ir_string_first_non_empty(origin_type.struct_name, origin_type.display_name);
     }
   }
   if expr.kind != .CONSTRUCTOR || expr_struct_name != dst.type_name {
@@ -2016,15 +2011,12 @@ spv_kind_from_ir_type :: (type: IR_Type) -> IR_SPV_Gen_Type {
 
 spv_struct_name_from_ir_type :: (type: IR_Type) -> string {
   if type.kind != .STRUCT return "";
-  if type.struct_name.count != 0 return type.struct_name;
-  if type.display_name.count != 0 return type.display_name;
-  return "";
+  return ir_string_first_non_empty(type.struct_name, type.display_name);
 }
 
 spv_fixed_array_info_from_ir_type :: (type: IR_Type) -> (element_type_name: string, array_count: s64, element_kind: IR_SPV_Gen_Type, ok: bool) {
   if type.kind != .FIXED_ARRAY return "", 0, .UNKNOWN, false;
-  element_type_name := type.element_display_name;
-  if element_type_name.count == 0 element_type_name = type.element_struct_name;
+  element_type_name := ir_string_first_non_empty(type.element_display_name, type.element_struct_name);
   array_count := type.array_count;
   element_kind := spv_kind_from_ir_type_kind(type.element_kind);
   return element_type_name, array_count, element_kind, true;
@@ -4076,8 +4068,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 
       struct_type_name := stmt.decl_type.struct_name;
       if struct_type_name.count == 0 {
-        decl_type_name := stmt.decl_type.display_name;
-        if decl_type_name.count == 0 decl_type_name = "<unknown>";
+        decl_type_name := ir_string_first_non_empty(stmt.decl_type.display_name, stmt.decl_type.struct_name, "<unknown>");
         return_err("unsupported declaration type '%': missing typed struct metadata.", decl_type_name);
       }
       struct_def := find_struct(s, struct_type_name);

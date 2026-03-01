@@ -76,8 +76,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
 
   for input.fields {
     field_type := spv_kind_from_ir_type(it.type);
-    field_type_name := it.type.display_name;
-    if field_type_name.count == 0 field_type_name = it.type.struct_name;
+    field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported input field type '%' on '%'.", field_type_name, it.name);
     ptr_type_id := input_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing input pointer type for field '%'.", it.name);
@@ -95,8 +94,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
 
   for output.fields {
     field_type := spv_kind_from_ir_type(it.type);
-    field_type_name := it.type.display_name;
-    if field_type_name.count == 0 field_type_name = it.type.struct_name;
+    field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported output field type '%' on '%'.", field_type_name, it.name);
     ptr_type_id := output_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing output pointer type for field '%'.", it.name);
@@ -389,8 +387,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         }
       }
 
-      elem_type_name := arg.type.pointee_display_name;
-      if elem_type_name.count == 0 elem_type_name = arg.type.pointee_struct_name;
+      elem_type_name := ir_string_first_non_empty(arg.type.pointee_display_name, arg.type.pointee_struct_name);
       array_add(*graphics_buffers, .{
         name = arg.name,
         element_type = .{
@@ -441,8 +438,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
 
   for input.fields {
     field_type := spv_kind_from_ir_type(it.type);
-    field_type_name := it.type.display_name;
-    if field_type_name.count == 0 field_type_name = it.type.struct_name;
+    field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported input field type '%' on '%'.", field_type_name, it.name);
     ptr_type_id := input_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing input pointer type for field '%'.", it.name);
@@ -460,8 +456,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
 
   for output.fields {
     field_type := spv_kind_from_ir_type(it.type);
-    field_type_name := it.type.display_name;
-    if field_type_name.count == 0 field_type_name = it.type.struct_name;
+    field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported output field type '%' on '%'.", field_type_name, it.name);
     ptr_type_id := output_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing output pointer type for field '%'.", it.name);
@@ -534,7 +529,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
       parsed_array := field.type.kind == .FIXED_ARRAY;
       if parsed_array {
         parsed_array_count = field.type.array_count;
-        if array_elem_type_name.count == 0 array_elem_type_name = field.type.element_struct_name;
+        array_elem_type_name = ir_string_first_non_empty(array_elem_type_name, field.type.element_struct_name);
       }
       if parsed_array {
         field_type = spv_kind_from_ir_type_kind(field.type.element_kind);
@@ -553,8 +548,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
       } else {
         field_type = spv_kind_from_ir_type(field.type);
         if field_type == .UNKNOWN || field_type == .STRUCT {
-          field_type_name := field.type.display_name;
-          if field_type_name.count == 0 field_type_name = field.type.struct_name;
+          field_type_name := ir_string_first_non_empty(field.type.display_name, field.type.struct_name);
           return_err("SPIR-V backend: uniform field '%.%' has unsupported type '%'.", struct_name, field.name, field_type_name);
         }
         field_type_id = type_id_from_kind(*state, field_type);

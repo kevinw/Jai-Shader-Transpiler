@@ -13,8 +13,7 @@ ir_emit_ir_stmt_lines :: (out_lines: *[..] string, stmt: *IR_Stmt, indent: s64) 
 
   if stmt.kind == {
     case .DECL; {
-      decl_type_text := stmt.decl_type.display_name;
-      if decl_type_text.count == 0 decl_type_text = stmt.decl_type.struct_name;
+      decl_type_text := ir_string_first_non_empty(stmt.decl_type.display_name, stmt.decl_type.struct_name);
       line := tprint("% % %", ir_shared_stmt_indent(indent), decl_type_text, stmt.decl_name);
       if stmt.decl_init {
         expr_text, ok := ir_expr_to_slang_from_ir(stmt.decl_init);
@@ -1081,13 +1080,11 @@ ir_shared_collect_functions_recursive :: (header: *Code_Procedure_Header,
 
 ir_function_signature_string :: (ir_function: *IR_Function, include_arg_names: bool) -> string {
   b: String_Builder;
-  ret_type_name := ir_function.return_type.display_name;
-  if ret_type_name.count == 0 ret_type_name = ir_function.return_type.struct_name;
-  if ret_type_name.count == 0 ret_type_name = "void";
+  ret_type_name := ir_string_first_non_empty(ir_function.return_type.display_name, ir_function.return_type.struct_name, "void");
   append(*b, ret_type_name, " ", ir_function.name, "(");
   for ir_function.args {
     if it_index != 0 append(*b, ", ");
-    arg_type_name := it.type.display_name;
+    arg_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name, "<unknown>");
     if include_arg_names append(*b, tprint("% %", arg_type_name, it.name));
     else append(*b, arg_type_name);
   }

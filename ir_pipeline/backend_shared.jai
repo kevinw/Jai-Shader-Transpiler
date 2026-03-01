@@ -50,6 +50,12 @@ strip_redundant_outer_parens :: (in: string) -> string {
   return stripped;
 }
 
+ir_string_first_non_empty :: (primary: string, secondary: string, fallback: string = "") -> string {
+  if primary.count != 0 return primary;
+  if secondary.count != 0 return secondary;
+  return fallback;
+}
+
 report_array_parameter_not_supported :: (backend_name: string, decl: $T) #expand {
   if decl.type_inst && type_contains_array(decl.type_inst.result)
     compiler_report(tprint("% Backend: Functions with array parameters are not supported in Jai Shaders", backend_name), make_location(decl));
