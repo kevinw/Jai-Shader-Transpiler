@@ -750,7 +750,6 @@ parse_buffer_element_info :: (buffer: IR_Compute_Buffer) -> IR_SPV_Buffer_Elemen
     parsed_array_count = buffer.element_type.array_count;
     element_type_name = buffer.element_type.element_display_name;
     if element_type_name.count == 0 element_type_name = buffer.element_type.element_struct_name;
-    if element_type_name.count == 0 element_type_name = buffer.element_type_name;
     elem_kind = spv_kind_from_ir_type_kind(buffer.element_type.element_kind);
   }
 
