@@ -164,13 +164,10 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
   for *struct_type.members {
     ir_type, ir_type_ok := ir_type_from_type_info(it.type);
     if !ir_type_ok return out, false;
-    type_name, ok := ir_type_to_shader_name(it.type);
-    if !ok return out, false;
     field_semantic := member_get_semantic(it);
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
-      type_name = type_name,
       semantic = field_semantic,
     });
   }
@@ -247,13 +244,12 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
   for *st.members {
     ir_type, ir_type_ok := ir_type_from_type_info(it.type);
     if !ir_type_ok return out, false;
-    type_name, ok := ir_lower_struct_member_type_name(it.type, extra_structs);
+    _, ok := ir_lower_struct_member_type_name(it.type, extra_structs);
     if !ok return out, false;
     field_semantic := member_get_semantic(it);
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
-      type_name = type_name,
       semantic = field_semantic,
     });
   }
@@ -270,7 +266,7 @@ ir_field_type_name :: (s: *IR_Struct, name: string) -> string {
   for s.fields {
     if it.name != name continue;
     if it.type.display_name.count != 0 return it.type.display_name;
-    return it.type_name;
+    return it.type.struct_name;
   }
   return "";
 }
@@ -1386,12 +1382,11 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
     if !found return out, false;
     semantic, sem_ok := ir_compute_builtin_to_semantic(builtin_name);
     if !sem_ok return out, false;
-    type_name, type_ok := ir_type_to_shader_name(it.type);
+    _, type_ok := ir_type_to_shader_name(it.type);
     if !type_ok return out, false;
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
-      type_name = type_name,
       semantic = semantic,
     });
   }
@@ -1509,7 +1504,7 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
   for i: 1..ctx.header.arguments.count-1 {
     arg := ctx.header.arguments[i];
     arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
-    arg_type_name, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
+    _, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
     if !arg_ok return_err("unsupported extra argument '%'", arg.name);
     arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
     if !arg_ir_type_ok return_err("unsupported typed IR argument '%'", arg.name);
@@ -1522,7 +1517,6 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
     array_add(*out.args, .{
       name = arg.name,
       type = arg_ir_type,
-      type_name = arg_type_name,
       is_readonly = true,
     });
   }
@@ -1608,7 +1602,6 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
     array_add(*out_struct.fields, .{
       name = "out_color",
       type = ret_ir_type,
-      type_name = ret_type_name,
       semantic = ret_semantic,
     });
   }
@@ -1621,7 +1614,7 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   for i: 1..ctx.header.arguments.count-1 {
     arg := ctx.header.arguments[i];
     arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
-    arg_type_name, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
+    _, arg_ok := ir_lower_shader_arg_type_name(arg_type, *out.extra_structs);
     if !arg_ok {
         return_err("unsupported extra argument '%'", arg.name);
     }
@@ -1638,7 +1631,6 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
     array_add(*out.args, .{
       name = arg.name,
       type = arg_ir_type,
-      type_name = arg_type_name,
       is_readonly = true,
     });
   }

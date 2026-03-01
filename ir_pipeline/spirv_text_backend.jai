@@ -1074,12 +1074,14 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     cpu_max_align: s64 = 1;
     for struct_def.fields {
       field_type := spv_kind_from_ir_type(it.type);
+      field_type_name := it.type.display_name;
+      if field_type_name.count == 0 field_type_name = it.type.struct_name;
       if field_type == .UNKNOWN {
-        return_err("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, it.type_name);
+        return_err("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, field_type_name);
       }
       field_size := byte_size_of_kind(field_type);
       if field_size <= 0 {
-        return_err("SPIR-V generic backend: buffer struct '%' field '%' has unsupported layout type '%'.", struct_def.name, it.name, it.type_name);
+        return_err("SPIR-V generic backend: buffer struct '%' field '%' has unsupported layout type '%'.", struct_def.name, it.name, field_type_name);
       }
 
       field_align := host_blit_align_for_kind(field_type);
@@ -1251,10 +1253,12 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
   local_struct.type_name = type_name;
   for struct_def.fields {
     field_type := spv_kind_from_ir_type(it.type);
+    field_type_name := it.type.display_name;
+    if field_type_name.count == 0 field_type_name = it.type.struct_name;
     if field_type == .UNKNOWN || field_type == .STRUCT {
       nested_type_name := spv_struct_name_from_ir_type(it.type);
       nested_def := find_struct(s, nested_type_name);
-      if !nested_def return null, false, make_diag("local struct '%' field '%' has unsupported type '%'.", type_name, it.name, it.type_name);
+      if !nested_def return null, false, make_diag("local struct '%' field '%' has unsupported type '%'.", type_name, it.name, field_type_name);
       
       nested_name := make_unique_local_struct_name(s, tprint("%.%", name, it.name));
       _, nested_ok, nested_diag := alloc_local_struct(s, nested_name, nested_type_name);
@@ -1269,7 +1273,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
     }
     field_ptr_type := func_ptr_type_id_from_kind(s, field_type);
     if field_ptr_type == 0 {
-      return null, false, make_diag("local struct '%' field '%' type '%' has no function pointer type.", type_name, it.name, it.type_name);
+      return null, false, make_diag("local struct '%' field '%' type '%' has no function pointer type.", type_name, it.name, field_type_name);
     }
     field_ptr := new_id(s);
     field_zero := get_null_const(s, type_id_from_kind(s, field_type));

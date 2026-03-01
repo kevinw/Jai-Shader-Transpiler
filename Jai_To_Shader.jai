@@ -465,34 +465,14 @@ ir_spirv_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
   return false;
 }
 
-ir_is_resource_buffer_type_name :: (type_name: string) -> bool {
-  if begins_with(type_name, "StructuredBuffer<") return true;
-  if begins_with(type_name, "RWStructuredBuffer<") return true;
-  return false;
-}
-
-ir_parse_parameter_block_struct_name_for_args :: (type_name: string) -> (string, bool) {
-  prefix :: "ParameterBlock<";
-  if !begins_with(type_name, prefix) return "", false;
-  if type_name.count < prefix.count + 1 return "", false;
-  if type_name[type_name.count-1] != #char ">" return "", false;
-  out: string;
-  out.data = type_name.data + prefix.count;
-  out.count = type_name.count - prefix.count - 1;
-  if out.count == 0 return "", false;
-  return out, true;
-}
-
 ir_lowered_struct_has_resource_fields :: (structs: [] IR_Struct, struct_name: string, depth := 0) -> bool {
   if struct_name.count == 0 return false;
   if depth > 16 return false;
   for structs {
     if it.name != struct_name continue;
     for it.fields {
-      if ir_is_resource_buffer_type_name(it.type_name) return true;
-      nested_name := it.type_name;
-      param_block_name, is_param_block := ir_parse_parameter_block_struct_name_for_args(it.type_name);
-      if is_param_block nested_name = param_block_name;
+      if it.type.kind == .POINTER return true;
+      nested_name := it.type.struct_name;
       if ir_lowered_struct_has_resource_fields(structs, nested_name, depth + 1) return true;
     }
     return false;
@@ -502,10 +482,8 @@ ir_lowered_struct_has_resource_fields :: (structs: [] IR_Struct, struct_name: st
 
 ir_graphics_requires_metal_argument_buffer :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct) -> bool {
   for args {
-    struct_name := it.type_name;
-    param_block_name, is_param_block := ir_parse_parameter_block_struct_name_for_args(it.type_name);
-    if is_param_block struct_name = param_block_name;
-    if ir_is_resource_buffer_type_name(struct_name) return true;
+    if it.type.kind == .POINTER return true;
+    struct_name := it.type.struct_name;
     if ir_lowered_struct_has_resource_fields(extra_structs, struct_name) return true;
   }
   return false;
@@ -907,6 +885,27 @@ ir_pair_varyings_match_local :: (vertex_field: *IR_Field, fragment_field: *IR_Fi
   return vertex_field.name == fragment_field.name;
 }
 
+ir_type_text_local :: (type: IR_Type) -> string {
+  if type.display_name.count != 0 return type.display_name;
+  if type.struct_name.count != 0 return type.struct_name;
+  return "<unknown>";
+}
+
+ir_types_equal_local :: (a: IR_Type, b: IR_Type) -> bool {
+  if a.kind != b.kind return false;
+  if a.flags != b.flags return false;
+  if a.struct_name != b.struct_name return false;
+  if a.array_count != b.array_count return false;
+  if a.element_kind != b.element_kind return false;
+  if a.element_struct_name != b.element_struct_name return false;
+  if a.pointee_kind != b.pointee_kind return false;
+  if a.pointee_struct_name != b.pointee_struct_name return false;
+  if a.pointee_array_count != b.pointee_array_count return false;
+  if a.pointee_element_kind != b.pointee_element_kind return false;
+  if a.pointee_element_struct_name != b.pointee_element_struct_name return false;
+  return true;
+}
+
 ir_validate_pair_stage_interface_local :: (pair_name: string, vertex: *IR_Vertex_Shader, fragment: *IR_Fragment_Shader) -> (bool, string) {
     auto_release_temp();
   assert(vertex != null && fragment != null);
@@ -933,8 +932,8 @@ ir_validate_pair_stage_interface_local :: (pair_name: string, vertex: *IR_Vertex
   for i: 0..fragment_varyings.count-1 {
     v := vertex_varyings[i];
     f := fragment_varyings[i];
-    if v.type_name != f.type_name {
-      return false, sprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' has type '%', fragment '%' has type '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), v.type_name, ir_pair_varying_field_label_local(*f), f.type_name);
+    if !ir_types_equal_local(v.type, f.type) {
+      return false, sprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' has type '%', fragment '%' has type '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), ir_type_text_local(v.type), ir_pair_varying_field_label_local(*f), ir_type_text_local(f.type));
     }
     if !ir_pair_varyings_match_local(*v, *f) {
       return false, sprint("SPIR-V backend: pair '%': stage interface mismatch at varying %: vertex '%' does not match fragment '%'.", pair_name, i, ir_pair_varying_field_label_local(*v), ir_pair_varying_field_label_local(*f));

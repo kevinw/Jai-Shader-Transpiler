@@ -1062,14 +1062,13 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
 
   for header.arguments {
     arg_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
-    arg_type_name, arg_ok := ir_type_to_shader_name(arg_type);
+    _, arg_ok := ir_type_to_shader_name(arg_type);
     if !arg_ok return out, false;
     arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
     if !arg_ir_type_ok return out, false;
     array_add(*out.args, .{
       name = it.name,
       type = arg_ir_type,
-      type_name = arg_type_name,
     });
   }
 
@@ -1109,8 +1108,7 @@ ir_function_signature_string :: (ir_function: *IR_Function, include_arg_names: b
   append(*b, ret_type_name, " ", ir_function.name, "(");
   for ir_function.args {
     if it_index != 0 append(*b, ", ");
-    arg_type_name := it.type_name;
-    if it.type.display_name.count != 0 arg_type_name = it.type.display_name;
+    arg_type_name := it.type.display_name;
     if include_arg_names append(*b, tprint("% %", arg_type_name, it.name));
     else append(*b, arg_type_name);
   }
