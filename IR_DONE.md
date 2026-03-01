@@ -121,5 +121,7 @@ Status: In large part fixed (March 1, 2026) across backend hot paths; remaining 
   - Removed broad backend reliance on legacy pointer/type-name mirrors for resource classification and physical-pointer graphics traversal.
   - Migrated helper struct-arg/return matching and struct constructor/init checks to typed struct metadata first.
   - Removed now-unused string-parser helpers that previously inferred semantics from wrapper text.
+  - Removed remaining IR mirror fields used by backends (`pointer_*`, `original_type_name`, field/arg `type_name`, function `return_type_name`, stmt `decl_type_name`, compute-buffer `element_type_name`) and rewired callsites to typed `IR_Type`.
+  - Simplified lowering helpers to typed side-effect collectors (no more string wrapper synthesis when the return text is unused), and centralized typed name selection through one shared utility.
 - Outcome:
   - Backend semantics now primarily come from lowered type metadata instead of reconstructed strings, with narrow compatibility fallbacks only where lowering completeness is still being finished.
