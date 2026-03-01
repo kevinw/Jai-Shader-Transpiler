@@ -387,19 +387,6 @@ ir_struct_has_pointer_members :: (type: *Type_Info) -> bool {
   return false;
 }
 
-ir_type_name_is_parameter_block :: (type_name: string) -> bool {
-  return begins_with(type_name, "ParameterBlock<");
-}
-
-ir_type_name_is_global_resource :: (type_name: string) -> bool {
-  if ir_type_name_is_parameter_block(type_name) return true;
-  if begins_with(type_name, "StructuredBuffer<") return true;
-  if begins_with(type_name, "RWStructuredBuffer<") return true;
-  if begins_with(type_name, "ByteAddressBuffer") return true;
-  if begins_with(type_name, "RWByteAddressBuffer") return true;
-  return false;
-}
-
 ir_align_up_s64 :: (value: s64, alignment: s64) -> s64 {
   if alignment <= 1 return value;
   rem := value % alignment;
