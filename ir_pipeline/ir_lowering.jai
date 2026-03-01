@@ -257,15 +257,6 @@ ir_struct_has_field :: (s: *IR_Struct, name: string) -> bool {
   return false;
 }
 
-ir_field_type_name :: (s: *IR_Struct, name: string) -> string {
-  for s.fields {
-    if it.name != name continue;
-    if it.type.display_name.count != 0 return it.type.display_name;
-    return it.type.struct_name;
-  }
-  return "";
-}
-
 ir_add_struct_unique_by_name :: (structs: *[..] IR_Struct, s: IR_Struct) {
   for structs.* if it.name == s.name return;
   array_add(structs, s);
@@ -1361,8 +1352,6 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
     if !found return out, false;
     semantic, sem_ok := ir_compute_builtin_to_semantic(builtin_name);
     if !sem_ok return out, false;
-    _, type_ok := ir_type_to_shader_name(it.type);
-    if !type_ok return out, false;
     array_add(*out.fields, .{
       name = it.name,
       type = ir_type,
