@@ -4040,6 +4040,20 @@ lvalue_hits_storage_buffer :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> bool {
 // Statement Emission
 // -----------------------------------------------------------------------------
 
+spv_local_decl_default_initializer :: (s: *IR_SPV_Gen_State, decl_type: IR_Type, scalar_kind: IR_SPV_Gen_Type, array_type_id: s64 = 0) -> (init_id: s64, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  if scalar_kind != .UNKNOWN {
+    type_id := type_id_from_kind(s, scalar_kind);
+    if type_id == 0 return 0, false, make_diag("missing SPIR-V type id for scalar declaration kind %.", scalar_kind);
+    return get_null_const(s, type_id), true, {};
+  }
+  if decl_type.kind == .FIXED_ARRAY {
+    if array_type_id == 0 return 0, false, make_diag("missing SPIR-V fixed-array type id for local declaration.");
+    return get_null_const(s, array_type_id), true, {};
+  }
+  return 0, false, make_diag("unsupported local declaration kind for default initialization (%).", decl_type.kind);
+}
+
 emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return false, false, make_diag(msg, ..args); }
   
@@ -4055,7 +4069,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         ptr_id := new_id(s);
         ptr_type_id := func_ptr_type_id_from_kind(s, decl_type);
         assert(ptr_type_id != 0);
-        local_zero := get_null_const(s, type_id_from_kind(s, decl_type));
+        local_zero, local_zero_ok, local_zero_diag := spv_local_decl_default_initializer(s, stmt.decl_type, decl_type);
+        if !local_zero_ok return false, false, local_zero_diag;
         add_local_decl(s, tprint("         % = OpVariable % Function %",
                                  id_text(ptr_id),
                                  id_text(ptr_type_id),
@@ -4083,7 +4098,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         ptr_id := new_id(s);
         add_debug_name(s, array_type_id, tprint("%_array", stmt.decl_name));
         add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", stmt.decl_name));
-        array_zero := get_null_const(s, array_type_id);
+        array_zero, array_zero_ok, array_zero_diag := spv_local_decl_default_initializer(s, stmt.decl_type, .UNKNOWN, array_type_id);
+        if !array_zero_ok return false, false, array_zero_diag;
         add_local_decl(s, tprint("         % = OpVariable % Function %",
                                  id_text(ptr_id),
                                  id_text(ptr_func_array_type_id),
