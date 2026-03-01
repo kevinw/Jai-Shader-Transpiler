@@ -7,6 +7,47 @@ Direction note:
 - Incrementally prefer carrying richer Compiler AST/type information through lowering where practical, instead of encoding behavior through hardcoded strings and mirrored IR type/operator tables. Start by removing string-sentinel decisions (for example `"<operator_not_supported>"` checks) in favor of typed operator handling.
 - Prefer Compiler module enums/nodes (`Operator_Type`, `Code_Node` forms, `Type_Info`) over duplicated string encodings whenever the data stays in-compiler-pass.
 
+## Ordered Backend Simplification Plan
+1. Make builtin semantics first-class in IR, not ad hoc on `IR_Expr`.
+- Add a dedicated builtin reference type and use it consistently in lowering/backend decision paths.
+- Remove special-case builtin branches that still depend on expression shape or text fallbacks.
+
+2. Split compute SPIR-V backend into explicit passes.
+- Build an analysis pass (types/resources/capabilities/builtin usage) and a separate emit pass.
+- Stop discovering semantic requirements while emitting SPIR-V text.
+
+3. Replace stringly SPIR-V op formatting with typed emit helpers.
+- Centralize common op forms (`load`, `store`, `access_chain`, scalar/vector binary ops).
+- Keep text backend output, but reduce manual `tprint` assembly at use sites.
+
+4. Centralize coercion/conversion policy.
+- One conversion matrix for source/destination kind -> opcode/diagnostic.
+- Remove duplicated conversion branches spread across expression lowering.
+
+5. Normalize local declaration initialization handling.
+- One path that decides default initializer/null by type kind.
+- Reuse this path for declarations in all statement lowering branches.
+
+6. Add a lightweight IR invariant validator before backend emission.
+- Validate required typed metadata and builtin provenance before codegen.
+- Important Jai semantic: declarations default-initialize to zero unless declaration has `.IS_UNINITIALIZED` (e.g. `x: T = ---;`); validator and init planning must preserve that behavior.
+
+7. Remove remaining semantic dependence on expression/type text.
+- Keep text fields primarily for diagnostics/debug prints.
+- Ensure backend decisions are driven by typed/provenance metadata.
+
+8. Move resource/buffer classification into a dedicated module.
+- Produce normalized resource descriptors before backend generation.
+- Avoid per-backend re-derivation of container/resource structure.
+
+9. Split `spirv_text_backend.jai` by domain.
+- Keep coordinator thin; move lvalue lowering, stmt lowering, builtin lowering, and type/coercion helpers to separate loaded files.
+- Reduce merge pressure and improve edit locality.
+
+10. Expand focused headless semantics coverage for robustness.
+- Add one case per builtin alias pattern and coercion edge (`f16/f32/int`).
+- Add one case per key pointer/lvalue/resource shape to catch regressions early.
+
 ## 4) Pointer-style `normalize(*v, fallback=...)` is not shader-IR compatible
 - Symptom:
   - `SPIR-V backend: normalize expects 1 arg.`
