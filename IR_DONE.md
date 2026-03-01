@@ -2,6 +2,28 @@
 
 This file tracks IR/SPIR-V backend limitations that were implemented and verified.
 
+## Ordered Backend Simplification Plan (1-9)
+Status: Completed (March 1, 2026). Remaining ordered item is tracked in `IR_TODO.md` (#10).
+- 1) Builtin semantics are first-class in IR:
+  - Added typed builtin refs on `IR_Expr`/input builtin mapping and removed ad hoc builtin shape fallbacks in SPIR-V member emission.
+- 2) Compute backend split into analysis + emit:
+  - Added explicit compute analysis pass (bound/resource expansion/builtin usage flags) and made emit consume analyzed state.
+- 3) Reduced stringly SPIR-V assembly for common op forms:
+  - Added typed helper emitters for common forms (`OpAccessChain`, `OpLoad`, common `OpExtInst`) and migrated core call sites.
+- 4) Centralized conversion/coercion policy:
+  - Added single scalar conversion helper and routed `coerce_to_kind`/`coerce_to_float` through it.
+- 5) Normalized declaration default initialization:
+  - Added one local declaration default-initializer path and reused it for scalar and fixed-array declarations.
+- 6) Added pre-emission IR invariant validation:
+  - Added lightweight IR validator for builtin provenance and control-flow expression traversal before backend emission.
+  - Preserved Jai default-zero declaration semantics unless explicitly uninitialized (`---` / `.IS_UNINITIALIZED`).
+- 7) Reduced semantic dependence on member text:
+  - Added typed member-access provenance (`IR_Member_Access_Kind`) in IR lowering and switched backend component/swizzle decisions to typed metadata.
+- 8) Resource/buffer classification moved to dedicated module:
+  - Extracted classification/expansion logic into `ir_pipeline/spv_resource_classification.jai`.
+- 9) Backend file split by domain continued:
+  - Extracted invariant domain into `ir_pipeline/spv_invariants.jai` and kept coordinator flow thinner.
+
 ## 1) Helper procs with `void` return are not supported in compute lowering
 Status: Fixed (February 28, 2026) for statement-level void helper calls with side effects.
 - Symptom:

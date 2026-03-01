@@ -64,6 +64,9 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"matrix_reassign_chain", .Bare},
   {"thread_id_y_component", .Bare},
   {"thread_id_renamed_field", .Bare},
+  {"group_thread_id_renamed_field", .Bare},
+  {"group_id_renamed_field", .Bare},
+  {"group_index_renamed_field", .Bare},
   {"global_constants_subscript", .Bare},
   {"local_float3_components", .Bare},
   {"wrap_helper_constants", .Bare},
@@ -189,6 +192,12 @@ Compute_Table_Kind :: enum {
 Compute_Semantics_In :: struct {
   thread_id: UVector3; @thread_position_in_grid
   #overlay (thread_id) dispatch_xyz: UVector3; @thread_position_in_grid
+  group_thread_id: UVector3; @thread_position_in_threadgroup
+  #overlay (group_thread_id) local_tid: UVector3; @thread_position_in_threadgroup
+  group_id: UVector3; @threadgroup_position_in_grid
+  #overlay (group_id) workgroup_xyz: UVector3; @threadgroup_position_in_grid
+  group_index: u32; @thread_index_in_threadgroup
+  #overlay (group_index) local_index: u32; @thread_index_in_threadgroup
 }
 
 compute_bindless_write_2d :: (using in: Compute_Semantics_In, values: *u32) {
@@ -1042,6 +1051,21 @@ thread_id_y_component :: (using in: Compute_Semantics_In, values: *u32) {
 thread_id_renamed_field :: (using in: Compute_Semantics_In, values: *u32) {
   if dispatch_xyz.x >= 64 return;
   values[dispatch_xyz.x] = values[dispatch_xyz.x] + dispatch_xyz.y + dispatch_xyz.z + 3;
+} @compute_shader
+
+group_thread_id_renamed_field :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  values[thread_id.x] = values[thread_id.x] + local_tid.x + local_tid.y + local_tid.z + 5;
+} @compute_shader
+
+group_id_renamed_field :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  values[thread_id.x] = values[thread_id.x] + workgroup_xyz.x + workgroup_xyz.y + workgroup_xyz.z + 7;
+} @compute_shader
+
+group_index_renamed_field :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  values[thread_id.x] = values[thread_id.x] + local_index + 9;
 } @compute_shader
 
 EDGE_CONST_MUL :: 5;
@@ -2344,14 +2368,24 @@ inner_proc :: (using in: Compute_Semantics_In, values: *u32) {
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {
   for 0..thread_count-1 {
-    `in := Compute_Semantics_In.{thread_id = .{x = cast(u32) it, y = 0, z = 0}};
+    `in := Compute_Semantics_In.{
+      thread_id = .{x = cast(u32) it, y = 0, z = 0},
+      group_thread_id = .{x = cast(u32) it, y = 0, z = 0},
+      group_id = .{x = 0, y = 0, z = 0},
+      group_index = cast(u32) it,
+    };
     shader_proc(in, values);
   }
 }
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32, table: *$T) #expand {
   for 0..thread_count-1 {
-    `in := Compute_Semantics_In.{thread_id = .{x = cast(u32) it, y = 0, z = 0}};
+    `in := Compute_Semantics_In.{
+      thread_id = .{x = cast(u32) it, y = 0, z = 0},
+      group_thread_id = .{x = cast(u32) it, y = 0, z = 0},
+      group_id = .{x = 0, y = 0, z = 0},
+      group_index = cast(u32) it,
+    };
     shader_proc(in, values, table);
   }
 }
