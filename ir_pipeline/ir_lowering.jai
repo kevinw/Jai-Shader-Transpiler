@@ -593,15 +593,69 @@ ir_stmt_binary_op_text :: (stmt: *IR_Stmt) -> (string, bool) {
 }
 
 compute_builtin_note_for_member :: (member: *Type_Info_Struct_Member) -> (string, bool) {
+  trim_ascii_whitespace_local :: (in: string) -> string {
+    if in.count == 0 return in;
+
+    start := cast(s64) 0;
+    while start < in.count {
+      ch := in[start];
+      if ch != #char " " && ch != #char "\t" && ch != #char "\n" && ch != #char "\r" break;
+      start += 1;
+    }
+
+    if start >= in.count {
+      out: string;
+      out.data = in.data + in.count;
+      out.count = 0;
+      return out;
+    }
+
+    end := in.count - 1;
+    while end >= start {
+      ch := in[end];
+      if ch != #char " " && ch != #char "\t" && ch != #char "\n" && ch != #char "\r" break;
+      end -= 1;
+    }
+
+    out: string;
+    out.data = in.data + start;
+    out.count = end - start + 1;
+    return out;
+  }
+
+  normalize_builtin_note_text :: (text: string) -> string {
+    out := trim_ascii_whitespace_local(text);
+    if out.count == 0 return out;
+    if out[0] == #char "@" {
+      trimmed: string;
+      trimmed.data = out.data + 1;
+      trimmed.count = out.count - 1;
+      out = trim_ascii_whitespace_local(trimmed);
+    }
+    if out.count > 2 && out[out.count-1] == #char ")" {
+      open_index := find_index_from_left(out, "(");
+      if open_index != -1 {
+        fn_name: string;
+        fn_name.data = out.data;
+        fn_name.count = open_index;
+        out = trim_ascii_whitespace_local(fn_name);
+      }
+    }
+    return out;
+  }
+
+  builtin_name_from_note_text :: (text: string) -> (string, bool) {
+    note := normalize_builtin_note_text(text);
+    if note == "thread_position_in_grid" return "thread_position_in_grid", true;
+    if note == "thread_position_in_threadgroup" return "thread_position_in_threadgroup", true;
+    if note == "threadgroup_position_in_grid" return "threadgroup_position_in_grid", true;
+    if note == "thread_index_in_threadgroup" return "thread_index_in_threadgroup", true;
+    return "", false;
+  }
+
   for member.notes {
-    found, _ := contains(it, "thread_position_in_grid");
-    if found return "thread_position_in_grid", true;
-    found, _ = contains(it, "thread_position_in_threadgroup");
-    if found return "thread_position_in_threadgroup", true;
-    found, _ = contains(it, "threadgroup_position_in_grid");
-    if found return "threadgroup_position_in_grid", true;
-    found, _ = contains(it, "thread_index_in_threadgroup");
-    if found return "thread_index_in_threadgroup", true;
+    builtin_name, builtin_found := builtin_name_from_note_text(it);
+    if builtin_found return builtin_name, true;
   }
   return "", false;
 }

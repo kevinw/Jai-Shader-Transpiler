@@ -70,17 +70,6 @@ Direction note:
   - Add explicit `f16` type lowering and capability/extension emission in SPIR-V backend.
   - Validate cross-backend codegen and ABI layout for `half` storage buffers, including transpiler regression tests.
 
-## 15) Legacy `Jai_To_Shader` still uses `"<operator_not_supported>"` sentinel
-- Symptom:
-  - Legacy codepath still returns string sentinel on unsupported operators.
-- Where hit:
-  - `Jai_To_Shader.jai` `op_to_text` fallback/default path.
-- Current state:
-  - IR pipeline path no longer depends on the sentinel and uses typed operator handling with `(text, ok)`.
-- Desired fix:
-  - Remove sentinel-return behavior from legacy path as well; return explicit success/failure and surface diagnostics using `Operator_Type`.
-  - Keep one operator mapping policy shared between legacy and IR paths to avoid drift.
-
 ## 16) SPIR-V type decisions still fall back to parsing type-name strings
 - Symptom:
   - Backend frequently calls `expr_type_from_decl(name)` and `parse_fixed_array_type_name(name)` on textual type names.
@@ -94,11 +83,11 @@ Direction note:
 
 ## 17) Builtin-note detection relies on substring matching note text
 - Symptom:
-  - Compute builtin mapping scans note strings with `contains(...)` (e.g. `"thread_position_in_grid"`).
+  - Compute builtin mapping still relies on note text parsing instead of structured note/operator identity.
 - Where hit:
   - `ir_pipeline/ir_lowering.jai` `compute_builtin_note_for_member`.
 - Cost:
-  - Text-based matching is brittle and does not leverage parsed note/operator identity from Compiler data.
+  - Even with strict name matching, text parsing can drift from compiler note semantics.
 - Desired fix:
   - Consume structured note/operator info from Compiler AST/note nodes instead of string search.
   - Emit diagnostics that include exact source note location/operator when unsupported.
