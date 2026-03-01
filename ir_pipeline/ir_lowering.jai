@@ -910,6 +910,10 @@ ir_lower_expr :: (node: *Code_Node,
           }
           if out.result_type.kind != .UNKNOWN {
             out.result_type.display_name = constructor_name;
+          } else {
+            out.result_type.kind = .STRUCT;
+            out.result_type.struct_name = constructor_name;
+            out.result_type.display_name = constructor_name;
           }
         }
         positional_index: s64 = 0;

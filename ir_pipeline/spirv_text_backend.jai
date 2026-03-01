@@ -1350,7 +1350,6 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
   }
 
   expr_struct_name := spv_struct_name_from_ir_expr_result(expr);
-  if expr_struct_name.count == 0 expr_struct_name = expr.text;
   if expr.kind != .CONSTRUCTOR || expr_struct_name != dst.type_name {
     return false, make_diag("unsupported struct init expression for type '%'.", dst.type_name);
   }
