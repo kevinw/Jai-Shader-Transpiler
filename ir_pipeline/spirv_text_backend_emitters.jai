@@ -2,20 +2,6 @@ SAMPLE_2D_TEXTURES_BINDING :: 1;
 SAMPLE_2D_SAMPLERS_BINDING :: 0;
 WRITE_2D_TEXTURES_BINDING :: 1;
 
-ir_type_kind_from_shader_name :: (name: string) -> IR_Type_Kind {
-  if name == "bool" return .BOOL;
-  if name == "int" || name == "int32_t" || name == "s32" return .I32;
-  if name == "uint" || name == "u32" return .U32;
-  if name == "int64_t" || name == "s64" return .I64;
-  if name == "uint64_t" || name == "u64" return .U64;
-  if name == "float" return .F32;
-  if name == "float2" return .F32x2;
-  if name == "float3" return .F32x3;
-  if name == "float4" return .F32x4;
-  if name == "float2x2" return .F32x2x2;
-  return .UNKNOWN;
-}
-
 spv_append_sample_2d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   if !s.uses_sample_2d return;
   append(sb, tprint("% = OpTypeImage % 2D 0 0 0 1 Unknown\n", id_text(s.id_image2d), id_text(s.id_float)));
@@ -421,13 +407,12 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
       };
       elem_type_name := arg.type.pointee_display_name;
       if arg.type.pointee_kind == .FIXED_ARRAY {
-        parsed_elem_type_name, parsed_count, parsed_array := parse_fixed_array_type_name(arg.type.pointee_display_name);
-        if parsed_array {
-          elem_type.array_count = parsed_count;
-          elem_type.element_display_name = parsed_elem_type_name;
-          elem_type.element_kind = ir_type_kind_from_shader_name(parsed_elem_type_name);
-          elem_type_name = parsed_elem_type_name;
-        }
+        elem_type.array_count = arg.type.pointee_array_count;
+        elem_type.element_kind = arg.type.pointee_element_kind;
+        elem_type.element_display_name = arg.type.pointee_element_display_name;
+        elem_type.element_struct_name = arg.type.pointee_element_struct_name;
+        elem_type_name = elem_type.element_display_name;
+        if elem_type_name.count == 0 elem_type_name = elem_type.element_struct_name;
       }
       array_add(*graphics_buffers, .{
         name = arg.name,

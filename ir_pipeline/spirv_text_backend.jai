@@ -733,21 +733,6 @@ struct_has_pointer_fields_recursive :: (extra_structs: [] IR_Struct, struct_name
   return false;
 }
 
-parse_fixed_array_type_name :: (type_name: string) -> (element_type_name: string, array_count: s64, ok: bool) {
-  compact := compact_text(type_name);
-  if compact.count < 4 return "", 0, false;
-  close_idx := find_index_from_right(compact, "]");
-  if close_idx != compact.count-1 return "", 0, false;
-  open_idx := find_index_from_right(compact, "[");
-  if open_idx <= 0 || open_idx >= close_idx return "", 0, false;
-  count_text := slice(compact, open_idx+1, close_idx);
-  count_val, count_ok := string_to_int(count_text);
-  if !count_ok || count_val <= 0 return "", 0, false;
-  elem := slice(compact, 0, open_idx);
-  if elem.count == 0 return "", 0, false;
-  return elem, count_val, true;
-}
-
 IR_SPV_Buffer_Element_Info :: struct {
   element_type_name: string;
   elem_kind: IR_SPV_Gen_Type;
@@ -869,7 +854,9 @@ expand_compute_resource_root_buffers :: (s: *IR_SPV_Gen_State, in_buffers: [] IR
 
   for in_buffers {
     buf := it;
-    struct_def := find_struct(s, buf.element_type_name);
+    struct_name := buf.element_type.struct_name;
+    if struct_name.count == 0 struct_name = buf.element_type_name;
+    struct_def := find_struct(s, struct_name);
     if !struct_def {
       array_add(out_buffers, buf);
       continue;

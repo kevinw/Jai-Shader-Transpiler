@@ -43,6 +43,10 @@ IR_Type :: struct {
   pointee_display_name: string;
   pointee_struct_name: string;
   pointee_is_struct: bool;
+  pointee_element_kind: IR_Type_Kind;
+  pointee_element_display_name: string;
+  pointee_element_struct_name: string;
+  pointee_array_count: s64;
 }
 
 IR_Field :: struct {

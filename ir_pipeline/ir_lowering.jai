@@ -133,6 +133,12 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
     out.pointee_display_name = pointee.display_name;
     out.pointee_struct_name = pointee.struct_name;
     out.pointee_is_struct = pointee_kind == .STRUCT;
+    if pointee.kind == .FIXED_ARRAY {
+      out.pointee_array_count = pointee.array_count;
+      out.pointee_element_kind = pointee.element_kind;
+      out.pointee_element_display_name = pointee.element_display_name;
+      out.pointee_element_struct_name = pointee.element_struct_name;
+    }
     return out, true;
   }
 
