@@ -94,9 +94,11 @@ resolve_ident_or_zero_deref :: (expr: *IR_Expr) -> (name: string, ok: bool) {
     name, ok := resolve_ident_or_zero_deref(expr.left);
     return name, ok;
   }
-  if expr.kind == .UNARY && expr.left && expr.text == "*" {
-    name, ok := resolve_ident_or_zero_deref(expr.left);
-    return name, ok;
+  if expr.kind == .UNARY && expr.left {
+    if expr.unary_op == .ADDRESS_OF || expr.unary_op == .DEREF {
+      name, ok := resolve_ident_or_zero_deref(expr.left);
+      return name, ok;
+    }
   }
   if expr.kind == .SUBSCRIPT && expr.left && expr.left.kind == .IDENT {
     index_u32, index_u32_ok := parse_u32_literal_expr(expr.right);
@@ -162,7 +164,9 @@ thread_x_expr :: (expr: *IR_Expr) -> bool {
 }
 
 match_branch_condition_outer :: (expr: *IR_Expr) -> (u32, bool) {
-  if !expr || expr.kind != .BINARY || expr.text != "<" return 0, false;
+  if !expr || expr.kind != .BINARY return 0, false;
+  op, op_ok := ir_expr_binary_op_text(expr);
+  if !op_ok || op != "<" return 0, false;
   if !thread_x_expr(expr.left) return 0, false;
   bound, ok := parse_u32_literal_expr(expr.right);
   if !ok return 0, false;
@@ -314,6 +318,8 @@ IR_SPV_Gen_Buffer :: struct {
   wrapper_struct_type_id: s64;
   ptr_wrapper_type_id: s64;
   ptr_storage_element_type_id: s64;
+  has_base_index: bool;
+  base_index_id: s64;
   array_stride: s64;
   fields: [..] IR_SPV_Gen_Buffer_Field;
 }
@@ -624,6 +630,40 @@ find_local_array :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Ar
   return null;
 }
 find_buffer :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Buffer { return find_by_name(*s.buffers, name); }
+
+resolve_buffer_name_from_expr :: (expr: *IR_Expr) -> (buffer_name: string, ok: bool) {
+  if !expr return "", false;
+  if expr.kind == .CAST && expr.left {
+    name, ok := resolve_buffer_name_from_expr(expr.left);
+    return name, ok;
+  }
+  if expr.kind == .UNARY && expr.left {
+    if expr.unary_op == .ADDRESS_OF || expr.unary_op == .DEREF {
+      name, ok := resolve_buffer_name_from_expr(expr.left);
+      return name, ok;
+    }
+  }
+  if expr.kind == .SUBSCRIPT && expr.left {
+    name, ok := resolve_buffer_name_from_expr(expr.left);
+    return name, ok;
+  }
+  buffer_name, base_ok := resolve_ident_or_zero_deref(expr);
+  if base_ok return buffer_name, true;
+  if expr.kind == .MEMBER {
+    member_root, member_field, member_ok := resolve_member_root_and_field(expr);
+    if member_ok return tprint("%.%", member_root, member_field), true;
+    fallback := expr_text(expr);
+    if fallback.count != 0 return fallback, true;
+  }
+  return "", false;
+}
+
+apply_buffer_base_index :: (s: *IR_SPV_Gen_State, buffer: *IR_SPV_Gen_Buffer, idx: s64) -> s64 {
+  if !buffer || !buffer.has_base_index return idx;
+  out := new_id(s);
+  add_op(s, out, "OpIAdd", s.id_uint, buffer.base_index_id, idx);
+  return out;
+}
 find_uniform_block :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Uniform_Block { return find_by_name(*s.uniform_blocks, name); }
 find_function :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Function { return find_by_name(*s.functions, name); }
 find_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Struct { return find_by_name(*s.extra_structs, name); }
@@ -1381,18 +1421,21 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
   positional_index: s64 = 0;
   for expr.args {
     arg_expr := it;
-    if arg_expr && arg_expr.kind == .BINARY && arg_expr.text == "=" &&
+    if arg_expr && arg_expr.kind == .BINARY &&
        arg_expr.left && arg_expr.left.kind == .IDENT {
-      field_name := arg_expr.left.text;
-      named_index := field_index_from_name(dst.fields, field_name);
-      if named_index < 0 {
-        return false, make_diag("constructor for '%' has unknown named field '%'.", dst.type_name, field_name);
+      op, op_ok := ir_expr_binary_op_text(arg_expr);
+      if op_ok && op == "=" {
+        field_name := arg_expr.left.text;
+        named_index := field_index_from_name(dst.fields, field_name);
+        if named_index < 0 {
+          return false, make_diag("constructor for '%' has unknown named field '%'.", dst.type_name, field_name);
+        }
+        if resolved_args[named_index] {
+          return false, make_diag("constructor for '%' sets field '%' more than once.", dst.type_name, field_name);
+        }
+        resolved_args[named_index] = arg_expr.right;
+        continue;
       }
-      if resolved_args[named_index] {
-        return false, make_diag("constructor for '%' sets field '%' more than once.", dst.type_name, field_name);
-      }
-      resolved_args[named_index] = arg_expr.right;
-      continue;
     }
 
     while positional_index < resolved_args.count && resolved_args[positional_index] positional_index += 1;
@@ -1467,6 +1510,7 @@ emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, fiel
   if !idx_ok return 0, .UNKNOWN, false, idx_diag;
   idx_id, idx_ok, idx_diag = coerce_to_kind(s, idx_id, idx_type, .UINT);
   if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+  idx_id = apply_buffer_base_index(s, buffer, idx_id);
 
   field_ptr_type_id := storage_ptr_type_id_from_kind(s, field.type);
   if field_ptr_type_id == 0 return_err("unsupported struct buffer field type for '%.%'.", buffer.name, field.name);
@@ -1997,12 +2041,17 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
   diag: IR_Diagnostic;
   if arg.type.kind != .POINTER return false, true, diag;
 
-  if !arg_expr || arg_expr.kind != .IDENT {
-    return true, false, make_diag("helper '%' pointer arg '%' must be a buffer identifier.", helper_name, arg.name);
+  expr := arg_expr;
+  if expr && expr.kind == .CAST && expr.left expr = expr.left;
+  if expr && expr.kind == .UNARY && expr.left && expr.unary_op == .ADDRESS_OF expr = expr.left;
+
+  buffer_name, buffer_name_ok := resolve_buffer_name_from_expr(expr);
+  if !buffer_name_ok {
+    return true, false, make_diag("helper '%' pointer arg '%' must be a buffer identifier/subscript.", helper_name, arg.name);
   }
-  source_buffer := find_buffer(s, arg_expr.text);
+  source_buffer := find_buffer(s, buffer_name);
   if !source_buffer {
-    return true, false, make_diag("helper '%' pointer arg '%' expected storage buffer identifier, got '%'.", helper_name, arg.name, arg_expr.text);
+    return true, false, make_diag("helper '%' pointer arg '%' expected storage buffer identifier, got '%'.", helper_name, arg.name, buffer_name);
   }
 
   expected_kind := spv_kind_from_ir_type_kind(arg.type.pointee_kind);
@@ -2022,11 +2071,21 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
     }
   }
 
-  if arg.name != arg_expr.text {
-    alias := source_buffer.*;
-    alias.name = arg.name;
-    array_add(*s.buffers, alias);
+  alias := source_buffer.*;
+  alias.name = arg.name;
+  alias.has_base_index = false;
+  alias.base_index_id = 0;
+
+  if expr && expr.kind == .SUBSCRIPT {
+    idx_id, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
+    if !idx_ok return true, false, idx_diag;
+    idx_id, idx_ok, idx_diag = coerce_to_kind(s, idx_id, idx_type, .UINT);
+    if !idx_ok return true, false, idx_diag;
+    alias.has_base_index = true;
+    alias.base_index_id = apply_buffer_base_index(s, source_buffer, idx_id);
   }
+
+  array_add(*s.buffers, alias);
   return true, true, diag;
 }
 
@@ -2860,17 +2919,8 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
       }
 
-      buffer_name, base_ok := resolve_ident_or_zero_deref(expr.left);
-      if base_ok {
-        // already resolved
-      } else if expr.left && expr.left.kind == .MEMBER {
-        member_root, member_field, member_ok := resolve_member_root_and_field(expr.left);
-        if member_ok {
-          buffer_name = tprint("%.%", member_root, member_field);
-        } else {
-          buffer_name = expr_text(expr.left);
-        }
-      } else {
+      buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left);
+      if !base_ok {
         return_err("subscript base must resolve to an identifier/member.");
       }
       buffer := find_buffer(s, buffer_name);
@@ -2879,6 +2929,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if !idx_ok return 0, .UNKNOWN, false, idx_diag;
       idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
       if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+      idx = apply_buffer_base_index(s, buffer, idx);
       if buffer.element_kind != .STRUCT {
         value_ptr_id := new_id(s);
         add_op(s, value_ptr_id, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
@@ -2895,7 +2946,8 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       left_id, left_type, left_ok, left_diag := emit_expr(s, expr.left);
       if !left_ok return 0, .UNKNOWN, false, left_diag;
 
-      op := expr.text;
+      op, op_ok := ir_expr_binary_op_text(expr);
+      if !op_ok return_err("binary expression missing operator text.");
       if op == "&&" || op == "||" {
         left_bool, left_bool_ok, left_bool_diag := coerce_to_kind(s, left_id, left_type, .BOOL);
         if !left_bool_ok return 0, .UNKNOWN, false, left_bool_diag;
@@ -3131,10 +3183,22 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
 
     case .UNARY; {
       if !expr.left return_err("unary expression missing operand.");
+      if expr.unary_op == .DEREF {
+        ptr_id, ptr_type, ptr_ok, ptr_diag := emit_lvalue_ptr(s, expr);
+        if !ptr_ok return 0, .UNKNOWN, false, ptr_diag;
+        value_type_id := type_id_from_kind(s, ptr_type);
+        if value_type_id == 0 return_err("unary '*' unsupported for pointee type %.", ptr_type);
+        out := new_id(s);
+        emit_load(s, out, value_type_id, ptr_id, ptr_type, needs_physical_align=true);
+        return out, ptr_type, true, diag;
+      }
+      if expr.unary_op == .ADDRESS_OF return_err("unary address-of is only supported as a helper pointer argument.");
+      op, op_ok := ir_expr_unary_op_text(expr);
+      if !op_ok return_err("unary expression missing operator text.");
       inner_id, inner_type, inner_ok, inner_diag := emit_expr(s, expr.left);
       if !inner_ok return 0, .UNKNOWN, false, inner_diag;
-      if expr.text == "+" return inner_id, inner_type, true, diag;
-      if expr.text == "-" {
+      if op == "+" return inner_id, inner_type, true, diag;
+      if op == "-" {
         if inner_type == .FLOAT {
           out := new_id(s);
           add_op(s, out, "OpFNegate", s.id_float, inner_id);
@@ -3163,20 +3227,20 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
         return_err("unary '-' unsupported for type %.", inner_type);
       }
-      if expr.text == "!" {
+      if op == "!" {
         if inner_type != .BOOL return_err("unary '!' requires bool.");
         out := new_id(s);
         add_op(s, out, "OpLogicalNot", s.id_bool, inner_id);
         return out, .BOOL, true, diag;
       }
-      if expr.text == "~" {
+      if op == "~" {
         if !is_integral_kind(inner_type) return_err("unary '~' requires integer.");
         out := new_id(s);
         type_id := type_id_from_kind(s, inner_type);
         add_op(s, out, "OpNot", type_id, inner_id);
         return out, inner_type, true, diag;
       }
-      return_err("unsupported unary op '%'.", expr.text);
+      return_err("unsupported unary op '%'.", op);
     }
 
     case .CALL; {
@@ -3752,6 +3816,20 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
   assert(s != null);
   diag: IR_Diagnostic;
   if !expr return_err("null lvalue expression.");
+  if expr.kind == .UNARY {
+    if expr.unary_op == .DEREF {
+      if !expr.left return_err("unary '*' missing operand.");
+      buffer_name, buffer_name_ok := resolve_buffer_name_from_expr(expr.left);
+      if !buffer_name_ok return_err("unsupported unary '*' lvalue base.");
+    buffer := find_buffer(s, buffer_name);
+    if !buffer return_err("unknown unary '*' lvalue base '%'.", buffer_name);
+    if buffer.element_kind == .STRUCT return_err("struct buffer '%' requires member access on lvalue.", buffer.name);
+    idx := ifx buffer.has_base_index then buffer.base_index_id else s.id_uint_0;
+    ptr := new_id(s);
+      add_op(s, ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
+      return ptr, buffer.element_kind, true, diag;
+    }
+  }
   if expr.kind == .IDENT {
     local := find_local(s, expr.text);
     if !local return_err("unknown lvalue identifier '%'.", expr.text);
@@ -3782,17 +3860,8 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       }
     }
 
-    buffer_name, base_ok := resolve_ident_or_zero_deref(expr.left);
-    if base_ok {
-      // already resolved
-    } else if expr.left && expr.left.kind == .MEMBER {
-      member_root, member_field, member_ok := resolve_member_root_and_field(expr.left);
-      if member_ok {
-        buffer_name = tprint("%.%", member_root, member_field);
-      } else {
-        buffer_name = expr_text(expr.left);
-      }
-    } else {
+    buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left);
+    if !base_ok {
       return_err("unsupported lvalue subscript base.");
     }
     buffer := find_buffer(s, buffer_name);
@@ -3801,6 +3870,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
     if !idx_ok return 0, .UNKNOWN, false, idx_diag;
     idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
     if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+    idx = apply_buffer_base_index(s, buffer, idx);
     if buffer.element_kind != .STRUCT {
       ptr := new_id(s);
       add_op(s, ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
@@ -3814,17 +3884,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       if ptr_ok return ptr_id, ptr_type, true, diag;
 
       // Fallback: component lvalue on raw vector buffer element, e.g. table[idx].x
-      buffer_name, base_ok := resolve_ident_or_zero_deref(expr.left.left);
-      if base_ok {
-        // resolved
-      } else if expr.left.left && expr.left.left.kind == .MEMBER {
-        member_root, member_field, member_ok := resolve_member_root_and_field(expr.left.left);
-        if member_ok {
-          buffer_name = tprint("%.%", member_root, member_field);
-        } else {
-          buffer_name = expr_text(expr.left.left);
-        }
-      }
+      buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left.left);
       buffer := ifx buffer_name.count > 0 then find_buffer(s, buffer_name) else null;
       if buffer && (buffer.element_kind == .FLOAT2 || buffer.element_kind == .FLOAT3 || buffer.element_kind == .FLOAT4) {
         comp_index: u32 = 0;
@@ -3840,6 +3900,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
         if !idx_ok return 0, .UNKNOWN, false, idx_diag;
         idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
         if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+        idx = apply_buffer_base_index(s, buffer, idx);
 
         elem_ptr := new_id(s);
         add_op(s, elem_ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
@@ -4163,7 +4224,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
     }
 
     case .BINARY; {
-      op := stmt.binary_op;
+      op, op_ok := ir_stmt_binary_op_text(stmt);
+      if !op_ok return_err("statement binary expression missing operator text.");
 
       if op == "=" && stmt.binary_left && stmt.binary_left.kind == .SUBSCRIPT &&
          stmt.binary_left.left && stmt.binary_left.left.kind == .IDENT {
@@ -4320,7 +4382,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if op == "<<=" base_op = "<<";
       if op == ">>=" base_op = ">>";
       if base_op.count == 0 {
-        return_err("unsupported statement binary op '%'.", stmt.binary_op);
+        return_err("unsupported statement binary op '%'.", op);
       }
 
       lhs_value := new_id(s);

@@ -28,6 +28,22 @@ Status: Fixed (February 28, 2026) for fixed-size local scalar/vector arrays and 
     - `local_float3_array_roundtrip`
     - `helper_float3_array_arg`
 
+## 3) Nested local proc declarations are unsupported in IR lowering
+Status: Fixed (March 1, 2026) for nested runtime helper procs; nested `#expand` procs now produce an explicit diagnostic.
+- Symptom:
+  - `IR lowering: unsupported declaration type for '<inner_proc_name>'.`
+- Where hit:
+  - Declaring a helper proc inside another shader proc body (example regression: `inner_proc` in `compute_semantics_runner.jai`).
+- Implemented:
+  - `ir_shared` statement lowering now recognizes declaration nodes whose expression is a nested procedure and treats them as helper declarations instead of value declarations.
+  - Added explicit IR diagnostic when nested proc declaration has an `expand` note:
+    - `IR lowering: nested proc '<name>' marked #expand is unsupported`
+  - Extended SPIR-V inline helper pointer-arg binding and buffer aliasing for subscript-based pointer args (e.g. `*values[idx]`) so nested helper calls can mutate the correct storage element.
+  - Added unary pointer-deref fallback in IR unary lowering for pointer-typed operands (`*`), and SPIR-V unary deref load/lvalue support in helper lowering.
+- Verification:
+  - `jai -quiet headless_ir/build_ir_compute_semantics.jai` passes (includes `inner_proc`).
+  - `jai -quiet build.jai - -run_tests` passes.
+
 ## 5) Storage buffer alignment issue for `Vector3` arrays in SPIR-V validation
 Status: Addressed (February 28, 2026) by adopting scalar block layout assumptions for Vulkan validation/layout.
 - Symptom:

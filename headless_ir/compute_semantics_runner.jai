@@ -161,6 +161,8 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"struct_buffer_element_constructor_assign", .Vec4Box},
   {"terrain_tetra_inside_outside_signature", .Bare},
   {"helper_scalar_arg_shadow_capture", .Bare},
+  
+  {"inner_proc", .Bare},
 ];
 
 ELEMENT_COUNT :: 64;
@@ -2309,6 +2311,18 @@ helper_scalar_arg_shadow_capture :: (using in: Compute_Semantics_In, values: *u3
   // Broken inline arg binding can incorrectly capture d1 <- d5 here.
   sig := helper_scalar_arg_shadow_sig(d0, d5, d1, d6);
   values[idx] = values[idx] + sig + 1;
+} @compute_shader
+
+inner_proc :: (using in: Compute_Semantics_In, values: *u32) {
+    if thread_id.x >= ELEMENT_COUNT return;
+    
+    inner_example_proc :: (val: *u32) {
+        val.* += 55;
+    }
+    
+    idx := thread_id.x;
+    values[idx] = idx;
+    inner_example_proc(*values[idx]);
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {

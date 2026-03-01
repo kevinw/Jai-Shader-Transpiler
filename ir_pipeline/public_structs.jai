@@ -145,8 +145,20 @@ IR_Expr_Kind :: enum {
   CONSTRUCTOR;
 }
 
+IR_Unary_Op :: enum {
+  UNKNOWN;
+  PLUS;
+  NEGATE;
+  LOGICAL_NOT;
+  BIT_NOT;
+  ADDRESS_OF;
+  DEREF;
+}
+
 IR_Expr :: struct {
   kind: IR_Expr_Kind;
+  unary_op: IR_Unary_Op;
+  binary_operator_type: Operator_Type;
   text: string;
   left: *IR_Expr;
   right: *IR_Expr;
@@ -185,7 +197,7 @@ IR_Stmt :: struct {
 
   // BINARY
   binary_left: *IR_Expr;
-  binary_op: string;
+  binary_operator_type: Operator_Type;
   binary_right: *IR_Expr;
 
   // IF

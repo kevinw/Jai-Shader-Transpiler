@@ -73,8 +73,6 @@ run_all_tests :: () {
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector2");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector3");
   check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "struct Vector4");
-  check_file_not_contains(debug_path("array_support_vertex_shader.metal"), "<operator_not_supported>");
-
   for collect_generated_files(".glsl") check_file_not_contains(it, "#string END");
   for collect_generated_files(".metal") check_file_not_contains(it, "#string END");
 

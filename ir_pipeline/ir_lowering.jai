@@ -575,60 +575,103 @@ ir_lower_shader_arg_type_name :: (type: *Type_Info, extra_structs: *[..] IR_Stru
   return type_name, type_ok;
 }
 
-op_to_text :: (op: Operator_Type) -> string {
+op_to_text :: (op: Operator_Type) -> (string, bool) {
   if op == {
-    case cast(Operator_Type) #char "="; return "=";
-    case cast(Operator_Type) #char "<"; return "<";
-    case cast(Operator_Type) #char "?"; return "?";
-    case cast(Operator_Type) #char ">"; return ">";
-    case cast(Operator_Type) #char "!"; return "!";
-    case cast(Operator_Type) #char "+"; return "+";
-    case cast(Operator_Type) #char "-"; return "-";
-    case cast(Operator_Type) #char "*"; return "*";
-    case cast(Operator_Type) #char "/"; return "/";
-    case cast(Operator_Type) #char "%"; return "%";
-    case cast(Operator_Type) #char "&"; return "&";
-    case cast(Operator_Type) #char "|"; return "|";
-    case cast(Operator_Type) #char "^"; return "^";
-    case cast(Operator_Type) #char "~"; return "~";
-    case cast(Operator_Type) #char "."; return ".";
+    case cast(Operator_Type) #char "="; return "=", true;
+    case cast(Operator_Type) #char "<"; return "<", true;
+    case cast(Operator_Type) #char "?"; return "?", true;
+    case cast(Operator_Type) #char ">"; return ">", true;
+    case cast(Operator_Type) #char "!"; return "!", true;
+    case cast(Operator_Type) #char "+"; return "+", true;
+    case cast(Operator_Type) #char "-"; return "-", true;
+    case cast(Operator_Type) #char "*"; return "*", true;
+    case cast(Operator_Type) #char "/"; return "/", true;
+    case cast(Operator_Type) #char "%"; return "%", true;
+    case cast(Operator_Type) #char "&"; return "&", true;
+    case cast(Operator_Type) #char "|"; return "|", true;
+    case cast(Operator_Type) #char "^"; return "^", true;
+    case cast(Operator_Type) #char "~"; return "~", true;
+    case cast(Operator_Type) #char "."; return ".", true;
   }
 
   if op == {
-    case .PLUS_ASSIGN; return "+=";
-    case .MINUS_ASSIGN; return "-=";
-    case .TIMES_ASSIGN; return "*=";
-    case .DIV_ASSIGN; return "/=";
-    case .MOD_ASSIGN; return "%=";
-    case .IS_EQUAL; return "==";
-    case .IS_NOT_EQUAL; return "!=";
-    case .LOGICAL_AND; return "&&";
-    case .LOGICAL_OR; return "||";
-    case .LESS_OR_EQUAL; return "<=";
-    case .GREATER_OR_EQUAL; return ">=";
-    case .SHIFT_LEFT; return "<<";
-    case .SHIFT_RIGHT; return ">>";
-    case .ARRAY_SUBSCRIPT; return "[]";
-    case; return "<operator_not_supported>";
+    case .PLUS_ASSIGN; return "+=", true;
+    case .MINUS_ASSIGN; return "-=", true;
+    case .TIMES_ASSIGN; return "*=", true;
+    case .DIV_ASSIGN; return "/=", true;
+    case .MOD_ASSIGN; return "%=", true;
+    case .IS_EQUAL; return "==", true;
+    case .IS_NOT_EQUAL; return "!=", true;
+    case .LOGICAL_AND; return "&&", true;
+    case .LOGICAL_OR; return "||", true;
+    case .LESS_OR_EQUAL; return "<=", true;
+    case .GREATER_OR_EQUAL; return ">=", true;
+    case .SHIFT_LEFT; return "<<", true;
+    case .SHIFT_RIGHT; return ">>", true;
+    case .ARRAY_SUBSCRIPT; return "[]", true;
+    case; return "", false;
   }
 }
 
-ir_binary_operator_to_slang :: (op: Operator_Type) -> string {
+ir_binary_operator_to_slang :: (op: Operator_Type) -> (string, bool) {
   if op == {
-    case .PLUS_ASSIGN; return "+=";
-    case .MINUS_ASSIGN; return "-=";
-    case .TIMES_ASSIGN; return "*=";
-    case .DIV_ASSIGN; return "/=";
-    case .MOD_ASSIGN; return "%=";
-    case .SHIFT_LEFT; return "<<";
-    case .SHIFT_RIGHT; return ">>";
-    case .SHIFT_LEFT_ASSIGN; return "<<=";
-    case .SHIFT_RIGHT_ASSIGN; return ">>=";
-    case .BITWISE_AND_ASSIGN; return "&=";
-    case .BITWISE_OR_ASSIGN; return "|=";
-    case .BITWISE_XOR_ASSIGN; return "^=";
+    case .PLUS_ASSIGN; return "+=", true;
+    case .MINUS_ASSIGN; return "-=", true;
+    case .TIMES_ASSIGN; return "*=", true;
+    case .DIV_ASSIGN; return "/=", true;
+    case .MOD_ASSIGN; return "%=", true;
+    case .SHIFT_LEFT; return "<<", true;
+    case .SHIFT_RIGHT; return ">>", true;
+    case .SHIFT_LEFT_ASSIGN; return "<<=", true;
+    case .SHIFT_RIGHT_ASSIGN; return ">>=", true;
+    case .BITWISE_AND_ASSIGN; return "&=", true;
+    case .BITWISE_OR_ASSIGN; return "|=", true;
+    case .BITWISE_XOR_ASSIGN; return "^=", true;
   }
-  return op_to_text(op);
+  mapped, mapped_ok := op_to_text(op);
+  return mapped, mapped_ok;
+}
+
+ir_unary_op_from_compiler_operator :: (op: Operator_Type) -> (IR_Unary_Op, bool) {
+  if op == cast(Operator_Type) #char "+" return .PLUS, true;
+  if op == cast(Operator_Type) #char "-" return .NEGATE, true;
+  if op == cast(Operator_Type) #char "!" return .LOGICAL_NOT, true;
+  if op == cast(Operator_Type) #char "~" return .BIT_NOT, true;
+  if op == cast(Operator_Type) #char "*" return .ADDRESS_OF, true;
+  if op == .POINTER_DEREFERENCE return .DEREF, true;
+  if op == .POSTFIX_DEREFERENCE return .DEREF, true;
+  return .UNKNOWN, false;
+}
+
+ir_unary_op_to_slang :: (op: IR_Unary_Op) -> (string, bool) {
+  if op == .PLUS return "+", true;
+  if op == .NEGATE return "-", true;
+  if op == .LOGICAL_NOT return "!", true;
+  if op == .BIT_NOT return "~", true;
+  if op == .ADDRESS_OF return "*", true;
+  if op == .DEREF return ".*", true;
+  return "", false;
+}
+
+ir_expr_binary_op_text :: (expr: *IR_Expr) -> (string, bool) {
+  if !expr return "", false;
+  mapped, mapped_ok := ir_binary_operator_to_slang(expr.binary_operator_type);
+  if !mapped_ok return "", false;
+  return mapped, true;
+}
+
+ir_expr_unary_op_text :: (expr: *IR_Expr) -> (string, bool) {
+  if !expr return "", false;
+  mapped, mapped_ok := ir_unary_op_to_slang(expr.unary_op);
+  if !mapped_ok return "", false;
+  return mapped, true;
+}
+
+ir_stmt_binary_op_text :: (stmt: *IR_Stmt) -> (string, bool) {
+  if !stmt return "", false;
+  mapped, mapped_ok := ir_binary_operator_to_slang(stmt.binary_operator_type);
+  if !mapped_ok return "", false;
+  return mapped, true;
 }
 
 compute_builtin_note_for_member :: (member: *Type_Info_Struct_Member) -> (string, bool) {
@@ -848,7 +891,7 @@ ir_lower_expr :: (node: *Code_Node,
               lowered_left, left_ok := ir_lower_expr(named.left, input_fields, output_fields, active_usings, active_aliases, state);
               if !left_ok return null, false;
               arg := ir_expr_new(.BINARY);
-              arg.text = "=";
+              arg.binary_operator_type = cast(Operator_Type) #char "=";
               arg.left = lowered_left;
               arg.right = lowered_right;
               array_add(*out.args, arg);
@@ -902,7 +945,12 @@ ir_lower_expr :: (node: *Code_Node,
       inner, ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases, state);
       if !ok return null, false;
       out := ir_expr_new(.UNARY);
-      out.text = op_to_text(un.operator_type);
+      unary_op, unary_op_ok := ir_unary_op_from_compiler_operator(un.operator_type);
+      if !unary_op_ok {
+        ir_set_diagnostic(state, tprint("IR lowering: unsupported unary operator (%)", un.operator_type), node);
+        return null, false;
+      }
+      out.unary_op = unary_op;
       out.left = inner;
       return out, true;
     }
@@ -936,7 +984,6 @@ ir_lower_expr :: (node: *Code_Node,
         return out, true;
       }
 
-      op := ir_binary_operator_to_slang(bn.operator_type);
       if bn.operator_type == cast(Operator_Type) #char "*" {
         left_type := ifx bn.left then bn.left.type else null;
         right_type := ifx bn.right then bn.right.type else null;
@@ -957,7 +1004,7 @@ ir_lower_expr :: (node: *Code_Node,
           return out, true;
         }
       }
-      if op == "." {
+      if bn.operator_type == cast(Operator_Type) #char "." {
         if bn.right && bn.right.kind == .IDENT {
           right_ident := cast(*Code_Ident) bn.right;
           left_for_member := left;
@@ -989,7 +1036,7 @@ ir_lower_expr :: (node: *Code_Node,
       right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state);
       if !right_ok return null, false;
       out := ir_expr_new(.BINARY);
-      out.text = op;
+      out.binary_operator_type = bn.operator_type;
       out.left = left;
       out.right = right;
       return out, true;
@@ -1218,7 +1265,10 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
     case .UNARY; {
       inner, ok := ir_expr_to_slang_from_ir(expr.left);
       if !ok return "", false;
-      return tprint("%%", expr.text, inner), true;
+      if expr.unary_op == .DEREF return tprint("(%).*", inner), true;
+      op, op_ok := ir_expr_unary_op_text(expr);
+      if !op_ok return "", false;
+      return tprint("%%", op, inner), true;
     }
 
     case .BINARY; {
@@ -1226,7 +1276,9 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
       if !left_ok return "", false;
       right, right_ok := ir_expr_to_slang_from_ir(expr.right);
       if !right_ok return "", false;
-      return tprint("(% % %)", left, expr.text, right), true;
+      op, op_ok := ir_expr_binary_op_text(expr);
+      if !op_ok return "", false;
+      return tprint("(% % %)", left, op, right), true;
     }
 
     case .SELECT; {

@@ -33,7 +33,12 @@ build_ir_pipeline_dll :: () {
     
     plugins: [..]*Metaprogram_Plugin;
     jdll := JDLL.get_plugin();
-    array_add(*jdll.options.include_files, "ir_pipeline/public_structs.jai"); // TODO: once JDLL knows how to print structs/enums tagged with @jdll_export or something we don't need this.
+    //array_add(*jdll.options.include_files, "ir_pipeline/public_structs.jai"); // TODO: once JDLL knows how to print structs/enums tagged with @jdll_export or something we don't need this.
+    jdll.options.public_footer = #string END
+    
+#load "../../ir_pipeline/public_structs.jai";
+
+    END;
     array_add(*plugins, jdll);
     
     intercept_flags: Intercept_Flags = 0;

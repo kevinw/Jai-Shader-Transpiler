@@ -1413,62 +1413,6 @@ shader_entry_id_is_selected :: (csv_filter: string, entry_id: string) -> bool {
   return false;
 }
 
-// @whatthefuckisthis im 99% sure there's a simpler way of converting an int to a string directly.
-// or atleast printing it as a character, because the first switch is.... yikes
-operator_string :: (op: Operator_Type) -> string {
-  if op == {
-    case cast(Operator_Type) #char "="; return "=";
-    case cast(Operator_Type) #char "<"; return "<";
-    case cast(Operator_Type) #char "?"; return "?";
-    case cast(Operator_Type) #char ">"; return ">";
-    case cast(Operator_Type) #char "!"; return "!";
-    case cast(Operator_Type) #char "+"; return "+";
-    case cast(Operator_Type) #char "-"; return "-";
-    case cast(Operator_Type) #char "*"; return "*";
-    case cast(Operator_Type) #char "/"; return "/";
-    case cast(Operator_Type) #char "%"; return "%";
-    case cast(Operator_Type) #char "&"; return "&";
-    case cast(Operator_Type) #char "|"; return "|";
-    case cast(Operator_Type) #char "^"; return "^";
-    case cast(Operator_Type) #char "~"; return "~";
-    case cast(Operator_Type) #char "."; return ".";
-  }
-
-  if op == {
-    case .PLUS_ASSIGN; return "+=";
-    case .MINUS_ASSIGN; return "-=";
-    case .TIMES_ASSIGN; return "*=";
-    case .DIV_ASSIGN; return "/=";
-    case .MOD_ASSIGN; return "%=";
-    case .IS_EQUAL; return "==";
-    case .IS_NOT_EQUAL; return "!=";
-    case .LOGICAL_AND; return "&&";
-    case .LOGICAL_OR; return "||";
-    case .LESS_OR_EQUAL; return "<=";
-    case .GREATER_OR_EQUAL; return ">=";
-    
-    case .SHIFT_LEFT; return "<<";
-    case .SHIFT_RIGHT; return ">>";
-    case .ARRAY_SUBSCRIPT; return "[]";
-    
-    // I don't think operators below this are supported in glsl
-    // But this can stay just incase...
-    // case .ROTATE_LEFT; return "<<<";
-    // case .ROTATE_RIGHT; return ">>>";
-    // case .SHIFT_LEFT_ASSIGN; return "<<=";
-    // case .SHIFT_RIGHT_ASSIGN; return ">>=";
-    // case .ROTATE_LEFT_ASSIGN; return "<<<=";
-    // case .ROTATE_RIGHT_ASSIGN; return ">>>=";
-    // case .BITWISE_AND_ASSIGN; return "&=";
-    // case .BITWISE_OR_ASSIGN; return "|=";
-    // case .BITWISE_XOR_ASSIGN; return "^=";
-    // case .LOGICAL_AND_ASSIGN; return "&&=";
-    // case .LOGICAL_OR_ASSIGN; return "||=";
-    
-    case; return "<operator_not_supported>";
-  }
-}
-
 Shader_Type :: IR_Shader_Kind;
 
 Shader_Language :: enum {

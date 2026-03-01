@@ -30,7 +30,9 @@ ir_emit_ir_stmt_lines :: (out_lines: *[..] string, stmt: *IR_Stmt, indent: s64) 
       if !left_ok return false;
       right, right_ok := ir_expr_to_slang_from_ir(stmt.binary_right);
       if !right_ok return false;
-      array_add(out_lines, tprint("% % % %;", ir_shared_stmt_indent(indent), left, stmt.binary_op, right));
+      op, op_ok := ir_stmt_binary_op_text(stmt);
+      if !op_ok return false;
+      array_add(out_lines, tprint("% % % %;", ir_shared_stmt_indent(indent), left, op, right));
       return true;
     }
 
@@ -187,6 +189,15 @@ ir_shared_find_struct_member_type_by_index :: (type: *Type_Info, member_index: s
   return st.members[member_index].type;
 }
 
+ir_shared_proc_has_expand_note :: (header: *Code_Procedure_Header) -> bool {
+  if !header return false;
+  for header.notes {
+    if it.text == "expand" return true;
+    if it.text == "#expand" return true;
+  }
+  return false;
+}
+
 ir_shared_lower_stmt :: (stmt: *Code_Node,
                          out_block: *IR_Block,
                          input_fields: [] string,
@@ -214,6 +225,24 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
     case .DECLARATION; {
       decl := cast(*Code_Declaration) stmt;
       for decl.notes if it.text == "jai_only" return true;
+
+      if decl.expression && (decl.expression.kind == .PROCEDURE_HEADER || decl.expression.kind == .PROCEDURE_BODY) {
+        nested_header: *Code_Procedure_Header = null;
+        if decl.expression.kind == .PROCEDURE_HEADER {
+          nested_header = cast(*Code_Procedure_Header) decl.expression;
+        } else {
+          nested_body := cast(*Code_Procedure_Body) decl.expression;
+          if nested_body nested_header = nested_body.header;
+        }
+        if ir_shared_proc_has_expand_note(nested_header) {
+          ir_set_diagnostic(state, tprint("IR lowering: nested proc '%' marked #expand is unsupported", decl.name), stmt);
+          return false;
+        }
+        // Local proc declarations are collected through call-graph discovery.
+        // They are not value declarations in lowered IR blocks.
+        return true;
+      }
+
       decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
       type_name, type_ok := ir_type_to_shader_name(decl_type);
       if !type_ok {
@@ -376,7 +405,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt: IR_Stmt;
       out_stmt.kind = .BINARY;
       out_stmt.binary_left = left;
-      out_stmt.binary_op = ir_binary_operator_to_slang(bn.operator_type);
+      out_stmt.binary_operator_type = bn.operator_type;
       out_stmt.binary_right = right;
       array_add(*out_block.statements, out_stmt);
       return true;
@@ -679,7 +708,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
               assign_stmt: IR_Stmt;
               assign_stmt.kind = .BINARY;
               assign_stmt.binary_left = lhs;
-              assign_stmt.binary_op = "=";
+              assign_stmt.binary_operator_type = cast(Operator_Type) #char "=";
               assign_stmt.binary_right = rhs;
               array_add(*out_block.statements, assign_stmt);
             }
