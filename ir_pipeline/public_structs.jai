@@ -165,6 +165,41 @@ IR_Member_Access_Kind :: enum {
   SWIZZLE_XY;
 }
 
+IR_Call_Target_Kind :: enum {
+  UNKNOWN;
+  BUILTIN;
+  HELPER;
+}
+
+IR_Call_Builtin_Kind :: enum {
+  NONE;
+  SAMPLE_2D;
+  WRITE_2D;
+  SATURATE;
+  MIX;
+  LERP;
+  REFLECT;
+  CLAMP;
+  STEP;
+  POW;
+  SMOOTHSTEP;
+  MOD;
+  FMOD_CYCLING;
+  MUL;
+  FLOOR;
+  MIN;
+  MAX;
+  ABS;
+  SQRT;
+  SIN;
+  COS;
+  FRACT;
+  LENGTH;
+  NORMALIZE;
+  RADIANS;
+  DEGREES;
+}
+
 IR_Builtin_Ref :: struct {
   kind: IR_Expr_Builtin_Kind;
   component: s32; // -1 means whole builtin value (for vector builtins).
@@ -177,6 +212,8 @@ IR_Expr :: struct {
   unary_op: IR_Unary_Op;
   builtin_ref: IR_Builtin_Ref;
   member_access: IR_Member_Access_Kind;
+  call_target_kind: IR_Call_Target_Kind;
+  call_builtin_kind: IR_Call_Builtin_Kind;
   binary_operator_type: Operator_Type;
   text: string;
   left: *IR_Expr;

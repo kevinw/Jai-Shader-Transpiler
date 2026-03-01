@@ -422,7 +422,13 @@ is_internal_transpiled_request_name :: (name: string) -> bool {
 }
 
 ir_metal_enable_unsafe_runtime_array_indexing :: (source: string) -> string {
-  return source;
+  out := source;
+  // SPIRV-Cross can emit a generic signed-mod helper that uses `select(...)`
+  // in a way Metal may treat as ambiguous for 64-bit integer template params.
+  out = replace(out,
+                "return select(Tx(remainder + y), remainder, remainder == 0 || (x >= 0) == (y >= 0));",
+                "return (remainder == 0 || (x >= 0) == (y >= 0)) ? remainder : Tx(remainder + y);");
+  return out;
 }
 
 ir_source_file_from_proc :: (proc: *Code_Procedure_Body) -> string {
@@ -688,6 +694,7 @@ finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job, add_genera
     write_entire_file(job.output_path, target_source);
   }
   if job.ctx.type == .Compute && job.ctx.language == .METAL {
+    target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
     target_source = replace(target_source, "[[kernel]] void", "kernel void");
   }
   if add_generated_comment {
@@ -828,6 +835,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     write_entire_file(output_path, target_source);
   }
   if ctx.type == .Compute && ctx.language == .METAL {
+    target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
     target_source = replace(target_source, "[[kernel]] void", "kernel void");
   }
   if add_generated_comment {

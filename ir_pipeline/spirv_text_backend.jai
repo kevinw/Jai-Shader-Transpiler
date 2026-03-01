@@ -161,6 +161,68 @@ callee_matches_builtin :: (callee: string, builtin: string) -> bool {
   return callee[builtin.count] == #char "_";
 }
 
+call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
+  if callee_matches_builtin(callee, "sample_2d") return .SAMPLE_2D;
+  if callee_matches_builtin(callee, "write_2d") return .WRITE_2D;
+  if callee_matches_builtin(callee, "saturate") return .SATURATE;
+  if callee_matches_builtin(callee, "mix") return .MIX;
+  if callee_matches_builtin(callee, "lerp") return .LERP;
+  if callee_matches_builtin(callee, "reflect") return .REFLECT;
+  if callee == "clamp" return .CLAMP;
+  if callee == "step" return .STEP;
+  if callee == "pow" return .POW;
+  if callee == "smoothstep" return .SMOOTHSTEP;
+  if callee == "mod" return .MOD;
+  if callee == "fmod_cycling" return .FMOD_CYCLING;
+  if callee == "mul" return .MUL;
+  if callee == "floor" return .FLOOR;
+  if callee == "min" return .MIN;
+  if callee == "max" return .MAX;
+  if callee == "abs" return .ABS;
+  if callee == "sqrt" return .SQRT;
+  if callee == "sin" return .SIN;
+  if callee == "cos" return .COS;
+  if callee == "fract" return .FRACT;
+  if callee == "length" return .LENGTH;
+  if callee == "normalize" return .NORMALIZE;
+  if callee == "radians" return .RADIANS;
+  if callee == "degrees" return .DEGREES;
+  return .NONE;
+}
+
+call_builtin_kind_for_expr :: (expr: *IR_Expr) -> IR_Call_Builtin_Kind {
+  if !expr return .NONE;
+  if expr.call_builtin_kind != .NONE return expr.call_builtin_kind;
+  if !expr.left return .NONE;
+  callee := "";
+  if expr.left.kind == .IDENT || expr.left.kind == .MEMBER callee = expr.left.text;
+  if callee.count == 0 return .NONE;
+  return call_builtin_kind_from_callee_name(canonical_callee_name(callee));
+}
+
+call_helper_name_for_expr :: (expr: *IR_Expr) -> (string, bool) {
+  if !expr || !expr.left return "", false;
+  if expr.call_target_kind == .HELPER && (expr.left.kind == .IDENT || expr.left.kind == .MEMBER) {
+    return canonical_callee_name(expr.left.text), true;
+  }
+  if expr.left.kind == .IDENT || expr.left.kind == .MEMBER {
+    return canonical_callee_name(expr.left.text), true;
+  }
+  return "", false;
+}
+
+call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
+  if kind == .FLOOR return "floor";
+  if kind == .MIN return "min";
+  if kind == .MAX return "max";
+  if kind == .ABS return "abs";
+  if kind == .SQRT return "sqrt";
+  if kind == .SIN return "sin";
+  if kind == .COS return "cos";
+  if kind == .FRACT return "fract";
+  return "";
+}
+
 compact_text :: (in: string) -> string {
   out: [..] u8;
   for in {
@@ -699,6 +761,14 @@ spv_member_component_index_u32 :: inline (access: IR_Member_Access_Kind) -> (u32
   idx, ok := spv_member_component_index(access);
   if !ok return 0, false;
   return cast(u32) idx, true;
+}
+
+spv_vector_component_in_range :: (vec_type: IR_SPV_Gen_Type, comp_index: s64) -> bool {
+  if comp_index < 0 return false;
+  if vec_type == .FLOAT2 return comp_index <= 1;
+  if vec_type == .FLOAT3 return comp_index <= 2;
+  if vec_type == .FLOAT4 return comp_index <= 3;
+  return false;
 }
 
 apply_buffer_base_index :: (s: *IR_SPV_Gen_State, buffer: *IR_SPV_Gen_Buffer, idx: s64) -> s64 {
@@ -2652,8 +2722,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
             comp_index, comp_ok := spv_member_component_index(expr.member_access);
             if !comp_ok comp_index = -1;
             if comp_index >= 0 {
-              if left_type == .FLOAT2 && comp_index > 1 return_err("component '%' out of range for float2.", expr.text);
-              if left_type == .FLOAT3 && comp_index > 2 return_err("component '%' out of range for float3.", expr.text);
+              if !spv_vector_component_in_range(left_type, comp_index) return_err("component '%' out of range for type %.", expr.text, left_type);
               scalar_value := new_id(s);
               add_op(s, tprint("         % = OpCompositeExtract % % %",
                                id_text(scalar_value),
@@ -2699,8 +2768,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
             return swz, .FLOAT2, true, diag;
           }
           if comp_index >= 0 {
-            if local.type == .FLOAT2 && comp_index > 1 return_err("component '%' out of range for float2.", expr.text);
-            if local.type == .FLOAT3 && comp_index > 2 return_err("component '%' out of range for float3.", expr.text);
+            if !spv_vector_component_in_range(local.type, comp_index) return_err("component '%' out of range for type %.", expr.text, local.type);
             scalar_value := new_id(s);
             add_op(s, tprint("         % = OpCompositeExtract % % %",
                              id_text(scalar_value),
@@ -3098,19 +3166,17 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
 
     case .CALL; {
       if !expr.left return_err("unsupported call target expression.");
-      callee := "";
-      if expr.left.kind == .IDENT callee = expr.left.text;
-      else if expr.left.kind == .MEMBER callee = expr.left.text;
-      if callee.count == 0 return_err("unsupported call target expression.");
-      callee = canonical_callee_name(callee);
-      if callee_matches_builtin(callee, "sample_2d") {
+      builtin_kind := call_builtin_kind_for_expr(expr);
+      helper_name, helper_name_ok := call_helper_name_for_expr(expr);
+      if !helper_name_ok && builtin_kind == .NONE return_err("unsupported call target expression.");
+      if builtin_kind == .SAMPLE_2D {
         sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_2d_call(s, expr.args);
         return sampled_id, sampled_type, sampled_ok, sampled_diag;
       }
-      if callee_matches_builtin(callee, "write_2d") {
+      if builtin_kind == .WRITE_2D {
         return_err("write_2d has no return value and must be used as a statement.");
       }
-      if callee == "radians" {
+      if builtin_kind == .RADIANS {
         if expr.args.count != 1 return_err("radians expects 1 arg.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
         if !a_ok return 0, .UNKNOWN, false, a_diag;
@@ -3121,7 +3187,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, out, "OpFMul", s.id_float, af, k);
         return out, .FLOAT, true, diag;
       }
-      if callee == "degrees" {
+      if builtin_kind == .DEGREES {
         if expr.args.count != 1 return_err("d: degrees expects 1 arg.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
         if !a_ok return 0, .UNKNOWN, false, a_diag;
@@ -3132,7 +3198,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, out, "OpFMul", s.id_float, af, k);
         return out, .FLOAT, true, diag;
       }
-      if callee == "mod" || callee == "fmod_cycling" {
+      if builtin_kind == .MOD || builtin_kind == .FMOD_CYCLING {
         if expr.args.count != 2 return_err("mod expects 2 args.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
         if !a_ok return 0, .UNKNOWN, false, a_diag;
@@ -3173,7 +3239,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, out, "OpFRem", s.id_float, af, bf);
         return out, .FLOAT, true, diag;
       }
-      if callee_matches_builtin(callee, "saturate") {
+      if builtin_kind == .SATURATE {
         if expr.args.count != 1 return_err("saturate expects 1 arg.");
         v_id, v_type, v_ok, v_diag := emit_expr(s, expr.args[0]);
         if !v_ok return 0, .UNKNOWN, false, v_diag;
@@ -3220,7 +3286,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
                          id_text(vf), id_text(zero), id_text(one)));
         return out, .FLOAT, true, diag;
       }
-      if callee == "clamp" {
+      if builtin_kind == .CLAMP {
         if expr.args.count != 3 return_err("clamp expects 3 args.");
         x_id, x_type, x_ok, x_diag := emit_expr(s, expr.args[0]);
         if !x_ok return 0, .UNKNOWN, false, x_diag;
@@ -3279,7 +3345,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float), id_text(s.id_extinst), "FClamp", id_text(xf), id_text(lof), id_text(hif)));
         return out, .FLOAT, true, diag;
       }
-      if callee == "step" {
+      if builtin_kind == .STEP {
         if expr.args.count != 2 return_err("step expects 2 args.");
         edge_id, edge_type, edge_ok, edge_diag := emit_expr(s, expr.args[0]);
         if !edge_ok return 0, .UNKNOWN, false, edge_diag;
@@ -3324,8 +3390,8 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, out, "OpSelect", s.id_float, cond, zero, one);
         return out, .FLOAT, true, diag;
       }
-      if callee_matches_builtin(callee, "mix") || callee_matches_builtin(callee, "lerp") {
-        if expr.args.count != 3 return_err("% expects 3 args.", callee);
+      if builtin_kind == .MIX || builtin_kind == .LERP {
+        if expr.args.count != 3 return_err("mix/lerp expects 3 args.");
         x_id, x_type, x_ok, x_diag := emit_expr(s, expr.args[0]);
         if !x_ok return 0, .UNKNOWN, false, x_diag;
         y_id, y_type, y_ok, y_diag := emit_expr(s, expr.args[1]);
@@ -3377,7 +3443,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
                          id_text(xf), id_text(yf), id_text(af)));
         return out, .FLOAT, true, diag;
       }
-      if callee_matches_builtin(callee, "reflect") {
+      if builtin_kind == .REFLECT {
         if expr.args.count != 2 return_err("reflect expects 2 args.");
         i_id, i_type, i_ok, i_diag := emit_expr(s, expr.args[0]);
         if !i_ok return 0, .UNKNOWN, false, i_diag;
@@ -3418,7 +3484,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
         return_err("reflect requires float2/float3/float4 args, got (%, %).", i_type, n_type);
       }
-      if callee == "pow" {
+      if builtin_kind == .POW {
         if expr.args.count != 2 return_err("pow expects 2 args.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
         if !a_ok return 0, .UNKNOWN, false, a_diag;
@@ -3433,7 +3499,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
                          id_text(out), id_text(s.id_float), id_text(s.id_extinst), "Pow", id_text(af), id_text(bf)));
         return out, .FLOAT, true, diag;
       }
-      if callee == "smoothstep" {
+      if builtin_kind == .SMOOTHSTEP {
         if expr.args.count != 3 return_err("smoothstep expects 3 args.");
         e0_id, e0_type, e0_ok, e0_diag := emit_expr(s, expr.args[0]);
         if !e0_ok return 0, .UNKNOWN, false, e0_diag;
@@ -3502,7 +3568,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, out, "OpFMul", s.id_float, t2, three_minus_two_t);
         return out, .FLOAT, true, diag;
       }
-      if callee == "mul" {
+      if builtin_kind == .MUL {
         if expr.args.count != 2 return_err("mul expects 2 args.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
         if !a_ok return 0, .UNKNOWN, false, a_diag;
@@ -3521,9 +3587,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
         return_err("unsupported mul argument types (%, %).", a_type, b_type);
       }
-      if callee == "floor" || callee == "min" || callee == "max" ||
-         callee == "abs" || callee == "sqrt" || callee == "sin" || callee == "cos" || callee == "fract" || callee == "length" || callee == "normalize" {
-        if callee == "length" {
+      if builtin_kind == .FLOOR || builtin_kind == .MIN || builtin_kind == .MAX ||
+         builtin_kind == .ABS || builtin_kind == .SQRT || builtin_kind == .SIN || builtin_kind == .COS || builtin_kind == .FRACT || builtin_kind == .LENGTH || builtin_kind == .NORMALIZE {
+        if builtin_kind == .LENGTH {
           if expr.args.count != 1 return_err("length expects 1 arg.");
           v_id, v_type, v_ok, v_diag := emit_expr(s, expr.args[0]);
           if !v_ok return 0, .UNKNOWN, false, v_diag;
@@ -3533,7 +3599,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float), id_text(s.id_extinst), "Length", id_text(v2)));
           return out, .FLOAT, true, diag;
         }
-        if callee == "normalize" {
+        if builtin_kind == .NORMALIZE {
           if expr.args.count != 1 return_err("normalize expects 1 arg.");
           v_id, v_type, v_ok, v_diag := emit_expr(s, expr.args[0]);
           if !v_ok return 0, .UNKNOWN, false, v_diag;
@@ -3561,12 +3627,14 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           }
           return_err("normalize requires float2/float3/float4, got %.", v_type);
         }
-        builtin_id, builtin_type, builtin_ok, builtin_diag := emit_float_builtin_call(s, callee, expr.args);
+        builtin_name := call_builtin_kind_to_name(builtin_kind);
+        if builtin_name.count == 0 return_err("internal backend error: unsupported builtin enum %.", builtin_kind);
+        builtin_id, builtin_type, builtin_ok, builtin_diag := emit_float_builtin_call(s, builtin_name, expr.args);
         if !builtin_ok return 0, .UNKNOWN, false, builtin_diag;
         return builtin_id, builtin_type, true, diag;
       }
-      helper := find_function(s, callee);
-      if !helper return_err("unsupported call target '%'.", callee);
+      helper := find_function(s, helper_name);
+      if !helper return_err("unsupported call target '%'.", helper_name);
       helper_id, helper_type, helper_ok, helper_diag := eval_inline_function(s, helper, expr.args);
       return helper_id, helper_type, helper_ok, helper_diag;
     }
@@ -3661,191 +3729,6 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
   }
 
   return_err("unsupported expression kind %.", expr.kind);
-}
-
-emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  return_err :: (msg: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(msg, ..args); }
-
-  assert(s != null);
-  diag: IR_Diagnostic;
-  if !expr return_err("null lvalue expression.");
-  if expr.kind == .UNARY {
-    if expr.unary_op == .DEREF {
-      if !expr.left return_err("unary '*' missing operand.");
-      buffer_name, buffer_name_ok := resolve_buffer_name_from_expr(expr.left);
-      if !buffer_name_ok return_err("unsupported unary '*' lvalue base.");
-    buffer := find_buffer(s, buffer_name);
-    if !buffer return_err("unknown unary '*' lvalue base '%'.", buffer_name);
-    if buffer.element_kind == .STRUCT return_err("struct buffer '%' requires member access on lvalue.", buffer.name);
-    idx := ifx buffer.has_base_index then buffer.base_index_id else s.id_uint_0;
-    ptr := new_id(s);
-      add_op(s, ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
-      return ptr, buffer.element_kind, true, diag;
-    }
-  }
-  if expr.kind == .IDENT {
-    local := find_local(s, expr.text);
-    if !local return_err("unknown lvalue identifier '%'.", expr.text);
-    return local.ptr_id, local.type, true, diag;
-  }
-  if expr.kind == .SUBSCRIPT {
-    if expr.left && expr.left.kind == .IDENT {
-      local_array := find_local_array(s, expr.left.text);
-      if local_array {
-        idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
-        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-        idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
-        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-        elem_ptr := new_id(s);
-        elem_ptr_type_id := func_ptr_type_id_from_kind(s, local_array.element_type);
-        add_op(s, elem_ptr, "OpAccessChain", elem_ptr_type_id, local_array.var_id, idx);
-        return elem_ptr, local_array.element_type, true, diag;
-      }
-    }
-
-    if expr.left && expr.left.kind == .MEMBER {
-      uniform_name, uniform_field, uniform_ok := resolve_member_root_and_field(expr.left);
-      if uniform_ok {
-        idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
-        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-        ptr, elem_type, ptr_ok, ptr_diag := emit_uniform_array_element_ptr(s, uniform_name, uniform_field, idx, idx_type);
-        if ptr_ok return ptr, elem_type, true, diag;
-      }
-    }
-
-    buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left);
-    if !base_ok {
-      return_err("unsupported lvalue subscript base.");
-    }
-    buffer := find_buffer(s, buffer_name);
-    if !buffer return_err("unknown lvalue subscript base '%'.", buffer_name);
-    idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
-    if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-    idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
-    if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-    idx = apply_buffer_base_index(s, buffer, idx);
-    if buffer.element_kind != .STRUCT {
-      ptr := new_id(s);
-      add_op(s, ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
-      return ptr, buffer.element_kind, true, diag;
-    }
-    return_err("struct buffer '%' requires member access on lvalue.", buffer.name);
-  }
-  if expr.kind == .MEMBER {
-    if expr.left && expr.left.kind == .SUBSCRIPT {
-      ptr_id, ptr_type, ptr_ok, ptr_diag := emit_buffer_struct_field_ptr(s, expr.left, expr.text);
-      if ptr_ok return ptr_id, ptr_type, true, diag;
-
-      // Fallback: component lvalue on raw vector buffer element, e.g. table[idx].x
-      buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left.left);
-      buffer := ifx buffer_name.count > 0 then find_buffer(s, buffer_name) else null;
-      if buffer && (buffer.element_kind == .FLOAT2 || buffer.element_kind == .FLOAT3 || buffer.element_kind == .FLOAT4) {
-        comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
-        if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
-        if buffer.element_kind == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
-        if buffer.element_kind == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
-
-        idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.left.right);
-        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-        idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
-        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-        idx = apply_buffer_base_index(s, buffer, idx);
-
-        elem_ptr := new_id(s);
-        add_op(s, elem_ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
-        comp_index_id := get_u32_const(s, comp_index);
-        ptr := new_id(s);
-        add_op(s, ptr, "OpAccessChain", s.id_ptr_storage_float, elem_ptr, comp_index_id);
-        return ptr, .FLOAT, true, diag;
-      }
-
-      return ptr_id, ptr_type, false, ptr_diag;
-    }
-    if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .SUBSCRIPT {
-      field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
-      if !field_ok return 0, .UNKNOWN, false, field_diag;
-      if field_type != .FLOAT2 && field_type != .FLOAT3 && field_type != .FLOAT4 return_err("lvalue component access requires float2/float3/float4 field, got %.", field_type);
-      comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
-      if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
-      if field_type == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
-      if field_type == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
-      comp_index_id := get_u32_const(s, comp_index);
-      ptr := new_id(s);
-      add_op(s, ptr, "OpAccessChain", s.id_ptr_storage_float, field_ptr, comp_index_id);
-      return ptr, .FLOAT, true, diag;
-    }
-    if expr.left && expr.left.kind == .IDENT {
-      local_vec := find_local(s, expr.left.text);
-      if local_vec && (local_vec.type == .FLOAT2 || local_vec.type == .FLOAT3 || local_vec.type == .FLOAT4) {
-        comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
-        if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
-        if local_vec.type == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
-        if local_vec.type == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
-        comp_index_id := get_u32_const(s, comp_index);
-        ptr := new_id(s);
-        add_op(s, ptr, "OpAccessChain", s.id_ptr_func_float, local_vec.ptr_id, comp_index_id);
-        return ptr, .FLOAT, true, diag;
-      }
-      local_struct := find_local_struct(s, expr.left.text);
-      if local_struct {
-        field := find_local_struct_field(local_struct, expr.text);
-        if !field return_err("unknown struct field '%.%'.", expr.left.text, expr.text);
-        if field.type == .STRUCT return_err("struct field '%.%' must be accessed through a member.", expr.left.text, expr.text);
-        return field.ptr_id, field.type, true, diag;
-      }
-    }
-    if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .IDENT {
-      local_struct := find_local_struct(s, expr.left.left.text);
-      if local_struct {
-        field := find_local_struct_field(local_struct, expr.left.text);
-        if !field return_err("unknown struct field '%.%'.", expr.left.left.text, expr.left.text);
-        if field.type == .STRUCT {
-          nested_struct := find_local_struct(s, field.nested_struct_name);
-          if !nested_struct return_err("nd: nested struct '%.%' is missing.", expr.left.left.text, expr.left.text);
-          nested_field := find_local_struct_field(nested_struct, expr.text);
-          if !nested_field return_err("unknown nested struct field '%.%.%'.", expr.left.left.text, expr.left.text, expr.text);
-          if nested_field.type == .STRUCT return_err("nested struct field '%.%.%' must be accessed through a member.", expr.left.left.text, expr.left.text, expr.text);
-          return nested_field.ptr_id, nested_field.type, true, diag;
-        }
-        if field.type != .FLOAT2 && field.type != .FLOAT3 && field.type != .FLOAT4 return_err("component lvalue requires float2/float3/float4 field, got %.", field.type);
-        comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
-        if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
-        if field.type == .FLOAT2 && comp_index > 1 return_err("vector component '%' out of range for float2 lvalue.", expr.text);
-        if field.type == .FLOAT3 && comp_index > 2 return_err("vector component '%' out of range for float3 lvalue.", expr.text);
-        comp_index_id := get_u32_const(s, comp_index);
-        ptr := new_id(s);
-        add_op(s, ptr, "OpAccessChain", s.id_ptr_func_float, field.ptr_id, comp_index_id);
-        return ptr, .FLOAT, true, diag;
-      }
-    }
-    return_err("unsupported lvalue member expression '%'.", expr_text(expr));
-  }
-  return_err("unsupported lvalue expression kind %.", expr.kind);
-}
-
-lvalue_hits_storage_buffer :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> bool {
-  assert(s != null);
-  if !expr return false;
-  if expr.kind == .SUBSCRIPT {
-    if expr.left && expr.left.kind == .IDENT {
-      if find_local_array(s, expr.left.text) return false;
-      return find_buffer(s, expr.left.text) != null;
-    }
-    if expr.left && expr.left.kind == .MEMBER {
-      uniform_name, _, uniform_ok := resolve_member_root_and_field(expr.left);
-      if uniform_ok && find_uniform_block(s, uniform_name) != null return false;
-    }
-    if expr.left && expr.left.kind == .MEMBER {
-      member_root, member_field, member_ok := resolve_member_root_and_field(expr.left);
-      if member_ok return find_buffer(s, tprint("%.%", member_root, member_field)) != null;
-      member_path, path_ok := resolve_member_path(expr.left);
-      if path_ok return find_buffer(s, member_path) != null;
-      return false;
-    }
-    return false;
-  }
-  if expr.kind == .MEMBER return lvalue_hits_storage_buffer(s, expr.left);
-  return false;
 }
 
 // -----------------------------------------------------------------------------
@@ -4312,7 +4195,19 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
     case .SWITCH; {
       cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.switch_condition);
       if !cond_ok return false, false, cond_diag;
-      if cond_type != .UINT return_err("switch condition must be uint.");
+      switch_type := cond_type;
+      if cond_type == .INT64 {
+        cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .INT);
+        if !cond_ok return false, false, cond_diag;
+        switch_type = .INT;
+      } else if cond_type == .UINT64 {
+        cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .UINT);
+        if !cond_ok return false, false, cond_diag;
+        switch_type = .UINT;
+      }
+      if switch_type != .UINT && switch_type != .INT {
+        return_err("switch condition must be integer.");
+      }
 
       merge_label := new_id(s);
       case_labels: [..] s64;
@@ -4328,9 +4223,20 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       a(*switch_line_sb, "               OpSwitch % %", id_text(cond_id), id_text(default_label));
       for stmt.switch_cases {
         if !it.condition continue;
-        value, value_ok := parse_u32_literal_expr(it.condition);
-        if !value_ok return_err("switch case values must be uint literals.");
-        a(*switch_line_sb, " % %", value, id_text(case_labels[it_index]));
+        case_word: u32;
+        case_ok := false;
+        if switch_type == .UINT {
+          case_word, case_ok = parse_u32_literal_expr(it.condition);
+          if !case_ok return_err("switch case values must be uint literals.");
+        } else {
+          case_i64, case_i64_ok := parse_i64_literal_expr(it.condition);
+          if case_i64_ok && case_i64 >= -2147483648 && case_i64 <= 2147483647 {
+            case_word = cast(u32) cast(s32) case_i64;
+            case_ok = true;
+          }
+          if !case_ok return_err("switch case values must be int literals.");
+        }
+        a(*switch_line_sb, " % %", case_word, id_text(case_labels[it_index]));
       }
       add_op(s, builder_to_string(*switch_line_sb));
 
@@ -4508,19 +4414,17 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if stmt.call_expr.kind != .CALL return_err("call statement has non-call expression.");
       if !stmt.call_expr.left return_err("unsupported call target expression.");
 
-      callee := "";
-      if stmt.call_expr.left.kind == .IDENT callee = stmt.call_expr.left.text;
-      else if stmt.call_expr.left.kind == .MEMBER callee = stmt.call_expr.left.text;
-      if callee.count == 0 return_err("unsupported call target expression.");
-      callee = canonical_callee_name(callee);
+      builtin_kind := call_builtin_kind_for_expr(stmt.call_expr);
+      helper_name, helper_name_ok := call_helper_name_for_expr(stmt.call_expr);
+      if !helper_name_ok && builtin_kind == .NONE return_err("unsupported call target expression.");
 
-      if callee == "write_2d" {
+      if builtin_kind == .WRITE_2D {
         write_ok, write_diag := emit_write_2d_call(s, stmt.call_expr.args);
         if !write_ok return false, false, write_diag;
         return true, false, diag;
       }
 
-      helper := find_function(s, callee);
+      helper := find_function(s, helper_name);
       if helper && helper_returns_void(helper) {
         call_ok, call_diag := eval_inline_function_void(s, helper, stmt.call_expr.args);
         if !call_ok return false, false, call_diag;
@@ -4820,4 +4724,5 @@ ps_get_ptr_to_ptr_type :: (s: *IR_SPV_Gen_State, ptr_to_ptr_types: *[..] IR_SPV_
 #load "spirv_text_backend_emitters.jai";
 #load "spv_resource_classification.jai";
 #load "spv_invariants.jai";
+#load "spv_lvalue_lowering.jai";
 #load "../string_builder_util.jai";

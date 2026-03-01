@@ -20,6 +20,19 @@ ir_validate_expr_invariants :: (expr: *IR_Expr) -> (ok: bool, diag: IR_Diagnosti
   if !expr return true, {};
   builtin_ok, builtin_diag := ir_validate_builtin_ref(expr);
   if !builtin_ok return false, builtin_diag;
+  if expr.kind == .CALL {
+    if expr.call_target_kind == .BUILTIN && expr.call_builtin_kind == .NONE {
+      return false, make_diag("IR invariant: call expression '%' is marked builtin but has no builtin kind.", expr_text(expr));
+    }
+    if expr.call_target_kind == .HELPER && expr.call_builtin_kind != .NONE {
+      return false, make_diag("IR invariant: call expression '%' is marked helper but also has builtin kind %.", expr_text(expr), expr.call_builtin_kind);
+    }
+    if expr.call_target_kind != .UNKNOWN {
+      if !expr.left || (expr.left.kind != .IDENT && expr.left.kind != .MEMBER) {
+        return false, make_diag("IR invariant: typed call metadata on '%' requires ident/member callee expression.", expr_text(expr));
+      }
+    }
+  }
   left_ok, left_diag := ir_validate_expr_invariants(expr.left);
   if !left_ok return false, left_diag;
   right_ok, right_diag := ir_validate_expr_invariants(expr.right);

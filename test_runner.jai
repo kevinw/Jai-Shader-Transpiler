@@ -30,7 +30,10 @@ run_all_tests :: () {
     {
       time_scope(TIMINGS_ENABLED, "Cleanup generated outputs");
       run_command_checked("Clean legacy GLSL SPIR-V outputs", .["rm", "-f", "frag.spv", "vert.spv", "comp.spv"]);
-      run_command_checked("Clean IR intermediate output dirs", .["rm", "-rf", ".build/ir_intermediate", "headless_ir/.build/ir_intermediate"]);
+      run_command_checked("Clean IR intermediate output dirs", .[
+        "bash", "-lc",
+        "rm -rf .build/ir_intermediate headless_ir/.build/ir_intermediate 2>/dev/null || true",
+      ]);
     }
 
     {

@@ -354,10 +354,9 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
 emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: IR_Struct, output: IR_Struct, args: [] IR_Function_Arg, body: *IR_Block, functions: [] IR_Function, extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return "", false, make_diag(msg, ..args); }
   diag: IR_Diagnostic;
-  if !body return_err("SPIR-V backend: graphics shader '%' has no body.", source_name);
-
-  root_arg, use_pointer_abi := find_pointer_root_arg(args, extra_structs);
-  if use_pointer_abi && root_arg {
+  analysis, analysis_ok, analysis_diag := spv_analyze_graphics_shader(stage, input, output, args, body, functions, extra_structs);
+  if !analysis_ok return "", false, analysis_diag;
+  if analysis.uses_pointer_abi {
     spvasm, ok, pointer_diag := emit_graphics_physical_pointer_abi(stage, source_name, input, output, args, body, functions, extra_structs);
     return spvasm, ok, pointer_diag;
   }
@@ -371,69 +370,9 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   array_add(*state.extra_structs, input);
   array_add(*state.extra_structs, output);
   state.output_struct_type_name = output.name;
-
-  graphics_buffers: [..] IR_Compute_Buffer;
-  for args {
-    arg := it;
-    if arg.type.kind == .POINTER && arg.type.pointee_kind == .STRUCT && arg.type.pointee_struct_name.count != 0 {
-      pointee_struct := find_struct(*state, arg.type.pointee_struct_name);
-      if pointee_struct {
-        saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, pointee_struct, arg.name, *graphics_buffers, arg.is_readonly);
-        if saw_resource_field {
-          if saw_non_resource_field {
-            return_err("SPIR-V backend: resource-container arg '%' currently requires all fields to be StructuredBuffer/RWStructuredBuffer.", arg.name);
-          }
-          continue;
-        }
-      }
-
-      elem_type_name := ir_string_first_non_empty(arg.type.pointee_display_name, arg.type.pointee_struct_name);
-      array_add(*graphics_buffers, .{
-        name = arg.name,
-        element_type = .{
-          kind = .STRUCT,
-          display_name = elem_type_name,
-          struct_name = arg.type.pointee_struct_name,
-        },
-        is_readonly = arg.is_readonly,
-      });
-      continue;
-    }
-    if arg.type.kind == .POINTER && arg.type.pointee_kind != .STRUCT && arg.type.pointee_display_name.count != 0 {
-      elem_type := IR_Type.{
-        kind = arg.type.pointee_kind,
-        display_name = arg.type.pointee_display_name,
-        struct_name = arg.type.pointee_struct_name,
-      };
-      if arg.type.pointee_kind == .FIXED_ARRAY {
-        elem_type.array_count = arg.type.pointee_array_count;
-        elem_type.element_kind = arg.type.pointee_element_kind;
-        elem_type.element_display_name = arg.type.pointee_element_display_name;
-        elem_type.element_struct_name = arg.type.pointee_element_struct_name;
-      }
-      array_add(*graphics_buffers, .{
-        name = arg.name,
-        element_type = elem_type,
-        is_readonly = arg.is_readonly,
-      });
-      continue;
-    }
-    is_param_block := false;
-    container_type_name := arg.type.struct_name;
-    if arg.type.flags & .PARAMETER_BLOCK is_param_block = true;
-    if arg.type.kind == .POINTER && arg.type.pointee_kind == .STRUCT && arg.type.pointee_struct_name.count != 0 {
-      container_type_name = arg.type.pointee_struct_name;
-    }
-    if container_type_name.count == 0 continue;
-    struct_def := find_struct(*state, container_type_name);
-    if !struct_def continue;
-    saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, struct_def, arg.name, *graphics_buffers, arg.is_readonly);
-    if !is_param_block && saw_resource_field && saw_non_resource_field {
-      return_err("SPIR-V backend: resource-container arg '%' currently requires all fields to be StructuredBuffer/RWStructuredBuffer.", arg.name);
-    }
-  }
-
-  init_ok, init_diag := init_base(*state, graphics_buffers, 1);
+  state.uses_write_2d = analysis.uses_write_2d;
+  state.uses_sample_2d = analysis.uses_sample_2d;
+  init_ok, init_diag := init_base(*state, analysis.expanded_buffers, 1);
   if !init_ok return "", false, init_diag;
 
   for input.fields {
@@ -711,12 +650,19 @@ IR_SPV_Compute_Analysis :: struct {
   expanded_buffers: [..] IR_Compute_Buffer;
 }
 
+IR_SPV_Graphics_Analysis :: struct {
+  uses_pointer_abi: bool;
+  uses_write_2d: bool;
+  uses_sample_2d: bool;
+  expanded_buffers: [..] IR_Compute_Buffer;
+}
+
 spv_analyze_builtin_usage_expr :: (expr: *IR_Expr, uses_write_2d: *bool, uses_sample_2d: *bool) {
   if !expr return;
-  if expr.kind == .CALL && expr.left && expr.left.kind == .IDENT {
-    callee := expr.left.text;
-    if callee_matches_builtin(callee, "write_2d") uses_write_2d.* = true;
-    if callee_matches_builtin(callee, "sample_2d") uses_sample_2d.* = true;
+  if expr.kind == .CALL {
+    call_builtin := call_builtin_kind_for_expr(expr);
+    if call_builtin == .WRITE_2D uses_write_2d.* = true;
+    if call_builtin == .SAMPLE_2D uses_sample_2d.* = true;
   }
   spv_analyze_builtin_usage_expr(expr.left, uses_write_2d, uses_sample_2d);
   spv_analyze_builtin_usage_expr(expr.right, uses_write_2d, uses_sample_2d);
@@ -766,6 +712,94 @@ spv_analyze_builtin_usage_block :: (block: *IR_Block, uses_write_2d: *bool, uses
       case .CONTINUE;
     }
   }
+}
+
+spv_analyze_graphics_shader :: (stage: IR_SPV_Gen_Stage,
+                                input: IR_Struct,
+                                output: IR_Struct,
+                                args: [] IR_Function_Arg,
+                                body: *IR_Block,
+                                functions: [] IR_Function,
+                                extra_structs: [] IR_Struct) -> (analysis: IR_SPV_Graphics_Analysis, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return .{}, false, make_diag(msg, ..args); }
+  if !body return_err("SPIR-V backend: graphics shader has no body.");
+
+  out: IR_SPV_Graphics_Analysis;
+  root_arg, use_pointer_abi := find_pointer_root_arg(args, extra_structs);
+  out.uses_pointer_abi = use_pointer_abi && root_arg;
+
+  spv_analyze_builtin_usage_block(body, *out.uses_write_2d, *out.uses_sample_2d);
+  for functions spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_sample_2d);
+
+  if out.uses_pointer_abi return out, true, .{};
+
+  state: IR_SPV_Gen_State;
+  state.stage = stage;
+  for extra_structs array_add(*state.extra_structs, it);
+  array_add(*state.extra_structs, input);
+  array_add(*state.extra_structs, output);
+
+  for args {
+    arg := it;
+    if arg.type.kind == .POINTER && arg.type.pointee_kind == .STRUCT && arg.type.pointee_struct_name.count != 0 {
+      pointee_struct := find_struct(*state, arg.type.pointee_struct_name);
+      if pointee_struct {
+        saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, pointee_struct, arg.name, *out.expanded_buffers, arg.is_readonly);
+        if saw_resource_field {
+          if saw_non_resource_field {
+            return_err("SPIR-V backend: resource-container arg '%' currently requires all fields to be StructuredBuffer/RWStructuredBuffer.", arg.name);
+          }
+          continue;
+        }
+      }
+
+      elem_type_name := ir_string_first_non_empty(arg.type.pointee_display_name, arg.type.pointee_struct_name);
+      array_add(*out.expanded_buffers, .{
+        name = arg.name,
+        element_type = .{
+          kind = .STRUCT,
+          display_name = elem_type_name,
+          struct_name = arg.type.pointee_struct_name,
+        },
+        is_readonly = arg.is_readonly,
+      });
+      continue;
+    }
+    if arg.type.kind == .POINTER && arg.type.pointee_kind != .STRUCT && arg.type.pointee_display_name.count != 0 {
+      elem_type := IR_Type.{
+        kind = arg.type.pointee_kind,
+        display_name = arg.type.pointee_display_name,
+        struct_name = arg.type.pointee_struct_name,
+      };
+      if arg.type.pointee_kind == .FIXED_ARRAY {
+        elem_type.array_count = arg.type.pointee_array_count;
+        elem_type.element_kind = arg.type.pointee_element_kind;
+        elem_type.element_display_name = arg.type.pointee_element_display_name;
+        elem_type.element_struct_name = arg.type.pointee_element_struct_name;
+      }
+      array_add(*out.expanded_buffers, .{
+        name = arg.name,
+        element_type = elem_type,
+        is_readonly = arg.is_readonly,
+      });
+      continue;
+    }
+    is_param_block := false;
+    container_type_name := arg.type.struct_name;
+    if arg.type.flags & .PARAMETER_BLOCK is_param_block = true;
+    if arg.type.kind == .POINTER && arg.type.pointee_kind == .STRUCT && arg.type.pointee_struct_name.count != 0 {
+      container_type_name = arg.type.pointee_struct_name;
+    }
+    if container_type_name.count == 0 continue;
+    struct_def := find_struct(*state, container_type_name);
+    if !struct_def continue;
+    saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, struct_def, arg.name, *out.expanded_buffers, arg.is_readonly);
+    if !is_param_block && saw_resource_field && saw_non_resource_field {
+      return_err("SPIR-V backend: resource-container arg '%' currently requires all fields to be StructuredBuffer/RWStructuredBuffer.", arg.name);
+    }
+  }
+
+  return out, true, .{};
 }
 
 spv_analyze_compute_shader :: (shader: IR_Compute_Shader) -> (analysis: IR_SPV_Compute_Analysis, ok: bool, diag: IR_Diagnostic) {

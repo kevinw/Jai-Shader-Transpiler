@@ -1026,6 +1026,8 @@ ir_lower_expr :: (node: *Code_Node,
           out := ir_expr_new(.CALL);
           out.left = ir_expr_new(.IDENT);
           out.left.text = "mul";
+          out.call_target_kind = .BUILTIN;
+          out.call_builtin_kind = .MUL;
           if left_is_matrix && !right_is_matrix {
             // Jai's matrix*vector convention matches Slang/HLSL mul(vector, matrix).
             array_add(*out.args, right, left);
@@ -1177,6 +1179,7 @@ ir_lower_expr :: (node: *Code_Node,
         if !ok return null, false;
         array_add(*out.args, arg);
       }
+      out.call_target_kind, out.call_builtin_kind = ir_classify_call_target(callee);
       return out, true;
     }
 
@@ -1357,8 +1360,8 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
     case .CALL; {
       callee, callee_ok := ir_expr_to_slang_postfix_base(expr.left);
       if !callee_ok return "", false;
-      if expr.left && expr.left.kind == .IDENT && expr.left.text == "mix" callee = "lerp";
-      if expr.left && expr.left.kind == .IDENT && expr.left.text == "mod" callee = "fmod";
+      if expr.call_builtin_kind == .MIX callee = "lerp";
+      if expr.call_builtin_kind == .MOD callee = "fmod";
       b: String_Builder;
       append(*b, callee, "(");
       for expr.args {
@@ -1461,6 +1464,69 @@ ir_member_access_kind_from_name :: (field_name: string) -> IR_Member_Access_Kind
   if field_name == "w" return .COMPONENT_W;
   if field_name == "xy" return .SWIZZLE_XY;
   return .NONE;
+}
+
+ir_canonical_callee_name :: (name: string) -> string {
+  if name.count == 0 return name;
+  i := name.count - 1;
+  while i >= 0 {
+    if name[i] == #char "." {
+      out: string;
+      out.data = name.data + i + 1;
+      out.count = name.count - i - 1;
+      return out;
+    }
+    if i == 0 break;
+    i -= 1;
+  }
+  return name;
+}
+
+ir_callee_matches_builtin :: (callee: string, builtin: string) -> bool {
+  if callee == builtin return true;
+  if callee.count <= builtin.count return false;
+  if !begins_with(callee, builtin) return false;
+  return callee[builtin.count] == #char "_";
+}
+
+ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
+  name := ir_canonical_callee_name(callee);
+  if ir_callee_matches_builtin(name, "sample_2d") return .SAMPLE_2D;
+  if ir_callee_matches_builtin(name, "write_2d") return .WRITE_2D;
+  if ir_callee_matches_builtin(name, "saturate") return .SATURATE;
+  if ir_callee_matches_builtin(name, "mix") return .MIX;
+  if ir_callee_matches_builtin(name, "lerp") return .LERP;
+  if ir_callee_matches_builtin(name, "reflect") return .REFLECT;
+  if name == "clamp" return .CLAMP;
+  if name == "step" return .STEP;
+  if name == "pow" return .POW;
+  if name == "smoothstep" return .SMOOTHSTEP;
+  if name == "mod" return .MOD;
+  if name == "fmod_cycling" return .FMOD_CYCLING;
+  if name == "mul" return .MUL;
+  if name == "floor" return .FLOOR;
+  if name == "min" return .MIN;
+  if name == "max" return .MAX;
+  if name == "abs" return .ABS;
+  if name == "sqrt" return .SQRT;
+  if name == "sin" return .SIN;
+  if name == "cos" return .COS;
+  if name == "fract" return .FRACT;
+  if name == "length" return .LENGTH;
+  if name == "normalize" return .NORMALIZE;
+  if name == "radians" return .RADIANS;
+  if name == "degrees" return .DEGREES;
+  return .NONE;
+}
+
+ir_classify_call_target :: (callee_expr: *IR_Expr) -> (IR_Call_Target_Kind, IR_Call_Builtin_Kind) {
+  if !callee_expr return .UNKNOWN, .NONE;
+  if callee_expr.kind == .IDENT || callee_expr.kind == .MEMBER {
+    builtin := ir_builtin_call_kind_from_callee(callee_expr.text);
+    if builtin != .NONE return .BUILTIN, builtin;
+    return .HELPER, .NONE;
+  }
+  return .UNKNOWN, .NONE;
 }
 
 ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct, bool) {

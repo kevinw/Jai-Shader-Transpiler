@@ -87,6 +87,25 @@ graphics_test_nested_return_fragment :: (using input: Graphics_Bindless_Vertex_O
   return out;
 } @fragment_shader
 
+Graphics_Nested_Resource_Leaf :: struct {
+  values: *u32;
+}
+
+Graphics_Nested_Resource_Root :: struct {
+  leaf: Graphics_Nested_Resource_Leaf;
+}
+
+graphics_test_nested_resource_fragment :: (using input: Graphics_Bindless_Vertex_Out, resources: Graphics_Nested_Resource_Root) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  v := resources.leaf.values[0] & 1;
+  if v == 0 {
+    out_color = Vector4.{1.0, 0.0, 0.0, 1.0};
+  } else {
+    out_color = Vector4.{0.0, 1.0, 0.0, 1.0};
+  }
+  return out;
+} @fragment_shader
+
 Graphics_Instance_Vertex_In :: struct {
   a_pos: Vector2; @semantic_ATTRIBUTE0
   vertex_id: u32; @semantic_SV_VertexID
@@ -863,6 +882,47 @@ run_nested_return_pair_case_metal :: () {
   log("[OK] graphics_nested_return_pair");
 }
 
+run_nested_resource_container_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_bindless_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_nested_resource_fragment);
+  check_contains(vertex_source, "vertex", "nested-resource vertex metal");
+  check_contains(fragment_source, "fragment", "nested-resource fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile nested-resource vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile nested-resource vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile nested-resource fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile nested-resource fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find nested-resource vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find nested-resource fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  log("[OK] graphics_nested_resource_container");
+}
+
 main :: () {
   #if OS != .MACOS {
     log("Skipping graphics semantics runner on % (Metal-only test).", OS);
@@ -874,5 +934,6 @@ main :: () {
   run_instance_id_case_metal();
   run_bindless_sample_case_metal();
   run_nested_return_pair_case_metal();
-  log("Passed 5 graphics semantics cases.");
+  run_nested_resource_container_case_metal();
+  log("Passed 6 graphics semantics cases.");
 }

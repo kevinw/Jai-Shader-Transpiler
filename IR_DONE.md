@@ -24,6 +24,26 @@ Status: Completed (March 1, 2026). Remaining ordered item is tracked in `IR_TODO
 - 9) Backend file split by domain continued:
   - Extracted invariant domain into `ir_pipeline/spv_invariants.jai` and kept coordinator flow thinner.
 
+## Next Simplification / Robustness Pass (1-8)
+Status: Completed (March 1, 2026).
+- 1) Removed remaining call-dispatch semantic dependence on raw callee text in backend hot paths:
+  - Added typed builtin call-kind analysis consumption in backend builtin usage scanning.
+- 2) Split lvalue lowering domain:
+  - Moved lvalue pointer/storage lowering helpers to `ir_pipeline/spv_lvalue_lowering.jai`.
+- 3) Added typed call metadata in IR:
+  - Added `IR_Call_Target_Kind` + `IR_Call_Builtin_Kind` metadata and threaded lowering/backend dispatch through typed call identity.
+- 4) Added explicit graphics backend analysis pass:
+  - Added `spv_analyze_graphics_shader` and moved graphics resource/builtin planning out of emit-time discovery.
+- 5) Expanded invariant validation for typed member/call consistency:
+  - Added call-target/builtin coherence checks in invariant validation.
+- 6) Centralized vector component/swizzle bounds policy:
+  - Introduced shared vector component range validation helper used across expression and lvalue paths.
+- 7) Hardened headless cleanup under transient filesystem races:
+  - Updated `test_runner.jai` cleanup command path to avoid flaky remove failures.
+- 8) Added focused headless robustness coverage:
+  - Enabled `edge_gap_70_helper_struct_named_constructor_arg` and `edge_gap_72_helper_pointer_alias_arg` in compute semantics.
+  - Added graphics semantics nested resource-container case (`graphics_nested_resource_container`).
+
 ## 1) Helper procs with `void` return are not supported in compute lowering
 Status: Fixed (February 28, 2026) for statement-level void helper calls with side effects.
 - Symptom:

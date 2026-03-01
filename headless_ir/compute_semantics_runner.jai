@@ -151,6 +151,9 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"helper_nested_call", .Bare},
   {"struct_constructor_from_member_expr", .Boids},
   {"nested_local_struct_field_access", .Bare},
+  {"edge_gap_70_helper_struct_named_constructor_arg", .Bare},
+  {"edge_gap_71_switch_signed_condition", .Bare},
+  {"edge_gap_72_helper_pointer_alias_arg", .Table},
   
   {"nested", .Table},
   {"bitwise", .Table},
