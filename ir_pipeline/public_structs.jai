@@ -157,6 +157,7 @@ IR_Unary_Op :: enum {
 
 IR_Expr :: struct {
   kind: IR_Expr_Kind;
+  result_type: IR_Type;
   unary_op: IR_Unary_Op;
   binary_operator_type: Operator_Type;
   text: string;

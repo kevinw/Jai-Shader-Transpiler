@@ -123,11 +123,16 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
     if !ptr.pointer_to return out, false;
     pointee, pointee_ok := ir_type_from_type_info(ptr.pointer_to);
     if !pointee_ok return out, false;
+    pointee_kind := pointee.kind;
+    if pointee_kind == .STRUCT {
+      builtin_pointee_kind := ir_type_kind_from_slang_name(pointee.display_name);
+      if builtin_pointee_kind != .UNKNOWN pointee_kind = builtin_pointee_kind;
+    }
     out.kind = .POINTER;
-    out.pointee_kind = pointee.kind;
+    out.pointee_kind = pointee_kind;
     out.pointee_display_name = pointee.display_name;
     out.pointee_struct_name = pointee.struct_name;
-    out.pointee_is_struct = pointee.kind == .STRUCT;
+    out.pointee_is_struct = pointee_kind == .STRUCT;
     return out, true;
   }
 
@@ -135,8 +140,13 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
     array_t := cast(*Type_Info_Array) type;
     elem_ir, elem_ok := ir_type_from_type_info(array_t.element_type);
     if !elem_ok return out, false;
+    elem_kind := elem_ir.kind;
+    if elem_kind == .STRUCT {
+      builtin_elem_kind := ir_type_kind_from_slang_name(elem_ir.display_name);
+      if builtin_elem_kind != .UNKNOWN elem_kind = builtin_elem_kind;
+    }
     out.kind = .FIXED_ARRAY;
-    out.element_kind = elem_ir.kind;
+    out.element_kind = elem_kind;
     out.element_display_name = elem_ir.display_name;
     out.element_struct_name = elem_ir.struct_name;
     out.array_count = array_t.array_count;
@@ -688,9 +698,13 @@ compute_builtin_note_for_member :: (member: *Type_Info_Struct_Member) -> (string
   return "", false;
 }
 
-ir_expr_new :: (kind: IR_Expr_Kind) -> *IR_Expr {
+ir_expr_new :: (kind: IR_Expr_Kind, node: *Code_Node = null) -> *IR_Expr {
   e := New(IR_Expr);
   e.kind = kind;
+  if node && node.type {
+    lowered_type, lowered_ok := ir_type_from_type_info(node.type);
+    if lowered_ok e.result_type = lowered_type;
+  }
   return e;
 }
 
@@ -866,8 +880,32 @@ ir_lower_expr :: (node: *Code_Node,
           return null, false;
         }
 
-        out := ir_expr_new(.CONSTRUCTOR);
+        out := ir_expr_new(.CONSTRUCTOR, node);
+        if out.result_type.kind == .UNKNOWN {
+          ctor_type := lit.type;
+          if !ctor_type ctor_type = expected_type;
+          if ctor_type {
+            lowered_ctor_type, lowered_ctor_ok := ir_type_from_type_info(ctor_type);
+            if lowered_ctor_ok out.result_type = lowered_ctor_type;
+          }
+        }
         out.text = constructor_name;
+        if out.result_type.kind == .UNKNOWN {
+          if constructor_name == "float" {
+            out.result_type.kind = .F32;
+          } else if constructor_name == "float2" {
+            out.result_type.kind = .F32x2;
+          } else if constructor_name == "float3" {
+            out.result_type.kind = .F32x3;
+          } else if constructor_name == "float4" {
+            out.result_type.kind = .F32x4;
+          } else if constructor_name == "float2x2" {
+            out.result_type.kind = .F32x2x2;
+          }
+          if out.result_type.kind != .UNKNOWN {
+            out.result_type.display_name = constructor_name;
+          }
+        }
         positional_index: s64 = 0;
         for lit.struct_literal_info.arguments {
           source_arg := it;
@@ -1065,7 +1103,7 @@ ir_lower_expr :: (node: *Code_Node,
       else_expr, else_ok := ir_lower_expr(else_node, input_fields, output_fields, active_usings, active_aliases, state, else_expected_type);
       if !else_ok return null, false;
 
-      out := ir_expr_new(.SELECT);
+      out := ir_expr_new(.SELECT, node);
       out.left = cond;
       out.right = then_expr;
       array_add(*out.args, else_expr);
@@ -1094,7 +1132,7 @@ ir_lower_expr :: (node: *Code_Node,
           ir_set_diagnostic(state, "IR lowering: cast is missing target type and fallback type is unsupported", node);
           return null, false;
         }
-        out := ir_expr_new(.CAST);
+        out := ir_expr_new(.CAST, node);
         out.text = fallback_type_name;
         out.left = inner;
         return out, true;
@@ -1118,7 +1156,7 @@ ir_lower_expr :: (node: *Code_Node,
 
       inner, ok := ir_lower_expr(cast_node.expression, input_fields, output_fields, active_usings, active_aliases, state);
       if !ok return null, false;
-      out := ir_expr_new(.CAST);
+      out := ir_expr_new(.CAST, node);
       out.text = type_name;
       out.left = inner;
       return out, true;

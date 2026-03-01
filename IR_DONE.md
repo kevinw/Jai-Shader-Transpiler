@@ -113,3 +113,13 @@ Status: Fixed (February 28, 2026) for compute helper return-chain lowering.
 - Verification:
   - `bash headless_ir/test_ir_compute_semantics.sh` passes with the new regression case.
   - `jai modules/Jai-Shader-Transpiler/build.jai - -run_tests` passes.
+
+## 18) Typed-first SPIR-V backend simplification (string-heuristic reduction)
+Status: In large part fixed (March 1, 2026) across backend hot paths; remaining small cleanup is tracked in `IR_TODO.md` #18.
+- Implemented:
+  - Added typed expression result provenance (`IR_Expr.result_type`) and moved key SPIR-V type decisions to typed metadata.
+  - Removed broad backend reliance on legacy pointer/type-name mirrors for resource classification and physical-pointer graphics traversal.
+  - Migrated helper struct-arg/return matching and struct constructor/init checks to typed struct metadata first.
+  - Removed now-unused string-parser helpers that previously inferred semantics from wrapper text.
+- Outcome:
+  - Backend semantics now primarily come from lowered type metadata instead of reconstructed strings, with narrow compatibility fallbacks only where lowering completeness is still being finished.

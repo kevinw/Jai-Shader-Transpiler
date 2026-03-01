@@ -5,6 +5,7 @@ Completed items were moved to `IR_DONE.md`.
 
 Direction note:
 - Incrementally prefer carrying richer Compiler AST/type information through lowering where practical, instead of encoding behavior through hardcoded strings and mirrored IR type/operator tables. Start by removing string-sentinel decisions (for example `"<operator_not_supported>"` checks) in favor of typed operator handling.
+- Prefer Compiler module enums/nodes (`Operator_Type`, `Code_Node` forms, `Type_Info`) over duplicated string encodings whenever the data stays in-compiler-pass.
 
 ## 4) Pointer-style `normalize(*v, fallback=...)` is not shader-IR compatible
 - Symptom:
@@ -68,3 +69,48 @@ Direction note:
   - Map "Float16" Jai module type Float16 to proper 16 bit float in the gpu
   - Add explicit `f16` type lowering and capability/extension emission in SPIR-V backend.
   - Validate cross-backend codegen and ABI layout for `half` storage buffers, including transpiler regression tests.
+
+## 15) Legacy `Jai_To_Shader` still uses `"<operator_not_supported>"` sentinel
+- Symptom:
+  - Legacy codepath still returns string sentinel on unsupported operators.
+- Where hit:
+  - `Jai_To_Shader.jai` `op_to_text` fallback/default path.
+- Current state:
+  - IR pipeline path no longer depends on the sentinel and uses typed operator handling with `(text, ok)`.
+- Desired fix:
+  - Remove sentinel-return behavior from legacy path as well; return explicit success/failure and surface diagnostics using `Operator_Type`.
+  - Keep one operator mapping policy shared between legacy and IR paths to avoid drift.
+
+## 16) SPIR-V type decisions still fall back to parsing type-name strings
+- Symptom:
+  - Backend frequently calls `expr_type_from_decl(name)` and `parse_fixed_array_type_name(name)` on textual type names.
+- Where hit:
+  - `ir_pipeline/spirv_text_backend.jai`, `ir_pipeline/spirv_text_backend_emitters.jai`.
+- Cost:
+  - Duplicated parser logic, fragility from name spelling/canonicalization, and avoidable type ambiguity.
+- Desired fix:
+  - Carry/use richer IR type metadata (`IR_Type` kind/element/pointee/count) in all backend decision points.
+  - Treat string type names as diagnostics/output only, not as semantic source of truth.
+
+## 17) Builtin-note detection relies on substring matching note text
+- Symptom:
+  - Compute builtin mapping scans note strings with `contains(...)` (e.g. `"thread_position_in_grid"`).
+- Where hit:
+  - `ir_pipeline/ir_lowering.jai` `compute_builtin_note_for_member`.
+- Cost:
+  - Text-based matching is brittle and does not leverage parsed note/operator identity from Compiler data.
+- Desired fix:
+  - Consume structured note/operator info from Compiler AST/note nodes instead of string search.
+  - Emit diagnostics that include exact source note location/operator when unsupported.
+
+## 18) IR still duplicates some frontend shape that can be referenced directly during lowering
+- Symptom:
+  - Several lowering paths reconstruct semantics from IR text fields (`expr.text`, type-name text) instead of carrying direct provenance.
+- Where hit:
+  - Constructor/type classification and some helper-call lowering paths in IR/SPIR-V backend.
+- Desired fix:
+  - Incrementally add provenance handles for in-pass use (for example original `Code_Node`/resolved declaration/type handles) where this removes string heuristics.
+  - Keep backend portability by retaining final normalized IR fields, but stop using text as the primary semantic key.
+- Status:
+  - Active. Major typed-first backend simplification work has landed; see `IR_DONE.md` for completed milestones.
+  - Remaining work: remove the last semantic dependencies on `expr.text` / `*_type_name` in backend decision paths.

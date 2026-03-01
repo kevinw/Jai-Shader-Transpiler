@@ -2,6 +2,20 @@ SAMPLE_2D_TEXTURES_BINDING :: 1;
 SAMPLE_2D_SAMPLERS_BINDING :: 0;
 WRITE_2D_TEXTURES_BINDING :: 1;
 
+ir_type_kind_from_shader_name :: (name: string) -> IR_Type_Kind {
+  if name == "bool" return .BOOL;
+  if name == "int" || name == "int32_t" || name == "s32" return .I32;
+  if name == "uint" || name == "u32" return .U32;
+  if name == "int64_t" || name == "s64" return .I64;
+  if name == "uint64_t" || name == "u64" return .U64;
+  if name == "float" return .F32;
+  if name == "float2" return .F32x2;
+  if name == "float3" return .F32x3;
+  if name == "float4" return .F32x4;
+  if name == "float2x2" return .F32x2x2;
+  return .UNKNOWN;
+}
+
 spv_append_sample_2d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   if !s.uses_sample_2d return;
   append(sb, tprint("% = OpTypeImage % 2D 0 0 0 1 Unknown\n", id_text(s.id_image2d), id_text(s.id_float)));
@@ -50,6 +64,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   root_arg, has_root := find_pointer_root_arg(args, extra_structs);
   if !has_root || !root_arg return_err("SPIR-V backend: physical-pointer graphics path requires one pointer root argument.");
   if args.count != 1 return_err("SPIR-V backend: physical-pointer graphics path currently supports exactly one shader argument.");
+  root_struct_name := root_arg.type.pointee_struct_name;
+  if root_struct_name.count == 0 return_err("SPIR-V backend: pointer root '%' is missing typed pointee struct metadata.", root_arg.name);
 
   state: IR_SPV_Gen_State;
   state.stage = stage;
@@ -61,8 +77,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   array_add(*state.extra_structs, output);
   state.output_struct_type_name = output.name;
 
-  root_struct := find_struct(*state, root_arg.pointer_pointee_type_name);
-  if !root_struct return_err("SPIR-V backend: missing root pointer struct '%'.", root_arg.pointer_pointee_type_name);
+  root_struct := find_struct(*state, root_struct_name);
+  if !root_struct return_err("SPIR-V backend: missing root pointer struct '%'.", root_struct_name);
 
   graphics_buffers: [..] IR_Compute_Buffer;
   saw_resource, saw_non_resource := collect_struct_resource_fields(*state, root_struct, root_arg.name, *graphics_buffers, root_arg.is_readonly);
@@ -73,8 +89,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   if !init_ok return "", false, init_diag;
 
   for input.fields {
-    field_type := spv_kind_from_ir_type_kind(it.type.kind);
-    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type(it.type);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported input field type '%' on '%'.", it.type_name, it.name);
     ptr_type_id := input_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing input pointer type for field '%'.", it.name);
@@ -91,8 +106,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   }
 
   for output.fields {
-    field_type := spv_kind_from_ir_type_kind(it.type.kind);
-    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type(it.type);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported output field type '%' on '%'.", it.type_name, it.name);
     ptr_type_id := output_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing output pointer type for field '%'.", it.name);
@@ -110,16 +124,16 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   }
 
   ps_infos: [..] IR_SPV_PS_Struct_Info;
-  if !ps_assign_struct_info(*state, *ps_infos, root_arg.pointer_pointee_type_name, root_arg.name) {
-    return_err("SPIR-V backend: failed building pointer-struct type graph for '%'.", root_arg.pointer_pointee_type_name);
+  if !ps_assign_struct_info(*state, *ps_infos, root_struct_name, root_arg.name) {
+    return_err("SPIR-V backend: failed building pointer-struct type graph for '%'.", root_struct_name);
   }
 
   ptr_to_ptr_types: [..] IR_SPV_PS_Ptr_To_Ptr;
   ptr_to_ptr_storage_types: [..] IR_SPV_PS_Ptr_To_Ptr;
   root_var_ptr_type_id := new_id(*state);
   root_var_id := new_id(*state);
-  root_info := find_ps_struct_info(*ps_infos, root_arg.pointer_pointee_type_name);
-  if !root_info return_err("SPIR-V backend: missing pointer root type info for '%'.", root_arg.pointer_pointee_type_name);
+  root_info := find_ps_struct_info(*ps_infos, root_struct_name);
+  if !root_info return_err("SPIR-V backend: missing pointer root type info for '%'.", root_struct_name);
 
   for *state.buffers {
     segments: [..] string;
@@ -129,7 +143,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     current_ptr := root_var_id;
     current_ptr_from_storage := true;
 
-    current_struct_name := root_arg.pointer_pointee_type_name;
+    current_struct_name := root_struct_name;
     consumed_path := root_arg.name;
     for i: 1..segments.count-1 {
       current_struct := find_struct(*state, current_struct_name);
@@ -137,17 +151,17 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
       field_index := find_field_index_by_name(current_struct, segments[i]);
       if field_index < 0 return_err("SPIR-V backend: field '%' not found in '%' while resolving '%' (segment %).", segments[i], current_struct_name, it.name, i);
       field := current_struct.fields[field_index];
-      if !field.is_pointer return_err("SPIR-V backend: physical-pointer path expects pointer field at '%.%'.", current_struct_name, segments[i]);
+      if field.type.kind != .POINTER return_err("SPIR-V backend: physical-pointer path expects pointer field at '%.%'.", current_struct_name, segments[i]);
 
       next_ptr_type_id: s64 = 0;
       next_struct_name := "";
       consumed_path = tprint("%.%", consumed_path, segments[i]);
-      if field.pointer_pointee_is_struct && field.pointer_pointee_type_name.count != 0 &&
-         struct_has_pointer_fields_recursive(state.extra_structs, field.pointer_pointee_type_name) {
-        nested_info := find_ps_struct_info(*ps_infos, field.pointer_pointee_type_name);
-        if !nested_info return_err("SPIR-V backend: missing pointer type info for nested struct '%'.", field.pointer_pointee_type_name);
+      if field.type.pointee_kind == .STRUCT && field.type.pointee_struct_name.count != 0 &&
+         struct_has_pointer_fields_recursive(state.extra_structs, field.type.pointee_struct_name) {
+        nested_info := find_ps_struct_info(*ps_infos, field.type.pointee_struct_name);
+        if !nested_info return_err("SPIR-V backend: missing pointer type info for nested struct '%'.", field.type.pointee_struct_name);
         next_ptr_type_id = nested_info.ptr_type_id;
-        next_struct_name = field.pointer_pointee_type_name;
+        next_struct_name = field.type.pointee_struct_name;
       } else {
         if i != segments.count-1 return_err("SPIR-V backend: non-struct pointer field reached before leaf at '%'.", consumed_path);
         if consumed_path != it.name return_err("SPIR-V backend: pointer path mismatch '%' vs '%'.", consumed_path, it.name);
@@ -282,10 +296,9 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
       field := it;
       append(*sb, tprint("               OpMemberDecorate % % NonWritable\n", id_text(ps_info.type_id), it_index));
       append(*sb, tprint("               OpMemberDecorate % % Offset %\n", id_text(ps_info.type_id), it_index, offset));
-      if field.is_pointer offset += 8;
+      if field.type.kind == .POINTER offset += 8;
       else {
-        kind := spv_kind_from_ir_type_kind(field.type.kind);
-        if kind == .UNKNOWN kind = expr_type_from_decl(field.type_name);
+        kind := spv_kind_from_ir_type(field.type);
         size := byte_size_of_kind(kind);
         if size <= 0 size = 4;
         offset += size;
@@ -308,11 +321,11 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     for st.fields {
       field := it;
       member_type_id: s64 = 0;
-      if field.is_pointer {
-        if field.pointer_pointee_is_struct && field.pointer_pointee_type_name.count != 0 &&
-           struct_has_pointer_fields_recursive(state.extra_structs, field.pointer_pointee_type_name) {
-          nested_info := find_ps_struct_info(*ps_infos, field.pointer_pointee_type_name);
-          if !nested_info return_err("SPIR-V backend: missing nested pointer type info for '%'.", field.pointer_pointee_type_name);
+      if field.type.kind == .POINTER {
+        if field.type.pointee_kind == .STRUCT && field.type.pointee_struct_name.count != 0 &&
+           struct_has_pointer_fields_recursive(state.extra_structs, field.type.pointee_struct_name) {
+          nested_info := find_ps_struct_info(*ps_infos, field.type.pointee_struct_name);
+          if !nested_info return_err("SPIR-V backend: missing nested pointer type info for '%'.", field.type.pointee_struct_name);
           member_type_id = nested_info.ptr_type_id;
         } else {
           leaf_path := tprint("%.%", ps_info.prefix, field.name);
@@ -321,8 +334,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
           member_type_id = leaf_buffer.ptr_wrapper_type_id;
         }
       } else {
-        kind := spv_kind_from_ir_type_kind(field.type.kind);
-        if kind == .UNKNOWN kind = expr_type_from_decl(field.type_name);
+        kind := spv_kind_from_ir_type(field.type);
         member_type_id = type_id_from_kind(*state, kind);
       }
       if member_type_id == 0 return_err("SPIR-V backend: unsupported field type for pointer struct '%.%'.", ps_info.name, field.name);
@@ -375,55 +387,63 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   graphics_buffers: [..] IR_Compute_Buffer;
   for args {
     arg := it;
-    if arg.type.kind == .POINTER && arg.type.pointee_kind != .STRUCT && arg.type.pointee_display_name.count != 0 {
+    if arg.type.kind == .POINTER && arg.type.pointee_kind == .STRUCT && arg.type.pointee_struct_name.count != 0 {
+      pointee_struct := find_struct(*state, arg.type.pointee_struct_name);
+      if pointee_struct {
+        saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, pointee_struct, arg.name, *graphics_buffers, arg.is_readonly);
+        if saw_resource_field {
+          if saw_non_resource_field {
+            return_err("SPIR-V backend: resource-container arg '%' currently requires all fields to be StructuredBuffer/RWStructuredBuffer.", arg.name);
+          }
+          continue;
+        }
+      }
+
+      elem_type_name := arg.type.pointee_display_name;
+      if elem_type_name.count == 0 elem_type_name = arg.type.pointee_struct_name;
       array_add(*graphics_buffers, .{
         name = arg.name,
         element_type = .{
-          kind = arg.type.pointee_kind,
-          display_name = arg.type.pointee_display_name,
+          kind = .STRUCT,
+          display_name = elem_type_name,
           struct_name = arg.type.pointee_struct_name,
         },
-        element_type_name = arg.type.pointee_display_name,
-        is_readonly = arg.is_readonly,
-      });
-      continue;
-    }
-    if arg.is_pointer && !arg.pointer_pointee_is_struct && arg.pointer_pointee_type_name.count != 0 {
-      array_add(*graphics_buffers, .{
-        name = arg.name,
-        element_type = .{display_name = arg.pointer_pointee_type_name},
-        element_type_name = arg.pointer_pointee_type_name,
-        is_readonly = arg.is_readonly,
-      });
-      continue;
-    }
-    elem_type_name, is_resource_buffer, resource_readonly := parse_structured_buffer_type_info(arg.type_name);
-    if is_resource_buffer {
-      array_add(*graphics_buffers, .{
-        name = arg.name,
-        element_type = .{display_name = elem_type_name},
         element_type_name = elem_type_name,
-        is_readonly = arg.is_readonly || resource_readonly,
+        is_readonly = arg.is_readonly,
+      });
+      continue;
+    }
+    if arg.type.kind == .POINTER && arg.type.pointee_kind != .STRUCT && arg.type.pointee_display_name.count != 0 {
+      elem_type := IR_Type.{
+        kind = arg.type.pointee_kind,
+        display_name = arg.type.pointee_display_name,
+        struct_name = arg.type.pointee_struct_name,
+      };
+      elem_type_name := arg.type.pointee_display_name;
+      if arg.type.pointee_kind == .FIXED_ARRAY {
+        parsed_elem_type_name, parsed_count, parsed_array := parse_fixed_array_type_name(arg.type.pointee_display_name);
+        if parsed_array {
+          elem_type.array_count = parsed_count;
+          elem_type.element_display_name = parsed_elem_type_name;
+          elem_type.element_kind = ir_type_kind_from_shader_name(parsed_elem_type_name);
+          elem_type_name = parsed_elem_type_name;
+        }
+      }
+      array_add(*graphics_buffers, .{
+        name = arg.name,
+        element_type = elem_type,
+        element_type_name = elem_type_name,
+        is_readonly = arg.is_readonly,
       });
       continue;
     }
     is_param_block := false;
     container_type_name := arg.type.struct_name;
-    if container_type_name.count == 0 container_type_name = arg.type_name;
-    if arg.type.flags & .PARAMETER_BLOCK {
-      is_param_block = true;
-    }
+    if arg.type.flags & .PARAMETER_BLOCK is_param_block = true;
     if arg.type.kind == .POINTER && arg.type.pointee_kind == .STRUCT && arg.type.pointee_struct_name.count != 0 {
       container_type_name = arg.type.pointee_struct_name;
-    } else if arg.is_pointer && arg.pointer_pointee_is_struct && arg.pointer_pointee_type_name.count != 0 {
-      container_type_name = arg.pointer_pointee_type_name;
-    } else if !is_param_block {
-      struct_name, parsed_param_block := parse_parameter_block_struct_name(arg.type_name);
-      if parsed_param_block {
-        container_type_name = struct_name;
-        is_param_block = true;
-      }
     }
+    if container_type_name.count == 0 continue;
     struct_def := find_struct(*state, container_type_name);
     if !struct_def continue;
     saw_resource_field, saw_non_resource_field := collect_struct_resource_fields(*state, struct_def, arg.name, *graphics_buffers, arg.is_readonly);
@@ -436,8 +456,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   if !init_ok return "", false, init_diag;
 
   for input.fields {
-    field_type := spv_kind_from_ir_type_kind(it.type.kind);
-    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type(it.type);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported input field type '%' on '%'.", it.type_name, it.name);
     ptr_type_id := input_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing input pointer type for field '%'.", it.name);
@@ -454,8 +473,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   }
 
   for output.fields {
-    field_type := spv_kind_from_ir_type_kind(it.type.kind);
-    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type(it.type);
     if field_type == .UNKNOWN return_err("SPIR-V backend: unsupported output field type '%' on '%'.", it.type_name, it.name);
     ptr_type_id := output_ptr_type_id_from_kind(*state, field_type);
     if ptr_type_id == 0 return_err("SPIR-V backend: missing output pointer type for field '%'.", it.name);
@@ -476,19 +494,11 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   for args {
     arg := it;
     struct_name := arg.type.struct_name;
-    is_param_block: bool;
-    if arg.type.flags & .PARAMETER_BLOCK is_param_block = true;
-    if is_param_block && struct_name.count == 0 {
-      struct_name = arg.type_name;
-    }
-    if !is_param_block {
-      parsed_struct_name, parsed_param_block := parse_parameter_block_struct_name(arg.type_name);
-      if parsed_param_block {
-        struct_name = parsed_struct_name;
-        is_param_block = true;
-      }
-    }
+    is_param_block := arg.type.flags & .PARAMETER_BLOCK;
     if !is_param_block continue;
+    if struct_name.count == 0 {
+      return_err("SPIR-V backend: parameter block arg '%' is missing typed struct metadata.", arg.name);
+    }
     struct_def := find_struct(*state, struct_name);
     if !struct_def return_err("SPIR-V backend: missing lowered uniform struct '%'.", struct_name);
     uniform_struct_type_id := new_id(*state);
@@ -504,8 +514,10 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     offset: s64 = 0;
     for struct_def.fields {
       field := it;
-      nested_struct_name := field.type.struct_name;
-      if nested_struct_name.count == 0 nested_struct_name = field.type_name;
+      nested_struct_name := spv_struct_name_from_ir_type(field.type);
+      if nested_struct_name.count == 0 && field.type.kind == .POINTER && field.type.pointee_kind == .STRUCT {
+        nested_struct_name = field.type.pointee_struct_name;
+      }
       nested_struct := find_struct(*state, nested_struct_name);
       if nested_struct {
         nested_has_resource, nested_has_non_resource := collect_struct_resource_fields(*state, nested_struct, "", null);
@@ -517,7 +529,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
           continue;
         }
       }
-      _, is_resource_field, _ := parse_structured_buffer_type_info(field.type_name);
+      _, is_resource_field, _ := resource_element_type_from_field(*state, *field);
       if is_resource_field continue;
       field_type := IR_SPV_Gen_Type.UNKNOWN;
       field_type_id: s64 = 0;
@@ -529,18 +541,15 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
       field_align: s64 = 0;
       field_size: s64 = 0;
 
-      array_elem_type_name := "";
+      array_elem_type_name := field.type.element_display_name;
       parsed_array_count: s64;
       parsed_array := field.type.kind == .FIXED_ARRAY;
       if parsed_array {
-        array_elem_type_name = field.type.element_display_name;
         parsed_array_count = field.type.array_count;
-      } else {
-        array_elem_type_name, parsed_array_count, parsed_array = parse_fixed_array_type_name(field.type_name);
+        if array_elem_type_name.count == 0 array_elem_type_name = field.type.element_struct_name;
       }
       if parsed_array {
         field_type = spv_kind_from_ir_type_kind(field.type.element_kind);
-        if field_type == .UNKNOWN field_type = expr_type_from_decl(array_elem_type_name);
         if field_type == .UNKNOWN || field_type == .STRUCT {
           return_err("SPIR-V backend: uniform array field '%.%' has unsupported element type '%'.", struct_name, field.name, array_elem_type_name);
         }
@@ -554,8 +563,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         field_align = 16;
         field_size = array_stride * array_count;
       } else {
-        field_type = spv_kind_from_ir_type_kind(field.type.kind);
-        if field_type == .UNKNOWN field_type = expr_type_from_decl(field.type_name);
+        field_type = spv_kind_from_ir_type(field.type);
         if field_type == .UNKNOWN || field_type == .STRUCT {
           return_err("SPIR-V backend: uniform field '%.%' has unsupported type '%'.", struct_name, field.name, field.type_name);
         }

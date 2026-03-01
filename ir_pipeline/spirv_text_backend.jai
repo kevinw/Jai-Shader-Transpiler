@@ -720,9 +720,9 @@ struct_has_pointer_fields_recursive :: (extra_structs: [] IR_Struct, struct_name
   if !st return false;
   for st.fields {
     field := it;
-    if field.is_pointer return true;
+    if field.type.kind == .POINTER return true;
     nested_field_struct_name := field.type.struct_name;
-    if nested_field_struct_name.count == 0 nested_field_struct_name = field.type_name;
+    if nested_field_struct_name.count == 0 continue;
     for *extra_structs {
       nested := it;
       if nested.name != nested_field_struct_name continue;
@@ -731,30 +731,6 @@ struct_has_pointer_fields_recursive :: (extra_structs: [] IR_Struct, struct_name
     }
   }
   return false;
-}
-
-is_uint_type_name :: (name: string) -> bool {
-  return name == "uint" || name == "u32";
-}
-
-parse_structured_buffer_type_info :: (type_name: string) -> (element_type_name: string, is_resource: bool, is_readonly: bool) {
-  ro_prefix :: "StructuredBuffer<";
-  rw_prefix :: "RWStructuredBuffer<";
-  prefix := "";
-  is_readonly := false;
-  if begins_with(type_name, ro_prefix) {
-    prefix = ro_prefix;
-    is_readonly = true;
-  } else if begins_with(type_name, rw_prefix) {
-    prefix = rw_prefix;
-  } else return "", false, false;
-  if type_name.count < prefix.count + 2 return "", false, false;
-  if type_name[type_name.count-1] != #char ">" return "", false, false;
-  out: string;
-  out.data = type_name.data + prefix.count;
-  out.count = type_name.count - prefix.count - 1;
-  if out.count == 0 return "", false, false;
-  return out, true, is_readonly;
 }
 
 parse_fixed_array_type_name :: (type_name: string) -> (element_type_name: string, array_count: s64, ok: bool) {
@@ -788,20 +764,9 @@ parse_buffer_element_info :: (buffer: IR_Compute_Buffer) -> IR_SPV_Buffer_Elemen
     parsed_fixed_array = true;
     parsed_array_count = buffer.element_type.array_count;
     element_type_name = buffer.element_type.element_display_name;
+    if element_type_name.count == 0 element_type_name = buffer.element_type.element_struct_name;
     if element_type_name.count == 0 element_type_name = buffer.element_type_name;
     elem_kind = spv_kind_from_ir_type_kind(buffer.element_type.element_kind);
-  } else {
-    parsed_elem_type_name, parsed_count, parsed_array := parse_fixed_array_type_name(element_type_name);
-    if parsed_array {
-      parsed_fixed_array = true;
-      parsed_array_count = parsed_count;
-      element_type_name = parsed_elem_type_name;
-    }
-  }
-
-  if parsed_fixed_array {
-    parsed_elem_type_name, _, parsed_elem_array := parse_fixed_array_type_name(element_type_name);
-    if parsed_elem_array element_type_name = parsed_elem_type_name;
   }
 
   return info;
@@ -809,25 +774,13 @@ parse_buffer_element_info :: (buffer: IR_Compute_Buffer) -> IR_SPV_Buffer_Elemen
 
 struct_has_pointer_fields :: (st: *IR_Struct) -> bool {
   assert(st != null);
-  for st.fields if it.is_pointer return true;
+  for st.fields if it.type.kind == .POINTER return true;
   return false;
 }
 
 resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> (element_type_name: string, is_resource: bool, is_readonly: bool) {
   assert(s != null);
   assert(field != null);
-
-  if field.is_pointer {
-    pointee_name := field.pointer_pointee_type_name;
-    if pointee_name.count == 0 pointee_name = field.type.pointee_struct_name;
-    if pointee_name.count == 0 pointee_name = field.type.pointee_display_name;
-    if pointee_name.count == 0 return "", false, false;
-    if field.pointer_pointee_is_struct {
-      nested_struct := find_struct(s, pointee_name);
-      if nested_struct && struct_has_pointer_fields(nested_struct) return "", false, false;
-    }
-    return pointee_name, true, false;
-  }
 
   if field.type.kind == .POINTER {
     pointee_name := field.type.pointee_struct_name;
@@ -840,18 +793,13 @@ resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> 
     return pointee_name, true, false;
   }
 
-  elem_type_name, is_resource, is_readonly := parse_structured_buffer_type_info(field.type_name);
-  return elem_type_name, is_resource, is_readonly;
+  return "", false, false;
 }
 
 resource_walk_nested_struct :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> *IR_Struct {
   assert(s != null);
   assert(field != null);
 
-  if field.is_pointer && field.pointer_pointee_is_struct && field.pointer_pointee_type_name.count != 0 {
-    nested := find_struct(s, field.pointer_pointee_type_name);
-    if nested && struct_has_pointer_fields(nested) return nested;
-  }
   if field.type.kind == .POINTER && field.type.pointee_kind == .STRUCT && field.type.pointee_struct_name.count != 0 {
     nested := find_struct(s, field.type.pointee_struct_name);
     if nested && struct_has_pointer_fields(nested) return nested;
@@ -859,7 +807,7 @@ resource_walk_nested_struct :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> *IR_S
   if field.type.kind == .STRUCT && field.type.struct_name.count != 0 {
     return find_struct(s, field.type.struct_name);
   }
-  return find_struct(s, field.type_name);
+  return null;
 }
 
 collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_prefix: string, out_buffers: *[..] IR_Compute_Buffer, default_readonly: bool = false) -> (has_resource: bool, has_non_resource: bool) {
@@ -874,9 +822,23 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
     if is_resource_field {
       has_resource = true;
       if out_buffers {
+        elem_type: IR_Type;
+        if it.type.kind == .POINTER {
+          elem_type.kind = it.type.pointee_kind;
+          elem_type.display_name = it.type.pointee_display_name;
+          elem_type.struct_name = it.type.pointee_struct_name;
+          if elem_type.display_name.count == 0 elem_type.display_name = elem_type_name;
+          if elem_type.kind == .STRUCT && elem_type.struct_name.count == 0 elem_type.struct_name = elem_type_name;
+        } else {
+          elem_type.display_name = elem_type_name;
+          if find_struct(s, elem_type_name) {
+            elem_type.kind = .STRUCT;
+            elem_type.struct_name = elem_type_name;
+          }
+        }
         array_add(out_buffers, .{
           name = field_path,
-          element_type = .{display_name = elem_type_name},
+          element_type = elem_type,
           element_type_name = elem_type_name,
           is_readonly = field_readonly || default_readonly,
         });
@@ -1071,7 +1033,6 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       buffer_info.fixed_array_count_const_id = get_u32_const(s, cast(u32) parsed_array_count);
     }
     buffer_info.element_type_name = element_type_name;
-    if elem_kind == .UNKNOWN elem_kind = expr_type_from_decl(element_type_name);
     if elem_kind != .UNKNOWN && elem_kind != .STRUCT {
       buffer_info.element_kind = elem_kind;
       buffer_info.element_type_id = type_id_from_kind(s, elem_kind);
@@ -1129,8 +1090,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     cpu_offset: s64 = 0;
     cpu_max_align: s64 = 1;
     for struct_def.fields {
-      field_type := spv_kind_from_ir_type_kind(it.type.kind);
-      if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
+      field_type := spv_kind_from_ir_type(it.type);
       if field_type == .UNKNOWN {
         return_err("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, it.type_name);
       }
@@ -1303,14 +1263,14 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
   local_struct.name = name;
   local_struct.type_name = type_name;
   for struct_def.fields {
-    field_type := spv_kind_from_ir_type_kind(it.type.kind);
-    if field_type == .UNKNOWN field_type = expr_type_from_decl(it.type_name);
+    field_type := spv_kind_from_ir_type(it.type);
     if field_type == .UNKNOWN || field_type == .STRUCT {
-      nested_def := find_struct(s, it.type_name);
+      nested_type_name := spv_struct_name_from_ir_type(it.type);
+      nested_def := find_struct(s, nested_type_name);
       if !nested_def return null, false, make_diag("local struct '%' field '%' has unsupported type '%'.", type_name, it.name, it.type_name);
       
       nested_name := make_unique_local_struct_name(s, tprint("%.%", name, it.name));
-      _, nested_ok, nested_diag := alloc_local_struct(s, nested_name, it.type_name);
+      _, nested_ok, nested_diag := alloc_local_struct(s, nested_name, nested_type_name);
       if !nested_ok return null, false, nested_diag;
       array_add(*local_struct.fields, .{
         name = it.name,
@@ -1402,7 +1362,9 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
     return copy_ok, copy_diag;
   }
 
-  if expr.kind != .CONSTRUCTOR || expr.text != dst.type_name {
+  expr_struct_name := spv_struct_name_from_ir_expr_result(expr);
+  if expr_struct_name.count == 0 expr_struct_name = expr.text;
+  if expr.kind != .CONSTRUCTOR || expr_struct_name != dst.type_name {
     return false, make_diag("unsupported struct init expression for type '%'.", dst.type_name);
   }
   if expr.args.count > dst.fields.count {
@@ -2037,6 +1999,40 @@ spv_kind_from_ir_type_kind :: (kind: IR_Type_Kind) -> IR_SPV_Gen_Type {
   return .UNKNOWN;
 }
 
+spv_kind_from_ir_expr_result :: (expr: *IR_Expr) -> IR_SPV_Gen_Type {
+  if !expr return .UNKNOWN;
+  return spv_kind_from_ir_type_kind(expr.result_type.kind);
+}
+
+spv_struct_name_from_ir_expr_result :: (expr: *IR_Expr) -> string {
+  if !expr return "";
+  if expr.result_type.kind != .STRUCT return "";
+  if expr.result_type.struct_name.count != 0 return expr.result_type.struct_name;
+  return expr.result_type.display_name;
+}
+
+spv_kind_from_ir_type :: (type: IR_Type) -> IR_SPV_Gen_Type {
+  kind := spv_kind_from_ir_type_kind(type.kind);
+  if kind != .UNKNOWN return kind;
+  return .UNKNOWN;
+}
+
+spv_struct_name_from_ir_type :: (type: IR_Type) -> string {
+  if type.kind != .STRUCT return "";
+  if type.struct_name.count != 0 return type.struct_name;
+  if type.display_name.count != 0 return type.display_name;
+  return "";
+}
+
+spv_fixed_array_info_from_ir_type :: (type: IR_Type) -> (element_type_name: string, array_count: s64, element_kind: IR_SPV_Gen_Type, ok: bool) {
+  if type.kind != .FIXED_ARRAY return "", 0, .UNKNOWN, false;
+  element_type_name := type.element_display_name;
+  if element_type_name.count == 0 element_type_name = type.element_struct_name;
+  array_count := type.array_count;
+  element_kind := spv_kind_from_ir_type_kind(type.element_kind);
+  return element_type_name, array_count, element_kind, true;
+}
+
 bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (handled: bool, ok: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
   if arg.type.kind != .POINTER return false, true, diag;
@@ -2115,8 +2111,7 @@ bind_inline_function_scalar_arg_with_value :: (s: *IR_SPV_Gen_State, function_na
 
 bind_inline_function_scalar_arg :: (s: *IR_SPV_Gen_State, function_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (ok: bool, handled: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
-  arg_type := spv_kind_from_ir_type_kind(arg.type.kind);
-  if arg_type == .UNKNOWN arg_type = expr_type_from_decl(arg.type_name);
+  arg_type := spv_kind_from_ir_type(arg.type);
   if arg_type == .UNKNOWN || arg_type == .STRUCT return true, false, diag;
 
   arg_value, value_type, value_ok, value_diag := emit_expr(s, arg_expr);
@@ -2153,7 +2148,9 @@ bind_inline_function_scalar_arg :: (s: *IR_SPV_Gen_State, function_name: string,
 bind_inline_function_struct_arg :: (s: *IR_SPV_Gen_State, function_name: string, arg: IR_Function_Arg, arg_expr: *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
   arg_struct_name := arg.type.struct_name;
-  if arg_struct_name.count == 0 arg_struct_name = arg.type_name;
+  if arg_struct_name.count == 0 {
+    return false, make_diag("helper '%' struct arg '%' is missing typed struct metadata.", function_name, arg.name);
+  }
   arg_struct, arg_struct_ok, arg_struct_diag := alloc_local_struct(s, arg.name, arg_struct_name);
   if !arg_struct_ok return false, arg_struct_diag;
 
@@ -2185,22 +2182,7 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
   diag: IR_Diagnostic;
   if !s return false, false, make_diag("null SPIR-V state while binding helper array arg.");
 
-  array_elem_type_name: string;
-  array_count: s64;
-  is_fixed_array := arg.type.kind == .FIXED_ARRAY;
-  elem_type := spv_kind_from_ir_type_kind(arg.type.element_kind);
-  if is_fixed_array {
-    array_elem_type_name = arg.type.element_display_name;
-    array_count = arg.type.array_count;
-    if elem_type == .UNKNOWN {
-      elem_type = expr_type_from_decl(array_elem_type_name);
-    }
-  } else {
-    array_elem_type_name, array_count, is_fixed_array = parse_fixed_array_type_name(arg.type_name);
-    if is_fixed_array {
-      elem_type = expr_type_from_decl(array_elem_type_name);
-    }
-  }
+  array_elem_type_name, array_count, elem_type, is_fixed_array := spv_fixed_array_info_from_ir_type(arg.type);
   if !is_fixed_array return false, false, diag;
 
   if elem_type == .UNKNOWN || elem_type == .STRUCT {
@@ -2309,8 +2291,7 @@ bind_inline_function_args :: (s: *IR_SPV_Gen_State, ir_function: *IR_Function, c
   // args reference identifiers with matching names.
   for ir_function.args {
     arg_expr := call_args[it_index];
-    arg_type := spv_kind_from_ir_type_kind(it.type.kind);
-    if arg_type == .UNKNOWN arg_type = expr_type_from_decl(it.type_name);
+    arg_type := spv_kind_from_ir_type(it.type);
     if arg_type == .UNKNOWN || arg_type == .STRUCT continue;
 
     value_id, value_type, value_ok, value_diag := emit_expr(s, arg_expr);
@@ -2388,10 +2369,11 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
   assert(s != null);
   if !helper return 0, .UNKNOWN, false, make_diag("missing helper metadata for inline call.");
   
-  return_kind := spv_kind_from_ir_type_kind(helper.return_type.kind);
-  if return_kind == .UNKNOWN return_kind = expr_type_from_decl(helper.return_type_name);
+  return_kind := spv_kind_from_ir_type(helper.return_type);
   if return_kind == .UNKNOWN || return_kind == .STRUCT {
-    return 0, .UNKNOWN, false, make_diag("helper '%' has unsupported return type '%'.", helper.name, helper.return_type_name);
+    helper_return_text := helper.return_type.display_name;
+    if helper_return_text.count == 0 helper_return_text = helper.return_type_name;
+    return 0, .UNKNOWN, false, make_diag("helper '%' has unsupported return type '%'.", helper.name, helper_return_text);
   }
 
   local_count_before := s.locals.count;
@@ -2419,8 +2401,7 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
 
 helper_returns_void :: (helper: *IR_Function) -> bool {
   if !helper return false;
-  if helper.return_type_name == "void" return true;
-  return false;
+  return helper.return_type.display_name == "void";
 }
 
 eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
@@ -2499,10 +2480,14 @@ eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, c
   }
   out_struct_name := out_struct.name;
   out_struct_type := out_struct.type_name;
-  helper_return_struct_name := helper.return_type.struct_name;
-  if helper_return_struct_name.count == 0 helper_return_struct_name = helper.return_type_name;
+  if helper.return_type.kind != .STRUCT {
+    return false, make_diag("helper '%' return type is not a struct.", helper.name);
+  }
+  helper_return_struct_name := spv_struct_name_from_ir_type(helper.return_type);
   if helper_return_struct_name != out_struct_type {
-    return false, make_diag("helper '%' return type '%' does not match destination struct '%'.", helper.name, helper.return_type_name, out_struct_type);
+    helper_return_text := helper.return_type.display_name;
+    if helper_return_text.count == 0 helper_return_text = helper.return_type_name;
+    return false, make_diag("helper '%' return type '%' does not match destination struct '%'.", helper.name, helper_return_text, out_struct_type);
   }
 
   local_count_before := s.locals.count;
@@ -2721,12 +2706,12 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
         helper := find_function(s, expr.left.left.text);
         if !helper return_err("unknown helper '%'.", expr.left.left.text);
-        helper_ret_kind := spv_kind_from_ir_type_kind(helper.return_type.kind);
-        if helper_ret_kind == .UNKNOWN helper_ret_kind = expr_type_from_decl(helper.return_type_name);
-        if helper_ret_kind != .STRUCT return_err("member access on non-struct call return '%'.", helper.return_type_name);
+        helper_ret_kind := spv_kind_from_ir_type(helper.return_type);
+        helper_ret_text := helper.return_type.display_name;
+        if helper_ret_text.count == 0 helper_ret_text = helper.return_type_name;
+        if helper_ret_kind != .STRUCT return_err("member access on non-struct call return '%'.", helper_ret_text);
         temp_name := tprint("__call_ret_%", new_id(s));
-        helper_ret_struct_name := helper.return_type.struct_name;
-        if helper_ret_struct_name.count == 0 helper_ret_struct_name = helper.return_type_name;
+        helper_ret_struct_name := spv_struct_name_from_ir_type(helper.return_type);
         temp_struct, temp_ok, temp_diag := alloc_local_struct(s, temp_name, helper_ret_struct_name);
         if !temp_ok return 0, .UNKNOWN, false, temp_diag;
         call_ok, call_diag := eval_inline_function_to_struct(s, helper, expr.left.args, temp_struct);
@@ -2734,7 +2719,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         temp_struct = find_local_struct(s, temp_name);
         if !temp_struct return_err("inline helper result struct '%' went missing.", temp_name);
         field := find_local_struct_field(temp_struct, expr.text);
-        if !field return_err("helper call return type '%' has no field '%'.", helper.return_type_name, expr.text);
+        if !field return_err("helper call return type '%' has no field '%'.", helper_ret_text, expr.text);
         value_id := new_id(s);
         type_id := type_id_from_kind(s, field.type);
         add_op(s, value_id, "OpLoad", type_id, field.ptr_id);
@@ -3116,7 +3101,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .BOOL);
       if !cond_ok return 0, .UNKNOWN, false, cond_diag;
 
-      result_type := expr_type_from_decl(expr.text);
+      result_type := spv_kind_from_ir_expr_result(expr);
       result_ptr_id: s64 = 0;
       result_ptr_type_id: s64 = 0;
       result_type_id: s64 = 0;
@@ -3158,23 +3143,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       inner_id, inner_type, inner_ok, inner_diag := emit_expr(s, expr.left);
       if !inner_ok return 0, .UNKNOWN, false, inner_diag;
 
-      target := compact_text(expr.text);
-      target_kind := IR_SPV_Gen_Type.UNKNOWN;
-      if target == "uint" || target == "u32" {
-        target_kind = .UINT;
-      } else if target == "int32_t" || target == "s32" {
-        target_kind = .INT;
-      } else if target == "int" {
-        target_kind = .INT64;
-      } else if target == "int64_t" || target == "s64" {
-        target_kind = .INT64;
-      } else if target == "uint64_t" || target == "u64" {
-        target_kind = .UINT64;
-      } else if target == "bool" {
-        target_kind = .BOOL;
-      } else if target == "float" {
-        target_kind = .FLOAT;
-      }
+      target_kind := spv_kind_from_ir_expr_result(expr);
       if target_kind == .UNKNOWN return_err("unsupported cast target '%'.", expr.text);
       converted_id, converted_ok, converted_diag := coerce_to_kind(s, inner_id, inner_type, target_kind);
       if !converted_ok return 0, .UNKNOWN, false, converted_diag;
@@ -3719,7 +3688,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
     }
 
     case .CONSTRUCTOR; {
-      ctor_type := expr_type_from_decl(expr.text);
+      ctor_type := spv_kind_from_ir_expr_result(expr);
       if ctor_type == .FLOAT2 {
         if expr.args.count != 2 return_err("float2 constructor expects 2 args, got %.", expr.args.count);
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
@@ -4022,10 +3991,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
   
   if stmt.kind == {
     case .DECL; {
-      decl_type := spv_kind_from_ir_type_kind(stmt.decl_type.kind);
-      if decl_type == .UNKNOWN {
-        decl_type = expr_type_from_decl(stmt.decl_type_name);
-      }
+      decl_type := spv_kind_from_ir_type(stmt.decl_type);
       if decl_type == .INT || decl_type == .UINT || decl_type == .INT64 || decl_type == .UINT64 ||
          decl_type == .BOOL || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT3 || decl_type == .FLOAT4 || decl_type == .FLOAT2X2 {
         ptr_id := new_id(s);
@@ -4048,20 +4014,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return true, false, diag;
       }
 
-      array_elem_type_name: string;
-      array_count: s64;
-      is_fixed_array := stmt.decl_type.kind == .FIXED_ARRAY;
-      elem_type := spv_kind_from_ir_type_kind(stmt.decl_type.element_kind);
-      if is_fixed_array {
-        array_elem_type_name = stmt.decl_type.element_display_name;
-        array_count = stmt.decl_type.array_count;
-        if elem_type == .UNKNOWN {
-          elem_type = expr_type_from_decl(array_elem_type_name);
-        }
-      } else {
-        array_elem_type_name, array_count, is_fixed_array = parse_fixed_array_type_name(stmt.decl_type_name);
-        elem_type = expr_type_from_decl(array_elem_type_name);
-      }
+      array_elem_type_name, array_count, elem_type, is_fixed_array := spv_fixed_array_info_from_ir_type(stmt.decl_type);
       if is_fixed_array {
         if elem_type == .UNKNOWN || elem_type == .STRUCT {
           return_err("unsupported local array element type '%'.", array_elem_type_name);
@@ -4121,19 +4074,21 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return true, false, diag;
       }
 
-      struct_type_name := stmt.decl_type_name;
-      if stmt.decl_type.kind == .STRUCT && stmt.decl_type.struct_name.count != 0 {
-        struct_type_name = stmt.decl_type.struct_name;
+      struct_type_name := stmt.decl_type.struct_name;
+      if struct_type_name.count == 0 {
+        return_err("unsupported declaration type '%': missing typed struct metadata.", stmt.decl_type_name);
       }
       struct_def := find_struct(s, struct_type_name);
       if !struct_def {
-        return_err("unsupported declaration type '%'.", stmt.decl_type_name);
+        return_err("unsupported declaration type '%'.", struct_type_name);
       }
       local_struct, local_struct_ok, local_struct_diag := alloc_local_struct(s, stmt.decl_name, struct_type_name);
       if !local_struct_ok return false, false, local_struct_diag;
 
       if stmt.decl_init {
-        if stmt.decl_init.kind == .CONSTRUCTOR && stmt.decl_init.text == struct_type_name {
+        init_struct_name := spv_struct_name_from_ir_expr_result(stmt.decl_init);
+        if stmt.decl_init.kind == .CONSTRUCTOR &&
+           init_struct_name == struct_type_name {
           init_ok, init_diag := init_local_struct_from_expr(s, local_struct, stmt.decl_init);
           if !init_ok return false, false, init_diag;
         } else if stmt.decl_init.kind == .IDENT {
@@ -4208,8 +4163,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           helper := find_function(s, stmt.decl_init.left.text);
           helper_return_struct_name := "";
           if helper {
-            helper_return_struct_name = helper.return_type.struct_name;
-            if helper_return_struct_name.count == 0 helper_return_struct_name = helper.return_type_name;
+            if helper.return_type.kind == .STRUCT {
+              helper_return_struct_name = spv_struct_name_from_ir_type(helper.return_type);
+            }
           }
           if !helper || helper_return_struct_name != struct_type_name {
             return_err("struct declaration '%': unsupported call initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
@@ -4246,8 +4202,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             helper := find_function(s, stmt.binary_right.left.text);
             helper_return_struct_name := "";
             if helper {
-              helper_return_struct_name = helper.return_type.struct_name;
-              if helper_return_struct_name.count == 0 helper_return_struct_name = helper.return_type_name;
+              if helper.return_type.kind == .STRUCT {
+                helper_return_struct_name = spv_struct_name_from_ir_type(helper.return_type);
+              }
             }
             if !helper || helper_return_struct_name != dst_buffer.element_type_name {
               return_err("struct buffer assignment call '%' has incompatible return type.", expr_text(stmt.binary_right));
@@ -4262,7 +4219,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
               return_err("inline helper assignment source struct '%' went missing.", tmp_name);
             }
           } else if stmt.binary_right && stmt.binary_right.kind == .CONSTRUCTOR &&
-                    stmt.binary_right.text == dst_buffer.element_type_name {
+                    spv_struct_name_from_ir_expr_result(stmt.binary_right) == dst_buffer.element_type_name {
             tmp_name := tprint("__assign_src_%", new_id(s));
             tmp_struct, tmp_ok, tmp_diag := alloc_local_struct(s, tmp_name, dst_buffer.element_type_name);
             if !tmp_ok return false, false, tmp_diag;
@@ -4919,23 +4876,13 @@ spv_append_local_array_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State)
   }
 }
 
-parse_parameter_block_struct_name :: (type_name: string) -> (string, bool) {
-  prefix :: "ParameterBlock<";
-  if !begins_with(type_name, prefix) return "", false;
-  if type_name.count < prefix.count + 1 return "", false;
-  if type_name[type_name.count-1] != #char ">" return "", false;
-  out: string = { type_name.count - prefix.count - 1, type_name.data + prefix.count };
-  if out.count == 0 return "", false;
-  return out, true;
-}
-
 find_pointer_root_arg :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct) -> (*IR_Function_Arg, bool) {
   candidate: *IR_Function_Arg = null;
   for *args {
-    if !it.is_pointer continue;
-    if !it.pointer_pointee_is_struct continue;
-    if it.pointer_pointee_type_name.count == 0 continue;
-    if !struct_has_pointer_fields_recursive(extra_structs, it.pointer_pointee_type_name) continue;
+    if it.type.kind != .POINTER continue;
+    if it.type.pointee_kind != .STRUCT continue;
+    if it.type.pointee_struct_name.count == 0 continue;
+    if !struct_has_pointer_fields_recursive(extra_structs, it.type.pointee_struct_name) continue;
     if candidate return null, false;
     candidate = it;
   }
@@ -4961,12 +4908,12 @@ ps_assign_struct_info :: (s: *IR_SPV_Gen_State, infos: *[..] IR_SPV_PS_Struct_In
   });
   for st.fields {
     using it;
-    if !is_pointer continue;
-    if !pointer_pointee_is_struct continue;
-    if pointer_pointee_type_name.count == 0 continue;
-    if !struct_has_pointer_fields_recursive(s.extra_structs, pointer_pointee_type_name, depth + 1) continue;
+    if type.kind != .POINTER continue;
+    if type.pointee_kind != .STRUCT continue;
+    if type.pointee_struct_name.count == 0 continue;
+    if !struct_has_pointer_fields_recursive(s.extra_structs, type.pointee_struct_name, depth + 1) continue;
     next_prefix := tprint("%.%", prefix, name);
-    if !ps_assign_struct_info(s, infos, pointer_pointee_type_name, next_prefix, depth + 1) return false;
+    if !ps_assign_struct_info(s, infos, type.pointee_struct_name, next_prefix, depth + 1) return false;
   }
   return true;
 }
