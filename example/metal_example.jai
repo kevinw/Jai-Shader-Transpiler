@@ -25,6 +25,19 @@ VERTEX_UNIFORM_BUFFER_INDEX    :: 0;
 VERTEX_ATTRIBUTE_BUFFER_INDEX  :: 1;
 FRAGMENT_UNIFORM_BUFFER_INDEX  :: 0;
 
+find_compute_function :: (library: *MTLLibrary) -> *MTLFunction {
+    if !library return null;
+    fn := cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("ComputeMain"));
+    if fn return fn;
+    fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("compute_write_indices_ComputeMain"));
+    if fn return fn;
+    fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("main"));
+    if fn return fn;
+    fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("main_0"));
+    if fn return fn;
+    return null;
+}
+
 run_compute_sanity_check :: (device: *MTLDevice, queue: *MTLCommandQueue, compile_options: *MTLCompileOptions) -> bool {
     compute_source := get_transpiled(.METAL, compute_write_indices);
 
@@ -36,9 +49,9 @@ run_compute_sanity_check :: (device: *MTLDevice, queue: *MTLCommandQueue, compil
     }
     defer release(lib_compute);
 
-    fn_compute := cast(*MTLFunction) MTLLibrary.newFunctionWithName(lib_compute, NSString.getTempString("ComputeMain"));
+    fn_compute := find_compute_function(lib_compute);
     if !fn_compute {
-        log_error("Failed to find compute entry point 'ComputeMain'");
+        log_error("Failed to find compute entry point");
         return false;
     }
     defer release(fn_compute);

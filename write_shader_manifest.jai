@@ -294,8 +294,15 @@ manifest_make_single_entry :: (ctx: *Shader_Write_Context, workspace_root: strin
   out.stage = manifest_stage_from_shader_type(ctx.type);
   out.target = manifest_target_from_context(ctx);
   out.output_source_path = manifest_output_source_path(out.request_name, out.target);
+  if ctx.metal_output_source_path.count != 0 out.output_source_path = copy_string(ctx.metal_output_source_path);
+  out.output_air_path = copy_string(ctx.metal_output_air_path);
+  out.output_metallib_path = copy_string(ctx.metal_output_metallib_path);
   out.primary_name = copy_string(ctx.main_fn.header.name);
   out.secondary_name = "";
+  out.metal_vertex_entry = copy_string(ctx.metal_vertex_entry_name);
+  out.metal_fragment_entry = copy_string(ctx.metal_fragment_entry_name);
+  out.metal_compute_entry = copy_string(ctx.metal_compute_entry_name);
+  out.metal_compute_binding_mode = copy_string(ctx.metal_compute_binding_mode);
   proc_sig := manifest_header_signature(ctx.main_fn.header);
   out.signature = tprint("kind=single;stage=%;target=%;%", out.stage, out.target, proc_sig);
   out.signature_hash = tprint("%", manifest_hash_u64(out.signature));
@@ -316,8 +323,13 @@ manifest_make_pair_entry :: (ctx: *Shader_Write_Pair_Context, workspace_root: st
   out.stage = "pair";
   out.target = manifest_target_from_pair_context(ctx);
   out.output_source_path = manifest_output_source_path(out.request_name, out.target);
+  if ctx.metal_output_source_path.count != 0 out.output_source_path = copy_string(ctx.metal_output_source_path);
+  out.output_air_path = copy_string(ctx.metal_output_air_path);
+  out.output_metallib_path = copy_string(ctx.metal_output_metallib_path);
   out.primary_name = copy_string(ctx.vertex_fn.header.name);
   out.secondary_name = copy_string(ctx.fragment_fn.header.name);
+  out.metal_vertex_entry = copy_string(ctx.metal_vertex_entry_name);
+  out.metal_fragment_entry = copy_string(ctx.metal_fragment_entry_name);
   v_sig := manifest_header_signature(ctx.vertex_fn.header);
   f_sig := manifest_header_signature(ctx.fragment_fn.header);
   out.signature = tprint("kind=pair;target=%;vertex={%};fragment={%}", out.target, v_sig, f_sig);
@@ -340,7 +352,7 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
   }
 
   sb: String_Builder;
-  append(*sb, "version 2\n");
+  append(*sb, "version 3\n");
   append(*sb, tprint("entry_count %\n", plugin.manifest_entries.count));
   append(*sb, tprint("global_dependency_count %\n", global_dependencies.count));
   for global_dependencies append(*sb, tprint("global_dependency %\n", it));
@@ -350,11 +362,17 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
     append(*sb, tprint("entry_id %\n", it.entry_id));
     append(*sb, tprint("request_name %\n", it.request_name));
     append(*sb, tprint("output_source_path %\n", it.output_source_path));
+    append(*sb, tprint("output_air_path %\n", it.output_air_path));
+    append(*sb, tprint("output_metallib_path %\n", it.output_metallib_path));
     append(*sb, tprint("shader_kind %\n", it.shader_kind));
     append(*sb, tprint("stage %\n", it.stage));
     append(*sb, tprint("target %\n", it.target));
     append(*sb, tprint("primary_name %\n", it.primary_name));
     append(*sb, tprint("secondary_name %\n", it.secondary_name));
+    append(*sb, tprint("metal_vertex_entry %\n", it.metal_vertex_entry));
+    append(*sb, tprint("metal_fragment_entry %\n", it.metal_fragment_entry));
+    append(*sb, tprint("metal_compute_entry %\n", it.metal_compute_entry));
+    append(*sb, tprint("metal_compute_binding_mode %\n", it.metal_compute_binding_mode));
     append(*sb, tprint("signature_hash %\n", it.signature_hash));
     append(*sb, tprint("signature %\n", it.signature));
     append(*sb, tprint("dependency_count %\n", it.dependencies.count));

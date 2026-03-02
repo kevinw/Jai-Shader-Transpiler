@@ -2,11 +2,17 @@ Shader_Reload_Manifest_Entry :: struct {
     entry_id: string;
     request_name: string;
     output_source_path: string;
+    output_air_path: string;
+    output_metallib_path: string;
     shader_kind: string;
     stage: string;
     target: string;
     primary_name: string;
     secondary_name: string;
+    metal_vertex_entry: string;
+    metal_fragment_entry: string;
+    metal_compute_entry: string;
+    metal_compute_binding_mode: string;
     signature: string;
     signature_hash: string;
     dependencies: [..] string;
@@ -50,6 +56,7 @@ Shader_Reload_Watcher :: struct {
     dependency_states: [..] Shader_Reload_Dependency_State;
     last_changed_entry_ids_csv: string;
     last_build_ok: bool;
+    last_build_error_message: string;
 }
 
 shader_reload_manifest_reset :: (using manifest: *Shader_Reload_Manifest) {
@@ -116,20 +123,26 @@ shader_reload_manifest_load :: (manifest: *Shader_Reload_Manifest, path: string)
         if key == {
             case "entry_id"; entry_id = value;
             case "request_name"; request_name = value;
-            case "output_source_path"; output_source_path = value;
-            case "shader_kind"; shader_kind = value;
-            case "stage"; stage = value;
-            case "target"; target = value;
-            case "primary_name"; primary_name = value;
-            case "secondary_name"; secondary_name = value;
-            case "signature"; signature = value;
-            case "signature_hash"; signature_hash = value;
-            case "dependency"; array_add(*current_entry.dependencies, value);
+                case "output_source_path"; output_source_path = value;
+                case "output_air_path"; output_air_path = value;
+                case "output_metallib_path"; output_metallib_path = value;
+                case "shader_kind"; shader_kind = value;
+                case "stage"; stage = value;
+                case "target"; target = value;
+                case "primary_name"; primary_name = value;
+                case "secondary_name"; secondary_name = value;
+                case "metal_vertex_entry"; metal_vertex_entry = value;
+                case "metal_fragment_entry"; metal_fragment_entry = value;
+                case "metal_compute_entry"; metal_compute_entry = value;
+                case "metal_compute_binding_mode"; metal_compute_binding_mode = value;
+                case "signature"; signature = value;
+                case "signature_hash"; signature_hash = value;
+                case "dependency"; array_add(*current_entry.dependencies, value);
         }
     }
 
-    if manifest.version < 2 {
-        log_error("Unsupported shader reload manifest version % in '%'. Expected version 2+.", manifest.version, path);
+    if manifest.version < 3 {
+        log_error("Unsupported shader reload manifest version % in '%'. Expected version 3+.", manifest.version, path);
         return false;
     }
 
@@ -174,30 +187,24 @@ shader_reload_manifest_find_entry :: (manifest: *Shader_Reload_Manifest, entry_i
 
 shader_reload_manifest_find_entry_source_for_manifest :: (manifest: *Shader_Reload_Manifest, entry: *Shader_Reload_Manifest_Entry, using paths: *Shader_Path_Context) -> (string, bool) {
     if !entry || entry.output_source_path.count == 0 return "", false;
-
-    path := entry.output_source_path;
-    if !manifest_path_is_absolute(path) {
-        if workspace_root.count != 0 {
-            path = String.path_join(workspace_root, path);
-        } else if manifest && manifest.source_path.count != 0 {
-            manifest_dir := String.path_strip_filename(manifest.source_path);
-            if manifest_dir.count != 0 path = String.path_join(manifest_dir, path);
-        }
-    }
-
-    verbose_log("source canonical entry=% path=%", entry.entry_id, path);
-    _, _, ok := File_Utilities.file_modtime_and_size(path);
-    if ok {
-        verbose_log("source resolved entry=% path=%", entry.entry_id, path);
-        return path, true;
-    }
-    verbose_log("source missing entry=% path=%", entry.entry_id, path);
-    return "", false;
+    out_path, found := manifest_resolve_existing_file_path(manifest, entry.entry_id, entry.output_source_path, "source", workspace_root);
+    return out_path, found;
 }
 
 shader_reload_manifest_find_entry_source_auto :: (entry: *Shader_Reload_Manifest_Entry) -> (string, bool) {
     paths := make_path_context_auto("");
     return shader_reload_manifest_find_entry_source_for_manifest(null, entry, *paths);
+}
+
+shader_reload_manifest_find_entry_metallib_for_manifest :: (manifest: *Shader_Reload_Manifest, entry: *Shader_Reload_Manifest_Entry, using paths: *Shader_Path_Context) -> (string, bool) {
+    if !entry || entry.output_metallib_path.count == 0 return "", false;
+    out_path, found := manifest_resolve_existing_file_path(manifest, entry.entry_id, entry.output_metallib_path, "metallib", workspace_root);
+    return out_path, found;
+}
+
+shader_reload_manifest_find_entry_metallib_auto :: (entry: *Shader_Reload_Manifest_Entry) -> (string, bool) {
+    paths := make_path_context_auto("");
+    return shader_reload_manifest_find_entry_metallib_for_manifest(null, entry, *paths);
 }
 
 shader_reload_watcher_init_auto :: (watcher: *Shader_Reload_Watcher, app_source_file: string, poll_every_frames: s64 = 15, enabled_by_default: bool = false) -> bool {
@@ -207,6 +214,7 @@ shader_reload_watcher_init_auto :: (watcher: *Shader_Reload_Watcher, app_source_
     watcher.poll_every_frames = max(1, poll_every_frames);
     watcher.last_poll_frame = -1;
     watcher.last_build_ok = true;
+    watcher.last_build_error_message = "";
 
     watcher.enabled = enabled_by_default;
 
@@ -285,7 +293,10 @@ shader_reload_watcher_poll_changed_entry_ids_csv :: (watcher: *Shader_Reload_Wat
 shader_reload_watcher_rebuild_entry_ids :: (watcher: *Shader_Reload_Watcher, changed_entry_ids_csv: string, timeout_ms: s32 = 120000) -> bool {
     if changed_entry_ids_csv.count == 0 return true;
 
-    ok := shader_reload_build_entry_ids_with_context(*watcher.paths, watcher.app_source_file, changed_entry_ids_csv, timeout_ms);
+    build_error: string;
+    ok := shader_reload_build_entry_ids_with_context(*watcher.paths, watcher.app_source_file, changed_entry_ids_csv, timeout_ms, *build_error);
+    manifest_assign_string(*watcher.last_build_error_message, build_error);
+    if build_error.count != 0 free(build_error);
     watcher.last_build_ok = ok;
     if !ok return false;
 
@@ -295,34 +306,47 @@ shader_reload_watcher_rebuild_entry_ids :: (watcher: *Shader_Reload_Watcher, cha
     return true;
 }
 
-shader_reload_build_entry_ids_with_context :: (using paths: *Shader_Path_Context, app_source_file: string, changed_entry_ids_csv: string, timeout_ms: s32 = 120000) -> bool {
+shader_reload_build_entry_ids_with_context :: (using paths: *Shader_Path_Context, app_source_file: string, changed_entry_ids_csv: string, timeout_ms: s32 = 120000, out_error: *string = null) -> bool {
     if app_source_file.count == 0 || changed_entry_ids_csv.count == 0 return false;
+    if out_error manifest_assign_string(out_error, "");
+    resolved_app_source_file := shader_reload_resolve_app_source_file(app_source_file, workspace_root);
+    if resolved_app_source_file.count == 0 {
+        log_error("SHADER_RELOAD could not resolve app source file '%'.", app_source_file);
+        if out_error manifest_assign_string(out_error, tprint("SHADER_RELOAD could not resolve app source file '%'.", app_source_file));
+        return false;
+    }
 
-    verbose_log("build start app=% ids=% cwd=%", app_source_file, changed_entry_ids_csv, build_working_dir);
+    verbose_log("build start app=% resolved=% ids=% cwd=%", app_source_file, resolved_app_source_file, changed_entry_ids_csv, build_working_dir);
     process_result, stdout, stderr, timeout := Process.run_command(
         "jai",
         "build.jai",
         "-",
         "-shader_only",
-        "-shader_entry_ids",
-        changed_entry_ids_csv,
-        app_source_file,
+        resolved_app_source_file,
         working_directory = build_working_dir,
         capture_and_return_output = true,
         timeout_ms = timeout_ms);
 
     if timeout {
         log_error("SHADER_RELOAD build timed out app=% ids=%", app_source_file, changed_entry_ids_csv);
+        if out_error manifest_assign_string(out_error, tprint("SHADER_RELOAD build timed out app=% ids=%", app_source_file, changed_entry_ids_csv));
         return false;
     }
 
     if process_result.type != .EXITED || process_result.exit_code != 0 {
         if stdout.count > 0 write_strings("SHADER_RELOAD stdout:\n", stdout, "\n", to_standard_error = true);
         if stderr.count > 0 write_strings("SHADER_RELOAD stderr:\n", stderr, "\n", to_standard_error = true);
+        app_stem := String.path_strip_extension(String.path_filename(resolved_app_source_file));
+        extracted_stderr := shader_reload_extract_relevant_stderr(stderr, app_stem);
+        if extracted_stderr.count == 0 extracted_stderr = stderr;
+        if extracted_stderr.count == 0 extracted_stderr = stdout;
+        if extracted_stderr.count == 0 extracted_stderr = tprint("Shader build failed with exit code %.", process_result.exit_code);
+        if out_error manifest_assign_string(out_error, extracted_stderr);
         log_error("SHADER_RELOAD build failed app=% ids=%", app_source_file, changed_entry_ids_csv);
         return false;
     }
 
+    if out_error manifest_assign_string(out_error, "");
     verbose_log("build ok app=% ids=%", app_source_file, changed_entry_ids_csv);
     return true;
 }
@@ -421,9 +445,123 @@ manifest_collect_changed_entry_ids_csv :: (manifest: *Shader_Reload_Manifest, ch
     return builder_to_string(*sb);
 }
 
+shader_reload_resolve_app_source_file :: (app_source_file: string, workspace_root: string) -> string {
+    if app_source_file.count == 0 return "";
+
+    candidates: [..] string;
+    candidates.allocator = temp;
+
+    // As-provided value, plus rooted variant for relative paths.
+    array_add(*candidates, app_source_file);
+    if workspace_root.count != 0 && !manifest_path_is_absolute(app_source_file) {
+        array_add(*candidates, String.path_join(workspace_root, app_source_file));
+    }
+
+    stem := app_source_file;
+    if String.ends_with(stem, ".jai") {
+        stem = String.path_filename(stem);
+        stem = String.path_strip_extension(stem);
+    } else if String.contains(stem, "/") || String.contains(stem, "\\") {
+        stem = String.path_filename(stem);
+    }
+
+    if !String.ends_with(app_source_file, ".jai") {
+        if workspace_root.count != 0 {
+            array_add(*candidates, String.path_join(workspace_root, tprint("src/apps/%.jai", stem)));
+            array_add(*candidates, String.path_join(workspace_root, tprint("src/%.jai", stem)));
+        } else {
+            array_add(*candidates, tprint("src/apps/%.jai", stem));
+            array_add(*candidates, tprint("src/%.jai", stem));
+        }
+    }
+
+    for candidates {
+        path := it;
+        if !manifest_path_is_absolute(path) && workspace_root.count != 0 {
+            path = String.path_join(workspace_root, path);
+        }
+        _, _, exists := File_Utilities.file_modtime_and_size(path);
+        if !exists continue;
+        return path;
+    }
+
+    return "";
+}
+
+shader_reload_extract_relevant_stderr :: (stderr: string, app_name: string) -> string {
+    if stderr.count == 0 return "";
+    // TODO: these are fragile. use string constants in a shared module used from the build script.
+    end_marker := tprint("Build FAILED for % (shader-only)", app_name);
+
+    lines: [..] string;
+    for String.split(stderr, #char "\n") array_add(*lines, it);
+
+    start_idx: s64 = -1;
+    end_idx: s64 = -1;
+    for i: 0..lines.count-1 {
+        line := lines[i];
+        if start_idx == -1 {
+            // TODO: these are fragile. use string constants in a shared module used from the build script.
+            if String.contains(line, "In Workspace ") && String.contains(line, "(\"Build shaders") {
+                start_idx = cast(s64) i;
+            }
+        } else {
+            if String.contains(line, end_marker) {
+                end_idx = cast(s64) i;
+                break;
+            }
+        }
+    }
+
+    if start_idx == -1 || end_idx == -1 || end_idx < start_idx {
+        return stderr;
+    }
+
+    sb: String_Builder;
+    for i: start_idx..end_idx {
+        append(*sb, lines[i]);
+        append(*sb, "\n");
+    }
+    return builder_to_string(*sb);
+}
+
+manifest_assign_string :: (dst: *string, src: string) {
+    if !dst return;
+    if dst.*.count != 0 {
+        free(dst.*);
+        dst.* = "";
+    }
+    if src.count != 0 dst.* = copy_string(src);
+}
+
 manifest_string_in_list :: (list: [] string, value: string) -> bool {
     for list if it == value return true;
     return false;
+}
+
+manifest_resolve_existing_file_path :: (manifest: *Shader_Reload_Manifest,
+                                        entry_id: string,
+                                        in_path: string,
+                                        label: string,
+                                        workspace_root: string) -> (string, bool) {
+    path := in_path;
+    if !manifest_path_is_absolute(path) {
+        if workspace_root.count != 0 {
+            path = String.path_join(workspace_root, path);
+        } else if manifest && manifest.source_path.count != 0 {
+            manifest_dir := String.path_strip_filename(manifest.source_path);
+            if manifest_dir.count != 0 path = String.path_join(manifest_dir, path);
+        }
+    }
+
+    verbose_log("% canonical entry=% path=%", label, entry_id, path);
+    _, _, ok := File_Utilities.file_modtime_and_size(path);
+    if ok {
+        verbose_log("% resolved entry=% path=%", label, entry_id, path);
+        return path, true;
+    }
+    verbose_log("% missing entry=% path=%", label, entry_id, path);
+    return "", false;
 }
 
 make_path_context_auto :: (app_source_file: string) -> Shader_Path_Context {

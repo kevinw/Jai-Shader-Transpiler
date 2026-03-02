@@ -81,13 +81,13 @@ emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: 
     if use_metal_argument_buffers && (stage == .Vertex || stage == .Fragment) {
       return ir_run_command_checked(
         tprint("spirv-cross metal %", entry_name),
-        .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--entry", source_entry_name, "--stage", spirv_cross_stage_name(stage), "--msl-argument-buffers", "--msl-force-active-argument-buffer-resources", "--msl-decoration-binding",
+        .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--stage", spirv_cross_stage_name(stage), "--msl-argument-buffers", "--msl-force-active-argument-buffer-resources", "--msl-decoration-binding",
           "--rename-entry-point", source_entry_name, entry_name, spirv_cross_stage_name(stage),
           "--output", output_path]);
     }
     return ir_run_command_checked(
       tprint("spirv-cross metal %", entry_name),
-      .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--entry", source_entry_name, "--stage", spirv_cross_stage_name(stage), "--msl-decoration-binding",
+      .["spirv-cross", spv_path, "--msl", "--msl-version", "30000", "--stage", spirv_cross_stage_name(stage), "--msl-decoration-binding",
         "--rename-entry-point", source_entry_name, entry_name, spirv_cross_stage_name(stage),
         "--output", output_path]);
   }

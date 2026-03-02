@@ -89,6 +89,22 @@ log_nserror :: (label: string, error: *NSError) -> bool {
   return true;
 }
 
+find_compute_function :: (library: *MTLLibrary, proc_name_hint: string) -> *MTLFunction {
+  if !library return null;
+  fn := cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("ComputeMain"));
+  if fn return fn;
+  if proc_name_hint.count != 0 {
+    hinted := tprint("%_ComputeMain", proc_name_hint);
+    fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString(hinted));
+    if fn return fn;
+  }
+  fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("main"));
+  if fn return fn;
+  fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("main_0"));
+  if fn return fn;
+  return null;
+}
+
 run_cpu_compute_dispatch :: (shader_proc: $F, values: *u32) #expand {
   assert(values != null);
   for 0..ELEMENT_COUNT-1 {
@@ -97,7 +113,7 @@ run_cpu_compute_dispatch :: (shader_proc: $F, values: *u32) #expand {
   }
 }
 
-run_metal_compute_and_compare :: (metal_source_path: string, metal_source: string, case_name: string, $cpu_shader_proc: $F) {
+run_metal_compute_and_compare :: (metal_source_path: string, metal_source: string, case_name: string, proc_name_hint: string, $cpu_shader_proc: $F) {
   init_objective_c();
   init_metal();
 
@@ -120,8 +136,8 @@ run_metal_compute_and_compare :: (metal_source_path: string, metal_source: strin
   }
   defer release(library);
 
-  fn_compute := cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("ComputeMain"));
-  if !fn_compute fail("Failed to find compute entry point 'ComputeMain' in %", metal_source_path);
+  fn_compute := find_compute_function(library, proc_name_hint);
+  if !fn_compute fail("Failed to find compute entry point in %", metal_source_path);
   defer release(fn_compute);
 
   error = null;
@@ -190,7 +206,7 @@ main :: () {
     run_command_checked(tprint("[%] Compile generated Vulkan GLSL", case_name),
       .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", "comp", vulkan_glsl_path]);
 
-    run_metal_compute_and_compare(metal_path, metal_source, case_name, compute_branch_shader);
+    run_metal_compute_and_compare(metal_path, metal_source, case_name, "compute_branch_shader", compute_branch_shader);
   }
 
   // Case: branch_alt (different constants to validate parameterized SPIR-V text emission).
@@ -212,7 +228,7 @@ main :: () {
     run_command_checked(tprint("[%] Compile generated Vulkan GLSL", case_name),
       .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", "comp", vulkan_glsl_path]);
 
-    run_metal_compute_and_compare(metal_path, metal_source, case_name, compute_branch_shader_alt);
+    run_metal_compute_and_compare(metal_path, metal_source, case_name, "compute_branch_shader_alt", compute_branch_shader_alt);
   }
 
   // Case: min (smallest shape, no branches).
@@ -234,7 +250,7 @@ main :: () {
     run_command_checked(tprint("[%] Compile generated Vulkan GLSL", case_name),
       .["glslangValidator", "-V", "--target-env", "vulkan1.2", "-S", "comp", vulkan_glsl_path]);
 
-    run_metal_compute_and_compare(metal_path, metal_source, case_name, compute_min_shader);
+    run_metal_compute_and_compare(metal_path, metal_source, case_name, "compute_min_shader", compute_min_shader);
   }
 
   log("[SPIR-V][compute] Passed plugin path: Jai -> IR -> SPIR-V -> spirv-cross -> Metal/GLSL + GPU match.");

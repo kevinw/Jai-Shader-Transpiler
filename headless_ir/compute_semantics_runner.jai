@@ -2491,8 +2491,8 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
   }
   defer release(lib_compute);
 
-  fn_compute := cast(*MTLFunction) MTLLibrary.newFunctionWithName(lib_compute, NSString.getTempString("ComputeMain"));
-  if !fn_compute fail("Failed to find compute entry point 'ComputeMain': %", case_name);
+  fn_compute := find_compute_function(lib_compute, case_name);
+  if !fn_compute fail("Failed to find compute entry point: %", case_name);
   defer release(fn_compute);
 
   error = null;
@@ -2708,8 +2708,8 @@ run_bindless_texture_write_case_metal :: () {
   }
   defer release(lib_compute);
 
-  fn_compute := cast(*MTLFunction) MTLLibrary.newFunctionWithName(lib_compute, NSString.getTempString("ComputeMain"));
-  if !fn_compute fail("Failed to find bindless write compute entry point 'ComputeMain'");
+  fn_compute := find_compute_function(lib_compute, "compute_bindless_write_2d");
+  if !fn_compute fail("Failed to find bindless write compute entry point");
   defer release(fn_compute);
 
   error = null;
@@ -2841,6 +2841,22 @@ g_queue: *MTLCommandQueue;
 g_compile_options: *MTLCompileOptions;
 TIMINGS_ENABLED := false;
 g_compute_timing_totals: Compute_Timing_Totals;
+
+find_compute_function :: (library: *MTLLibrary, proc_name_hint: string) -> *MTLFunction {
+  if !library return null;
+  fn := cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("ComputeMain"));
+  if fn return fn;
+  if proc_name_hint.count != 0 {
+    hinted := tprint("%_ComputeMain", proc_name_hint);
+    fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString(hinted));
+    if fn return fn;
+  }
+  fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("main"));
+  if fn return fn;
+  fn = cast(*MTLFunction) MTLLibrary.newFunctionWithName(library, NSString.getTempString("main_0"));
+  if fn return fn;
+  return null;
+}
 
 log_nserror :: (label: string, error: *NSError) -> bool {
   if !error return false;

@@ -77,11 +77,11 @@ ir_metal_split_top_level_decls :: (source: string, out_preamble: *string, out_de
       if ch == #char ")" && paren_depth > 0 paren_depth -= 1;
       if ch == #char "{" {
         brace_depth += 1;
-        saw_block = true;
+        if paren_depth == 0 saw_block = true;
       }
       if ch == #char "}" && brace_depth > 0 {
         brace_depth -= 1;
-        if brace_depth == 0 && saw_block {
+        if brace_depth == 0 && saw_block && paren_depth == 0 {
           cursor := i + 1;
           while cursor < source.count && (source[cursor] == #char " " || source[cursor] == #char "\t" || source[cursor] == #char "\r" || source[cursor] == #char "\n") {
             cursor += 1;
