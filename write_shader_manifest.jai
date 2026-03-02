@@ -406,7 +406,16 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
   }
 
   latest_path := tprint("%/shader_reload_manifest_latest.txt", DEBUG_OUTDIR);
-  
-  write_ok := write_entire_file(latest_path, manifest_text);
-  if !write_ok compiler_report(tprint("Could not write to file '%'", latest_path));
+  latest_tmp_path := tprint("%/shader_reload_manifest_latest_%.tmp", DEBUG_OUTDIR, formatInt(manifest_set_hash, base=16));
+
+  tmp_ok := write_entire_file(latest_tmp_path, manifest_text);
+  if !tmp_ok {
+    compiler_report(tprint("Could not write temporary manifest file '%'", latest_tmp_path));
+    return;
+  }
+
+  move_ok := file_move(latest_tmp_path, latest_path);
+  if !move_ok {
+    compiler_report(tprint("Could not atomically update manifest '%'", latest_path));
+  }
 }

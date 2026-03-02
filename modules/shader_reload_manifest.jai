@@ -141,8 +141,19 @@ shader_reload_manifest_load :: (manifest: *Shader_Reload_Manifest, path: string)
         }
     }
 
+    if in_entry {
+        log_error("Invalid shader reload manifest '%': unterminated entry_begin/entry_end block.", path);
+        return false;
+    }
+
     if manifest.version < 3 {
         log_error("Unsupported shader reload manifest version % in '%'. Expected version 3+.", manifest.version, path);
+        return false;
+    }
+
+    if manifest.declared_entry_count >= 0 && manifest.entries.count != manifest.declared_entry_count {
+        log_error("Invalid shader reload manifest '%': entry_count mismatch (declared %, parsed %).",
+            path, manifest.declared_entry_count, manifest.entries.count);
         return false;
     }
 
@@ -155,18 +166,26 @@ shader_reload_manifest_load_latest :: (manifest: *Shader_Reload_Manifest) -> boo
 }
 
 shader_reload_manifest_load_with_context :: (manifest: *Shader_Reload_Manifest, using paths: *Shader_Path_Context) -> bool {
+    MANIFEST_LOAD_RETRY_ATTEMPTS :: 5;
+    MANIFEST_LOAD_RETRY_BACKOFF_MS :: 10;
+
     candidate_paths: [..] string;
     candidate_paths.allocator = temp;
     if manifest_latest_path.count != 0 array_add(*candidate_paths, manifest_latest_path);
     if generated_dir.count != 0 array_add(*candidate_paths, tprint("%/shader_reload_manifest_latest.txt", generated_dir));
 
-    for candidate_paths {
-        verbose_log("manifest candidate=%", it);
-        _, _, exists := File_Utilities.file_modtime_and_size(it);
-        if !exists continue;
-        if shader_reload_manifest_load(manifest, it) {
-            verbose_log("manifest loaded=%", it);
-            return true;
+    for attempt: 0..MANIFEST_LOAD_RETRY_ATTEMPTS-1 {
+        for candidate_paths {
+            verbose_log("manifest candidate=% attempt=%", it, attempt + 1);
+            _, _, exists := File_Utilities.file_modtime_and_size(it);
+            if !exists continue;
+            if shader_reload_manifest_load(manifest, it) {
+                verbose_log("manifest loaded=% attempt=%", it, attempt + 1);
+                return true;
+            }
+        }
+        if attempt + 1 < MANIFEST_LOAD_RETRY_ATTEMPTS {
+            sleep_milliseconds(MANIFEST_LOAD_RETRY_BACKOFF_MS);
         }
     }
     verbose_log("manifest load failed (root=% generated=%).", workspace_root, generated_dir);
