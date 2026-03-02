@@ -176,6 +176,8 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"inner_proc", .Bare},
   {"struct_in_proc_body", .Bare},
   {"used_struct_in_proc_body", .Bare},
+  
+  {"early_return", .Bare},
 ];
 
 ELEMENT_COUNT :: 64;
@@ -2421,6 +2423,19 @@ used_struct_in_proc_body :: (using in: Compute_Semantics_In, values: *u32) {
     if thread_id.x >= ELEMENT_COUNT return;
     my_struct := My_Struct.{ {1, 2, 3} };
     values[thread_id.x] = thread_id.x * cast(u32)my_struct.pos.z;
+} @compute_shader
+
+early_return_helper :: (val: u32) -> u32 {
+    return 5;
+    if val > 10 {
+        return 15;
+    }
+    return val;
+}
+
+early_return :: (using in: Compute_Semantics_In, values: *u32) {
+    if thread_id.x >= ELEMENT_COUNT return;
+    values[thread_id.x] = early_return_helper(thread_id.x);
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {

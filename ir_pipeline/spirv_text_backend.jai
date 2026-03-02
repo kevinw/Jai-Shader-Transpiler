@@ -1846,6 +1846,20 @@ eval_inline_function_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Function
     //   if (...) { ...return... } else { ...return... }
     for i: 0..block.statements.count-2 {
       pre_stmt := *block.statements[i];
+      if pre_stmt.kind == .RETURN {
+        if !pre_stmt.return_expr {
+          return 0, .UNKNOWN, false, true, make_diag("helper '%' must return a value.", helper.name);
+        }
+        raw_id, raw_type, raw_ok, raw_diag := emit_expr(s, pre_stmt.return_expr);
+        if !raw_ok return 0, .UNKNOWN, false, true, raw_diag;
+        coerced_id, coerced_type, coerced_ok, coerced_diag := coerce_to_exact_kind(s, raw_id, raw_type, return_kind);
+        if !coerced_ok {
+          if coerced_diag.message.count == 0 coerced_diag.message = tprint("SPIR-V backend: helper '%' return expression must lower to %.", helper.name, return_kind);
+          return 0, .UNKNOWN, false, true, coerced_diag;
+        }
+        // Early top-level return with dead trailing statements.
+        return coerced_id, coerced_type, true, true, diag;
+      }
       pre_ok, pre_terminated, pre_diag := emit_stmt(s, pre_stmt);
       if !pre_ok return 0, .UNKNOWN, false, true, pre_diag;
       if pre_terminated {
