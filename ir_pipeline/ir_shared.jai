@@ -241,6 +241,13 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         // They are not value declarations in lowered IR blocks.
         return true;
       }
+      if decl.expression && (decl.expression.kind == .TYPE_DEFINITION ||
+                             decl.expression.kind == .TYPE_INSTANTIATION ||
+                             decl.expression.kind == .STRUCT ||
+                             decl.expression.kind == .ENUM) {
+        // Local type declarations are compile-time only and should not produce runtime IR statements.
+        return true;
+      }
 
       decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
       out_stmt: IR_Stmt;

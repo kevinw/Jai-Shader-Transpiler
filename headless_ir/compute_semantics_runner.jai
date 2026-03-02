@@ -174,6 +174,8 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"helper_scalar_arg_shadow_capture", .Bare},
   
   {"inner_proc", .Bare},
+  {"struct_in_proc_body", .Bare},
+  {"used_struct_in_proc_body", .Bare},
 ];
 
 ELEMENT_COUNT :: 64;
@@ -2402,6 +2404,23 @@ inner_proc :: (using in: Compute_Semantics_In, values: *u32) {
     idx := thread_id.x;
     values[idx] = idx;
     inner_example_proc(*values[idx]);
+} @compute_shader
+
+struct_in_proc_body :: (using in: Compute_Semantics_In, values: *u32) {
+    My_Struct :: struct {
+        pos: Vector3;
+    }
+    if thread_id.x >= ELEMENT_COUNT return;
+    values[thread_id.x] = thread_id.x;
+} @compute_shader
+
+used_struct_in_proc_body :: (using in: Compute_Semantics_In, values: *u32) {
+    My_Struct :: struct {
+        pos: Vector3;
+    }
+    if thread_id.x >= ELEMENT_COUNT return;
+    my_struct := My_Struct.{ {1, 2, 3} };
+    values[thread_id.x] = thread_id.x * cast(u32)my_struct.pos.z;
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {
