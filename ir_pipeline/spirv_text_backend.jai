@@ -773,6 +773,45 @@ spv_vector_component_in_range :: (vec_type: IR_SPV_Gen_Type, comp_index: s64) ->
   return false;
 }
 
+spv_extract_vector_member :: (s: *IR_SPV_Gen_State, vec_id: s64, vec_type: IR_SPV_Gen_Type, access: IR_Member_Access_Kind, field_text: string) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(msg, ..args); }
+  assert(s != null);
+
+  if access == .SWIZZLE_XY {
+    if vec_type == .FLOAT2 return vec_id, .FLOAT2, true, {};
+    swz := new_id(s);
+    add_op(s, tprint("         % = OpVectorShuffle % % % 0 1",
+                     id_text(swz),
+                     id_text(s.id_float2),
+                     id_text(vec_id),
+                     id_text(vec_id)));
+    return swz, .FLOAT2, true, {};
+  }
+
+  if access == .SWIZZLE_XYZ {
+    if vec_type == .FLOAT3 return vec_id, .FLOAT3, true, {};
+    if vec_type != .FLOAT4 return_err("swizzle '%': expected float3/float4, got %.", field_text, vec_type);
+    swz := new_id(s);
+    add_op(s, tprint("         % = OpVectorShuffle % % % 0 1 2",
+                     id_text(swz),
+                     id_text(s.id_float3),
+                     id_text(vec_id),
+                     id_text(vec_id)));
+    return swz, .FLOAT3, true, {};
+  }
+
+  comp_index, comp_ok := spv_member_component_index(access);
+  if !comp_ok return_err("unsupported vector member access '%'.", field_text);
+  if !spv_vector_component_in_range(vec_type, comp_index) return_err("component '%' out of range for type %.", field_text, vec_type);
+  scalar_value := new_id(s);
+  add_op(s, tprint("         % = OpCompositeExtract % % %",
+                   id_text(scalar_value),
+                   id_text(s.id_float),
+                   id_text(vec_id),
+                   comp_index));
+  return scalar_value, .FLOAT, true, {};
+}
+
 apply_buffer_base_index :: (s: *IR_SPV_Gen_State, buffer: *IR_SPV_Gen_Buffer, idx: s64) -> s64 {
   if !buffer || !buffer.has_base_index return idx;
   out := new_id(s);
@@ -1010,7 +1049,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     cpu_offset: s64 = 0;
     cpu_max_align: s64 = 1;
     for struct_def.fields {
-      field_type := spv_kind_from_ir_type(it.type);
+      field_type := spv_kind_from_ir_type_for_layout(s, it.type);
       field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
       if field_type == .UNKNOWN {
         return_err("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, field_type_name);
@@ -1297,6 +1336,110 @@ copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct
   return true, diag;
 }
 
+store_value_in_local_struct_alias :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, value_id: s64, value_type: IR_SPV_Gen_Type) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  if !dst return false, make_diag("null destination struct for alias store.");
+
+  if dst.fields.count == 1 {
+    field := dst.fields[0];
+    if field.type == value_type {
+      type_id := type_id_from_kind(s, value_type);
+      if type_id == 0 return false, make_diag("unsupported alias store type % for '%'.", value_type, dst.type_name);
+      add_op(s, "OpStore", field.ptr_id, value_id);
+      return true, {};
+    }
+  }
+
+  expected_count: s64 = 0;
+  vector_type_id: s64 = 0;
+  if value_type == .FLOAT2 { expected_count = 2; vector_type_id = s.id_float2; }
+  if value_type == .FLOAT3 { expected_count = 3; vector_type_id = s.id_float3; }
+  if value_type == .FLOAT4 { expected_count = 4; vector_type_id = s.id_float4; }
+  if expected_count != dst.fields.count || expected_count == 0 {
+    return false, make_diag("cannot map alias value type % into struct '%'.", value_type, dst.type_name);
+  }
+
+  for dst.fields {
+    if it.type != .FLOAT || it.nested_struct_name.count != 0 {
+      return false, make_diag("struct '%' is not a flat float alias.", dst.type_name);
+    }
+    component_value := new_id(s);
+    add_op(s, tprint("         % = OpCompositeExtract % % %",
+                     id_text(component_value),
+                     id_text(s.id_float),
+                     id_text(value_id),
+                     it_index));
+    add_op(s, "OpStore", it.ptr_id, component_value);
+  }
+  _ = vector_type_id;
+  return true, {};
+}
+
+pack_local_struct_alias_to_value :: (s: *IR_SPV_Gen_State, src: *IR_SPV_Gen_Local_Struct, dst_type: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  if !src return 0, .UNKNOWN, false, make_diag("null source struct for alias pack.");
+
+  if src.fields.count == 1 {
+    field := src.fields[0];
+    if field.type == dst_type {
+      type_id := type_id_from_kind(s, dst_type);
+      if type_id == 0 return 0, .UNKNOWN, false, make_diag("unsupported alias pack type % from '%'.", dst_type, src.type_name);
+      value := new_id(s);
+      add_op(s, value, "OpLoad", type_id, field.ptr_id);
+      return value, dst_type, true, {};
+    }
+  }
+
+  expected_count: s64 = 0;
+  vector_type_id: s64 = 0;
+  if dst_type == .FLOAT2 { expected_count = 2; vector_type_id = s.id_float2; }
+  if dst_type == .FLOAT3 { expected_count = 3; vector_type_id = s.id_float3; }
+  if dst_type == .FLOAT4 { expected_count = 4; vector_type_id = s.id_float4; }
+  if expected_count != src.fields.count || expected_count == 0 {
+    return 0, .UNKNOWN, false, make_diag("cannot map struct '%' into alias type %.", src.type_name, dst_type);
+  }
+
+  component_values: [4]s64;
+  for src.fields {
+    if it.type != .FLOAT || it.nested_struct_name.count != 0 {
+      return 0, .UNKNOWN, false, make_diag("struct '%' is not a flat float alias.", src.type_name);
+    }
+    component_values[it_index] = new_id(s);
+    add_op(s, component_values[it_index], "OpLoad", s.id_float, it.ptr_id);
+  }
+
+  out := new_id(s);
+  if dst_type == .FLOAT2 {
+    add_op(s, tprint("         % = OpCompositeConstruct % % %",
+                     id_text(out),
+                     id_text(vector_type_id),
+                     id_text(component_values[0]),
+                     id_text(component_values[1])));
+    return out, dst_type, true, {};
+  }
+  if dst_type == .FLOAT3 {
+    add_op(s, tprint("         % = OpCompositeConstruct % % % %",
+                     id_text(out),
+                     id_text(vector_type_id),
+                     id_text(component_values[0]),
+                     id_text(component_values[1]),
+                     id_text(component_values[2])));
+    return out, dst_type, true, {};
+  }
+  if dst_type == .FLOAT4 {
+    add_op(s, tprint("         % = OpCompositeConstruct % % % % %",
+                     id_text(out),
+                     id_text(vector_type_id),
+                     id_text(component_values[0]),
+                     id_text(component_values[1]),
+                     id_text(component_values[2]),
+                     id_text(component_values[3])));
+    return out, dst_type, true, {};
+  }
+
+  return 0, .UNKNOWN, false, make_diag("cannot pack struct '%' into alias type %.", src.type_name, dst_type);
+}
+
 init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, expr: *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
@@ -1405,21 +1548,8 @@ emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, fiel
   diag: IR_Diagnostic;
   if !subscript || subscript.kind != .SUBSCRIPT return_err("expected subscript expression for buffer struct field access.");
 
-  buffer_name, base_ok := resolve_ident_or_zero_deref(subscript.left);
-  if base_ok {
-    // already resolved
-  } else if subscript.left && subscript.left.kind == .MEMBER {
-    member_root, member_field, member_ok := resolve_member_root_and_field(subscript.left);
-    if member_ok {
-      buffer_name = tprint("%.%", member_root, member_field);
-    } else {
-      member_path, member_path_ok := resolve_member_path(subscript.left);
-      if !member_path_ok return_err("subscript base must resolve to a buffer identifier/member.");
-      buffer_name = member_path;
-    }
-  } else {
-    return_err("subscript base must resolve to a buffer identifier/member.");
-  }
+  buffer_name, base_ok := resolve_buffer_name_from_expr(subscript.left);
+  if !base_ok return_err("subscript base must resolve to a buffer identifier/member.");
 
   buffer := find_buffer(s, buffer_name);
   if !buffer return_err("unknown subscript base '%'.", buffer_name);
@@ -1983,6 +2113,47 @@ spv_kind_from_ir_type :: (type: IR_Type) -> IR_SPV_Gen_Type {
   return .UNKNOWN;
 }
 
+spv_kind_from_struct_alias :: (s: *IR_SPV_Gen_State, struct_name: string) -> IR_SPV_Gen_Type {
+  if !s || struct_name.count == 0 return .UNKNOWN;
+  st := find_struct(s, struct_name);
+  if !st return .UNKNOWN;
+
+  if st.fields.count == 1 {
+    k := spv_kind_from_ir_type_kind(st.fields[0].type.kind);
+    if k == .FLOAT || k == .FLOAT2 || k == .FLOAT3 || k == .FLOAT4 || k == .FLOAT2X2 return k;
+  }
+
+  if st.fields.count == 2 {
+    a := spv_kind_from_ir_type_kind(st.fields[0].type.kind);
+    b := spv_kind_from_ir_type_kind(st.fields[1].type.kind);
+    if a == .FLOAT && b == .FLOAT return .FLOAT2;
+  }
+  if st.fields.count == 3 {
+    a := spv_kind_from_ir_type_kind(st.fields[0].type.kind);
+    b := spv_kind_from_ir_type_kind(st.fields[1].type.kind);
+    c := spv_kind_from_ir_type_kind(st.fields[2].type.kind);
+    if a == .FLOAT && b == .FLOAT && c == .FLOAT return .FLOAT3;
+  }
+  if st.fields.count == 4 {
+    a := spv_kind_from_ir_type_kind(st.fields[0].type.kind);
+    b := spv_kind_from_ir_type_kind(st.fields[1].type.kind);
+    c := spv_kind_from_ir_type_kind(st.fields[2].type.kind);
+    d := spv_kind_from_ir_type_kind(st.fields[3].type.kind);
+    if a == .FLOAT && b == .FLOAT && c == .FLOAT && d == .FLOAT return .FLOAT4;
+  }
+
+  return .UNKNOWN;
+}
+
+spv_kind_from_ir_type_for_layout :: (s: *IR_SPV_Gen_State, type: IR_Type) -> IR_SPV_Gen_Type {
+  kind := spv_kind_from_ir_type(type);
+  if kind == .STRUCT {
+    alias_kind := spv_kind_from_struct_alias(s, spv_struct_name_from_ir_type(type));
+    if alias_kind != .UNKNOWN return alias_kind;
+  }
+  return kind;
+}
+
 spv_struct_name_from_ir_type :: (type: IR_Type) -> string {
   if type.kind != .STRUCT return "";
   return ir_string_first_non_empty(type.struct_name, type.display_name);
@@ -2037,7 +2208,24 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
   if !source_buffer {
     return true, false, make_diag("helper '%' pointer arg '%' expected storage buffer identifier, got '%'.", helper_name, arg.name, buffer_name);
   }
-  if arg.type.pointee_kind == .STRUCT || expected_kind == .STRUCT {
+  if arg.type.pointee_kind == .FIXED_ARRAY {
+    expected_elem := spv_kind_from_ir_type_kind(arg.type.pointee_element_kind);
+    if expected_elem == .UNKNOWN {
+      return true, false, make_diag("helper '%' pointer arg '%' fixed-array pointee has unsupported element kind %.", helper_name, arg.name, arg.type.pointee_element_kind);
+    }
+    if expected_elem == .STRUCT {
+      if source_buffer.element_kind != .STRUCT {
+        return true, false, make_diag("helper '%' pointer arg '%' expected struct-array buffer pointee '%'.", helper_name, arg.name, arg.type.pointee_element_struct_name);
+      }
+      if arg.type.pointee_element_struct_name.count != 0 && source_buffer.element_struct_name != arg.type.pointee_element_struct_name {
+        return true, false, make_diag("helper '%' pointer arg '%' pointee mismatch (expected '%', got '%').", helper_name, arg.name, arg.type.pointee_element_struct_name, source_buffer.element_struct_name);
+      }
+    } else {
+      if source_buffer.element_kind != expected_elem {
+        return true, false, make_diag("helper '%' pointer arg '%' pointee mismatch (expected %, got %).", helper_name, arg.name, expected_elem, source_buffer.element_kind);
+      }
+    }
+  } else if arg.type.pointee_kind == .STRUCT || expected_kind == .STRUCT {
     if source_buffer.element_kind != .STRUCT {
       return true, false, make_diag("helper '%' pointer arg '%' expected struct buffer pointee '%'.", helper_name, arg.name, arg.type.pointee_struct_name);
     }
@@ -2140,19 +2328,27 @@ bind_inline_function_struct_arg :: (s: *IR_SPV_Gen_State, function_name: string,
   arg_struct, arg_struct_ok, arg_struct_diag := alloc_local_struct(s, arg.name, arg_struct_name);
   if !arg_struct_ok return false, arg_struct_diag;
 
-  if arg_expr && arg_expr.kind == .SUBSCRIPT && arg_expr.left && arg_expr.left.kind == .IDENT {
-    src_buffer := find_buffer(s, arg_expr.left.text);
+  if arg_expr && arg_expr.kind == .SUBSCRIPT {
+    src_buffer_name, src_buffer_name_ok := resolve_buffer_name_from_expr(arg_expr.left);
+    src_buffer := ifx src_buffer_name_ok then find_buffer(s, src_buffer_name) else null;
     if src_buffer && src_buffer.element_kind == .STRUCT && src_buffer.element_struct_name == arg_struct_name {
       for arg_struct.fields {
         src_ptr, src_type, src_ok, src_diag := emit_buffer_struct_field_ptr(s, arg_expr, it.name);
         if !src_ok return false, src_diag;
-        if src_type != it.type {
-          return false, make_diag("helper '%' struct arg field '%' type mismatch.", function_name, it.name);
-        }
         value_id := new_id(s);
         type_id := type_id_from_kind(s, src_type);
         emit_load(s, value_id, type_id, src_ptr, src_type, needs_physical_align=true);
-        add_op(s, "OpStore", it.ptr_id, value_id);
+        if it.type == .STRUCT {
+          nested_dst := find_local_struct(s, it.nested_struct_name);
+          if !nested_dst return false, make_diag("helper '%' struct arg nested field '%' destination is missing.", function_name, it.name);
+          nested_ok, nested_diag := store_value_in_local_struct_alias(s, nested_dst, value_id, src_type);
+          if !nested_ok return false, make_diag("helper '%' struct arg nested field '%' alias init failed: %", function_name, it.name, nested_diag.message);
+        } else {
+          if src_type != it.type {
+            return false, make_diag("helper '%' struct arg field '%' type mismatch.", function_name, it.name);
+          }
+          add_op(s, "OpStore", it.ptr_id, value_id);
+        }
       }
       return true, diag;
     }
@@ -2709,21 +2905,30 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         helper_ret_text := helper.return_type.display_name;
         if helper_ret_text.count == 0 helper_ret_text = spv_struct_name_from_ir_type(helper.return_type);
         if helper_ret_text.count == 0 helper_ret_text = "<unknown>";
-        if helper_ret_kind != .STRUCT return_err("member access on non-struct call return '%'.", helper_ret_text);
-        temp_name := tprint("__call_ret_%", new_id(s));
-        helper_ret_struct_name := spv_struct_name_from_ir_type(helper.return_type);
-        temp_struct, temp_ok, temp_diag := alloc_local_struct(s, temp_name, helper_ret_struct_name);
-        if !temp_ok return 0, .UNKNOWN, false, temp_diag;
-        call_ok, call_diag := eval_inline_function_to_struct(s, helper, expr.left.args, temp_struct);
-        if !call_ok return 0, .UNKNOWN, false, call_diag;
-        temp_struct = find_local_struct(s, temp_name);
-        if !temp_struct return_err("inline helper result struct '%' went missing.", temp_name);
-        field := find_local_struct_field(temp_struct, expr.text);
-        if !field return_err("helper call return type '%' has no field '%'.", helper_ret_text, expr.text);
-        value_id := new_id(s);
-        type_id := type_id_from_kind(s, field.type);
-        add_op(s, value_id, "OpLoad", type_id, field.ptr_id);
-        return value_id, field.type, true, diag;
+        if helper_ret_kind == .STRUCT {
+          temp_name := tprint("__call_ret_%", new_id(s));
+          helper_ret_struct_name := spv_struct_name_from_ir_type(helper.return_type);
+          temp_struct, temp_ok, temp_diag := alloc_local_struct(s, temp_name, helper_ret_struct_name);
+          if !temp_ok return 0, .UNKNOWN, false, temp_diag;
+          call_ok, call_diag := eval_inline_function_to_struct(s, helper, expr.left.args, temp_struct);
+          if !call_ok return 0, .UNKNOWN, false, call_diag;
+          temp_struct = find_local_struct(s, temp_name);
+          if !temp_struct return_err("inline helper result struct '%' went missing.", temp_name);
+          field := find_local_struct_field(temp_struct, expr.text);
+          if !field return_err("helper call return type '%' has no field '%'.", helper_ret_text, expr.text);
+          value_id := new_id(s);
+          type_id := type_id_from_kind(s, field.type);
+          add_op(s, value_id, "OpLoad", type_id, field.ptr_id);
+          return value_id, field.type, true, diag;
+        }
+        if helper_ret_kind == .FLOAT2 || helper_ret_kind == .FLOAT3 || helper_ret_kind == .FLOAT4 {
+          helper_value_id, helper_value_type, helper_ok, helper_diag := eval_inline_function(s, helper, expr.left.args);
+          if !helper_ok return 0, .UNKNOWN, false, helper_diag;
+          member_id, member_type, member_ok, member_diag := spv_extract_vector_member(s, helper_value_id, helper_value_type, expr.member_access, expr.text);
+          if !member_ok return 0, .UNKNOWN, false, member_diag;
+          return member_id, member_type, true, diag;
+        }
+        return_err("member access on unsupported call return '%'.", helper_ret_text);
       }
       if expr.left && expr.left.kind == .SUBSCRIPT {
         field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left, expr.text);
@@ -2749,28 +2954,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !skip_direct_left_eval {
           left_id, left_type, left_ok, left_diag := emit_expr(s, expr.left);
           if left_ok && (left_type == .FLOAT2 || left_type == .FLOAT3 || left_type == .FLOAT4) {
-            if expr.member_access == .SWIZZLE_XY {
-              if left_type == .FLOAT2 return left_id, .FLOAT2, true, diag;
-              swz := new_id(s);
-              add_op(s, tprint("         % = OpVectorShuffle % % % 0 1",
-                               id_text(swz),
-                               id_text(s.id_float2),
-                               id_text(left_id),
-                               id_text(left_id)));
-              return swz, .FLOAT2, true, diag;
-            }
-            comp_index, comp_ok := spv_member_component_index(expr.member_access);
-            if !comp_ok comp_index = -1;
-            if comp_index >= 0 {
-              if !spv_vector_component_in_range(left_type, comp_index) return_err("component '%' out of range for type %.", expr.text, left_type);
-              scalar_value := new_id(s);
-              add_op(s, tprint("         % = OpCompositeExtract % % %",
-                               id_text(scalar_value),
-                               id_text(s.id_float),
-                               id_text(left_id),
-                               comp_index));
-              return scalar_value, .FLOAT, true, diag;
-            }
+            member_id, member_type, member_ok, member_diag := spv_extract_vector_member(s, left_id, left_type, expr.member_access, expr.text);
+            if member_ok return member_id, member_type, true, diag;
+            return 0, .UNKNOWN, false, member_diag;
           }
           if !left_ok && expr.left.kind != .IDENT {
             return 0, .UNKNOWN, false, left_diag;
@@ -2790,33 +2976,30 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
         local := find_local(s, expr.left.text);
         if local && (local.type == .FLOAT2 || local.type == .FLOAT3 || local.type == .FLOAT4) {
-          comp_index, comp_ok := spv_member_component_index(expr.member_access);
-          if !comp_ok comp_index = -1;
           vec_value := new_id(s);
           vec_type_id := s.id_float4;
           if local.type == .FLOAT2 vec_type_id = s.id_float2;
           if local.type == .FLOAT3 vec_type_id = s.id_float3;
           add_op(s, vec_value, "OpLoad", vec_type_id, local.ptr_id);
-          if expr.member_access == .SWIZZLE_XY {
-            if local.type == .FLOAT2 return vec_value, .FLOAT2, true, diag;
-            swz := new_id(s);
-            add_op(s, tprint("         % = OpVectorShuffle % % % 0 1",
-                             id_text(swz),
-                             id_text(s.id_float2),
-                             id_text(vec_value),
-                             id_text(vec_value)));
-            return swz, .FLOAT2, true, diag;
+          member_id, member_type, member_ok, member_diag := spv_extract_vector_member(s, vec_value, local.type, expr.member_access, expr.text);
+          if member_ok return member_id, member_type, true, diag;
+          return 0, .UNKNOWN, false, member_diag;
+        }
+      }
+      if expr.left && expr.left.kind == .MEMBER &&
+         expr.left.left && expr.left.left.kind == .SUBSCRIPT {
+        field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
+        if field_ok {
+          if field_type != .FLOAT2 && field_type != .FLOAT3 && field_type != .FLOAT4 {
+            return_err("unsupported member expression '%'.", path);
           }
-          if comp_index >= 0 {
-            if !spv_vector_component_in_range(local.type, comp_index) return_err("component '%' out of range for type %.", expr.text, local.type);
-            scalar_value := new_id(s);
-            add_op(s, tprint("         % = OpCompositeExtract % % %",
-                             id_text(scalar_value),
-                             id_text(s.id_float),
-                             id_text(vec_value),
-                             comp_index));
-            return scalar_value, .FLOAT, true, diag;
-          }
+          field_type_id := type_id_from_kind(s, field_type);
+          if field_type_id == 0 return_err("unsupported loaded field type for '%'.", path);
+          field_value := new_id(s);
+          emit_load(s, field_value, field_type_id, field_ptr, field_type, needs_physical_align=true);
+          member_id, member_type, member_ok, member_diag := spv_extract_vector_member(s, field_value, field_type, expr.member_access, expr.text);
+          if !member_ok return 0, .UNKNOWN, false, member_diag;
+          return member_id, member_type, true, diag;
         }
       }
       if expr.left && expr.left.kind == .IDENT {
@@ -3934,19 +4117,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             add_op(s, "OpStore", dst_field.ptr_id, src_value);
           }
         } else if stmt.decl_init.kind == .SUBSCRIPT {
-          buffer_name: string;
-          base_ok := false;
-          resolved_name, resolved_ok := resolve_ident_or_zero_deref(stmt.decl_init.left);
-          if resolved_ok {
-            buffer_name = resolved_name;
-            base_ok = true;
-          } else if stmt.decl_init.left && stmt.decl_init.left.kind == .MEMBER {
-            member_root, member_field, member_ok := resolve_member_root_and_field(stmt.decl_init.left);
-            if member_ok {
-              buffer_name = tprint("%.%", member_root, member_field);
-              base_ok = true;
-            }
-          }
+          buffer_name, base_ok := resolve_buffer_name_from_expr(stmt.decl_init.left);
           if !base_ok {
             return_err("struct declaration '%': unsupported subscript initializer '%'.", stmt.decl_name, expr_text(stmt.decl_init));
           }
@@ -3956,18 +4127,24 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           }
           for struct_def.fields {
             dst_field := local_struct.fields[it_index];
-            if dst_field.type == .STRUCT {
-              return_err("struct declaration '%': nested struct buffer initializers are unsupported for field '%'.", stmt.decl_name, it.name);
-            }
             src_ptr, src_type, src_ok, src_diag := emit_buffer_struct_field_ptr(s, stmt.decl_init, it.name);
             if !src_ok return false, false, src_diag;
-            if src_type != dst_field.type {
-              return_err("struct declaration '%': field '%' type mismatch in buffer initializer.", stmt.decl_name, it.name);
-            }
             src_value := new_id(s);
             src_type_id := type_id_from_kind(s, src_type);
             emit_load(s, src_value, src_type_id, src_ptr, src_type, needs_physical_align=true);
-            add_op(s, "OpStore", dst_field.ptr_id, src_value);
+            if dst_field.type == .STRUCT {
+              dst_nested := find_local_struct(s, dst_field.nested_struct_name);
+              if !dst_nested {
+                return_err("struct declaration '%': nested struct destination missing for field '%'.", stmt.decl_name, it.name);
+              }
+              nested_ok, nested_diag := store_value_in_local_struct_alias(s, dst_nested, src_value, src_type);
+              if !nested_ok return false, false, make_diag("struct declaration '%': nested field '%' alias init failed: %", stmt.decl_name, it.name, nested_diag.message);
+            } else {
+              if src_type != dst_field.type {
+                return_err("struct declaration '%': field '%' type mismatch in buffer initializer.", stmt.decl_name, it.name);
+              }
+              add_op(s, "OpStore", dst_field.ptr_id, src_value);
+            }
           }
         } else if stmt.decl_init.kind == .CALL && stmt.decl_init.left && stmt.decl_init.left.kind == .IDENT {
           helper := find_function(s, stmt.decl_init.left.text);
@@ -4052,6 +4229,19 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             src_field := find_local_struct_field(src_struct, it.name);
             if !src_field {
               return_err("struct assignment source missing field '%'.", it.name);
+            }
+            if src_field.type == .STRUCT {
+              src_nested := find_local_struct(s, src_field.nested_struct_name);
+              if !src_nested {
+                return_err("struct assignment source nested field '%' missing.", it.name);
+              }
+              packed_id, packed_type, packed_ok, packed_diag := pack_local_struct_alias_to_value(s, src_nested, it.type);
+              if !packed_ok return false, false, make_diag("struct assignment nested field '%' pack failed: %", it.name, packed_diag.message);
+              if packed_type != it.type {
+                return_err("struct assignment nested field '%' type mismatch.", it.name);
+              }
+              emit_store(s, dst_ptr, packed_id, it.type, needs_physical_align=true);
+              continue;
             }
             if src_field.type != it.type {
               return_err("struct assignment field '%' type mismatch.", it.name);

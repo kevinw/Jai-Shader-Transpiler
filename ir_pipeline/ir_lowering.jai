@@ -1463,6 +1463,7 @@ ir_member_access_kind_from_name :: (field_name: string) -> IR_Member_Access_Kind
   if field_name == "z" return .COMPONENT_Z;
   if field_name == "w" return .COMPONENT_W;
   if field_name == "xy" return .SWIZZLE_XY;
+  if field_name == "xyz" return .SWIZZLE_XYZ;
   return .NONE;
 }
 

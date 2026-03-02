@@ -138,10 +138,24 @@ IR_Headless_Compute_Boid_State :: struct {
 }
 
 IR_Headless_Vector_Field_Count :: 65536;
+IR_Headless_Fixed_Pointer_Count :: 64;
 
 IR_Headless_Compute_Sim_Params :: struct {
   src: *IR_Headless_Compute_Boid_State;
   dst: *IR_Headless_Compute_Boid_State;
+}
+
+IR_Headless_Float4_Alias :: struct {
+  x, y, z, w: float;
+}
+
+IR_Headless_Compute_Alias_Item :: struct {
+  center_radius: IR_Headless_Float4_Alias;
+  delta_pad: IR_Headless_Float4_Alias;
+}
+
+IR_Headless_Compute_Alias_Root :: struct {
+  items: *IR_Headless_Compute_Alias_Item;
 }
 
 IR_Boids_Vertex_Params :: struct {
@@ -220,6 +234,16 @@ ir_headless_fragment_helpers_main :: (using input: IR_Headless_Vertex_Out) -> IR
   return out;
 } @fragment_shader
 
+ir_headless_fragment_call_member_main :: (using input: IR_Headless_Vertex_Out) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  x := ir_headless_make_vec4(input.color.x).x;
+  y := ir_headless_make_vec4(input.color.x).y;
+  z := ir_headless_make_vec4(input.color.x).z;
+  a := ir_headless_make_vec4(input.color.w).x;
+  out_color = Vector4.{x, y, z, a};
+  return out;
+} @fragment_shader
+
 ir_headless_fragment_return_note_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
   _ = input;
   return Vector4.{1.0, 0.0, 0.0, 1.0};
@@ -272,6 +296,37 @@ ir_headless_compute_fixed_array_vector2_main :: (using input: IR_Headless_Comput
   _ = state;
 } @compute_shader
 
+ir_headless_compute_alias_layout_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_Alias_Root) {
+  if thread_id.x < 64 {
+    i := thread_id.x;
+    cx := data.items[i].center_radius.x;
+    dy := data.items[i].delta_pad.y;
+    data.items[i].center_radius.x = cx + 1.0;
+    data.items[i].delta_pad.y = dy - 0.5;
+  }
+} @compute_shader
+
+ir_headless_compute_casted_struct_subscript_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_Alias_Root) {
+  if thread_id.x < 64 {
+    i := thread_id.x;
+    x := (cast(*[IR_Headless_Fixed_Pointer_Count] IR_Headless_Compute_Alias_Item) data.items).*[i].center_radius.x;
+    data.items[i].center_radius.x = x + 0.25;
+  }
+} @compute_shader
+
+ir_headless_helper_fixed_array_x :: (state: *[IR_Headless_Fixed_Pointer_Count] Vector4, i: u32) -> float {
+  return state.*[i].x;
+}
+
+ir_headless_compute_fixed_array_pointer_helper_main :: (using input: IR_Headless_Compute_In, table: *Vector4) {
+  if thread_id.x < IR_Headless_Fixed_Pointer_Count {
+    i := thread_id.x;
+    x := ir_headless_helper_fixed_array_x(cast(*[IR_Headless_Fixed_Pointer_Count] Vector4) table, i);
+    v := table[i];
+    table[i] = Vector4.{x + 1.0, v.y, v.z, v.w};
+  }
+} @compute_shader
+
 // Intentionally declared after the entry points above to validate order-independence.
 ir_headless_chain_leaf :: (x: float) -> float {
   return x * 2.0;
@@ -283,6 +338,10 @@ ir_headless_chain_mid :: (x: float) -> float {
 
 ir_headless_fragment_boost :: (x: float) -> float {
   return x + 0.1;
+}
+
+ir_headless_make_vec4 :: (x: float) -> Vector4 {
+  return Vector4.{x, x + 0.25, x + 0.5, 1.0};
 }
 
 #run,stallable {
@@ -335,6 +394,14 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(metal_fragment_helpers, "0.1", "fragment helper metal output");
   helper_frag_path := tprint("%/ir_fragment_helpers.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(helper_frag_path, metal_fragment_helpers);
+
+  metal_fragment_call_member := get_transpiled(.METAL, ir_headless_fragment_call_member_main);
+  check_contains(metal_fragment_call_member, "fragment", "fragment call-member metal output");
+  check_generated_file_contains(tprint("%/ir_headless_fragment_call_member_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpCompositeExtract",
+                               "fragment call-member SPIR-V text output");
+  call_member_frag_path := tprint("%/ir_fragment_call_member.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(call_member_frag_path, metal_fragment_call_member);
 
   vulkan_fragment_helpers := get_transpiled(.VULKAN_GLSL, ir_headless_fragment_helpers_main);
   check_contains(vulkan_fragment_helpers, "#version", "fragment helper Vulkan GLSL output");
@@ -392,6 +459,24 @@ ir_headless_fragment_boost :: (x: float) -> float {
   check_contains(metal_compute_fixed_array_vector2, "kernel", "compute fixed-array vector2 metal output");
   compute_fixed_array_vector2_path := tprint("%/ir_compute_fixed_array_vector2.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(compute_fixed_array_vector2_path, metal_compute_fixed_array_vector2);
+
+  metal_compute_alias_layout := get_transpiled(.METAL, ir_headless_compute_alias_layout_main);
+  check_contains(metal_compute_alias_layout, "kernel", "compute alias-layout metal output");
+  check_contains(metal_compute_alias_layout, "buffer(0)", "compute alias-layout metal output");
+  compute_alias_layout_path := tprint("%/ir_compute_alias_layout.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(compute_alias_layout_path, metal_compute_alias_layout);
+
+  metal_compute_casted_struct_subscript := get_transpiled(.METAL, ir_headless_compute_casted_struct_subscript_main);
+  check_contains(metal_compute_casted_struct_subscript, "kernel", "compute casted-struct-subscript metal output");
+  check_contains(metal_compute_casted_struct_subscript, "buffer(0)", "compute casted-struct-subscript metal output");
+  compute_casted_struct_subscript_path := tprint("%/ir_compute_casted_struct_subscript.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(compute_casted_struct_subscript_path, metal_compute_casted_struct_subscript);
+
+  metal_compute_fixed_array_pointer_helper := get_transpiled(.METAL, ir_headless_compute_fixed_array_pointer_helper_main);
+  check_contains(metal_compute_fixed_array_pointer_helper, "kernel", "compute fixed-array-pointer-helper metal output");
+  check_contains(metal_compute_fixed_array_pointer_helper, "buffer(0)", "compute fixed-array-pointer-helper metal output");
+  compute_fixed_array_pointer_helper_path := tprint("%/ir_compute_fixed_array_pointer_helper.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(compute_fixed_array_pointer_helper_path, metal_compute_fixed_array_pointer_helper);
 
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
   check_contains(metal_pair, "vertex", "pair metal output");

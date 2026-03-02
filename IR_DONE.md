@@ -44,6 +44,65 @@ Status: Completed (March 1, 2026).
   - Enabled `edge_gap_70_helper_struct_named_constructor_arg` and `edge_gap_72_helper_pointer_alias_arg` in compute semantics.
   - Added graphics semantics nested resource-container case (`graphics_nested_resource_container`).
 
+## 22) Member access on vector-returning function calls
+Status: Fixed (March 2, 2026) for SPIR-V helper-call vector results.
+- Symptom before:
+  - `SPIR-V backend: member access on non-struct call return 'float4'.`
+- Implemented:
+  - Added shared vector-member extractor in SPIR-V backend (`x/y/z/w`, `xy`, `xyz`).
+  - Extended `.MEMBER` call lowering to accept helper return kinds `float2/float3/float4` and emit component/swatch extraction directly.
+  - Reused the same extractor for other vector-member paths to keep behavior consistent.
+- Regression coverage:
+  - Added `ir_headless_fragment_call_member_main` in `headless_ir/ir_headless_runner.jai`.
+  - Validates generated SPIR-V includes vector component extraction for call-result member access.
+
+## 21) Storage-buffer member/swizzle access on indexed expressions
+Status: Fixed (March 2, 2026) for indexed struct-field component/swizzle reads.
+- Symptom before:
+  - `SPIR-V backend: unsupported member expression 'payload[0].xyz'.`
+- Implemented:
+  - Added explicit `.MEMBER` lowering path for `subscript.field.member` over storage buffers.
+  - Loads the indexed field and applies shared vector-member extraction (`x/y/z/w`, `xy`, `xyz`) consistently.
+- Regression coverage:
+  - Added `ir_headless_compute_alias_layout_main` with indexed nested-field component reads/writes.
+
+## 20) Subscript on casted storage pointer expression
+Status: Fixed (March 2, 2026).
+- Symptom before:
+  - `SPIR-V backend: unknown subscript base '*float4(state)'.`
+- Implemented:
+  - Unified struct-buffer field pointer base resolution on `resolve_buffer_name_from_expr(...)`, which handles cast/unary/member forms.
+  - Applied the same resolution in struct declaration subscript initializers.
+- Regression coverage:
+  - Added `ir_headless_compute_casted_struct_subscript_main` using casted storage-pointer subscript bases.
+
+## 19) Helper pointer args with fixed-array storage buffer pointees
+Status: Fixed (March 2, 2026) in inline helper binding.
+- Symptom before:
+  - `SPIR-V backend: helper '...' pointer arg 'state' has unsupported pointee kind FIXED_ARRAY.`
+- Implemented:
+  - Extended pointer-arg binding to recognize pointer-to-fixed-array pointees and validate against source buffer element kind/struct.
+  - Preserved subscript-based base-index aliasing for pointer args.
+- Regression coverage:
+  - Added `ir_headless_helper_fixed_array_x` + `ir_headless_compute_fixed_array_pointer_helper_main`.
+
+## 12) Storage-buffer wrapper struct field layout/type aliasing (`TM_Float4`-style)
+Status: Fixed (March 2, 2026) for layout/type emission of simple float wrapper structs.
+- Symptom before:
+  - `SPIR-V generic backend: buffer struct '...' field '...' has unsupported layout type 'TM_Float4'.`
+- Implemented:
+  - Added layout-specific type mapping that resolves simple struct aliases (single float/vector field or 2/3/4 float-field wrappers) to backend vector/scalar kinds during buffer layout planning.
+  - Kept regular type mapping untouched outside layout path.
+- Regression coverage:
+  - Added `ir_headless_compute_alias_layout_main` in `headless_ir/ir_headless_runner.jai` with nested alias fields in storage buffers.
+  - Validates transpilation/Metal compile for alias-layout compute path.
+- Additional follow-up (March 2, 2026):
+  - Added nested struct buffer-element local copy support for alias wrappers during:
+    - local struct declaration initialization from `buffer[idx]`
+    - struct-buffer assignment from local structs with nested wrapper fields
+    - helper struct-arg binding from buffer subscripts
+  - Implemented shared alias pack/unpack helpers to map between local nested wrapper structs and backend vector/scalar storage field kinds.
+
 ## 23) `exp` intrinsic call support in SPIR-V backend expression lowering
 Status: Fixed (March 1, 2026).
 - Symptom:

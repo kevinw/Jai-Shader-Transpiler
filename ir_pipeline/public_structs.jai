@@ -163,6 +163,7 @@ IR_Member_Access_Kind :: enum {
   COMPONENT_Z;
   COMPONENT_W;
   SWIZZLE_XY;
+  SWIZZLE_XYZ;
 }
 
 IR_Call_Target_Kind :: enum {

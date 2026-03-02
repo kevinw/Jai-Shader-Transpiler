@@ -12,45 +12,16 @@ Direction note:
 - Add one case per builtin alias pattern and coercion edge (`f16/f32/int`).
 - Add one case per key pointer/lvalue/resource shape to catch regressions early.
 
-## 19) Graphics helper proc pointer args reject fixed-array storage buffer pointees
+## 23) Unsigned integer `~` binary op is unsupported in SPIR-V backend
 - Symptom:
-  - `SPIR-V backend: helper '...' pointer arg 'state' has unsupported pointee kind FIXED_ARRAY.`
+  - `SPIR-V backend: unsupported integer binary op '~' for kind UINT.`
 - Where hit:
-  - `src/apps/shaders/flux_shader.jai` when calling a helper with `state: *[FLUX_CELL_COUNT] Vector4` in vertex/fragment path.
+  - `src/apps/shaders/flux_shader.jai` (`flux_grass_vertex_main`) when switching grass placement RNG to a PCG-style integer hash using `~` in shader code.
 - Current workaround:
-  - Avoid helper signatures that take fixed-array storage pointers; use scalar-pointer arg (`*Vector4`) or inline sampling logic in shader entry functions.
+  - Avoid UINT bit-twiddling hash paths in shader code; use backend-safe float-domain sequences/hashes for randomized placement.
 - Desired fix:
-  - Allow helper lowering for fixed-array storage-buffer pointer arguments in graphics/compute stages.
-
-## 20) Subscript on casted storage pointer expression is not recognized in SPIR-V backend
-- Symptom:
-  - `SPIR-V backend: unknown subscript base '*float4(state)'.`
-- Where hit:
-  - `flux_shader.jai` when indexing `cast(*Vector4) state` in graphics shaders.
-- Current workaround:
-  - Use entry arg type `*Vector4` directly for graphics storage-buffer bindings instead of casted fixed-array pointer expressions.
-- Desired fix:
-  - Support indexing casted storage pointer expressions (or canonicalize them to a recognized storage identifier during lowering).
-
-## 21) Storage-buffer swizzle/member access on indexed expression is brittle
-- Symptom:
-  - `SPIR-V backend: unsupported member expression 'payload[0].xyz'.`
-- Where hit:
-  - `src/apps/shaders/flux_shader.jai` during graphics path refactor for shadow-map/camera params.
-- Current workaround:
-  - Load indexed vector into a temporary first, then build vectors from scalar fields (`p := payload[i]; v := .{p.x,p.y,p.z}`).
-- Desired fix:
-  - Allow structured member/swizzle reads directly on indexed storage-buffer expressions when type is known.
-
-## 22) Member access on vector-returning function calls is unsupported
-- Symptom:
-  - `SPIR-V backend: member access on non-struct call return 'float4'.`
-- Where hit:
-  - `flux_shader.jai` for expressions like `sample_2d(...).x` and `flux_read_state_uv(...).x`.
-- Current workaround:
-  - Assign function return to temporary (`t := sample_2d(...); x := t.x`) before component access.
-- Desired fix:
-  - Support component extraction from vector-valued call expressions in SPIR-V lowering.
+  - Add lowering support for UINT bitwise integer ops used by common hash functions (including `~`) in SPIR-V backend.
+  - Add a focused compute/graphics semantics test that exercises UINT hash-style expressions so regressions are caught early.
 
 ## 4) Pointer-style `normalize(*v, fallback=...)` is not shader-IR compatible
 - Symptom:
@@ -62,20 +33,6 @@ Direction note:
 - Desired fix:
   - Optional: add shader-safe overload mapping for pointer-style convenience helpers, or
   - Improve diagnostics to explicitly call out host-only helper signatures.
-
-## 12) Storage-buffer struct fields cannot be nested struct types (layout/type emission gap)
-- Symptom at compile time:
-  - `SPIR-V backend mode failed for shader 'terrain_apply_brush_compute' (Compute).`
-  - `SPIR-V backend: SPIR-V generic backend: buffer struct 'TM_Brush_Command' field 'center_radius' has unsupported layout type 'TM_Float4'.`
-- Where hit:
-  - Compute buffer element struct:
-    - `TM_Brush_Command :: struct { center_radius: TM_Float4; delta_pad: TM_Float4; }`
-- Current workaround:
-  - Flattened buffer element structs to scalar fields:
-    - `center_x, center_y, center_z, radius, delta, ...pad...`
-- Desired fix:
-  - Add storage-buffer layout/type support for nested named struct fields when leaf field types are already supported scalars/vectors.
-  - Emit a targeted diagnostic that suggests flattening as a temporary workaround when unsupported.
 
 ## 13) Resource-container argument cannot mix buffers with scalar/uniform fields
 - Symptom at compile time:
