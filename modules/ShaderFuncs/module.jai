@@ -235,6 +235,9 @@ sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 { 
 // `texture_index` indexes into backend-managed writable texture descriptor arrays.
 write_2d :: (texture_index: u32, x: u32, y: u32, value: Vector4) { }
 
+// Fragment kill helper for the IR SPIR-V backend path.
+discard :: () { }
+
 is_number :: (T: Type) -> bool {
   return T == float ||
          T == float64 ||

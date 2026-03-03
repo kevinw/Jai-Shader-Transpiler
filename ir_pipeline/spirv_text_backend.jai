@@ -164,6 +164,7 @@ callee_matches_builtin :: (callee: string, builtin: string) -> bool {
 call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee_matches_builtin(callee, "sample_2d") return .SAMPLE_2D;
   if callee_matches_builtin(callee, "write_2d") return .WRITE_2D;
+  if callee_matches_builtin(callee, "discard") return .DISCARD;
   if callee_matches_builtin(callee, "saturate") return .SATURATE;
   if callee_matches_builtin(callee, "mix") return .MIX;
   if callee_matches_builtin(callee, "lerp") return .LERP;
@@ -3399,6 +3400,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if builtin_kind == .WRITE_2D {
         return_err("write_2d has no return value and must be used as a statement.");
       }
+      if builtin_kind == .DISCARD {
+        return_err("discard has no return value and must be used as a statement.");
+      }
       if builtin_kind == .RADIANS {
         if expr.args.count != 1 return_err("radians expects 1 arg.");
         a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
@@ -4652,6 +4656,12 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         write_ok, write_diag := emit_write_2d_call(s, stmt.call_expr.args);
         if !write_ok return false, false, write_diag;
         return true, false, diag;
+      }
+      if builtin_kind == .DISCARD {
+        if s.stage != .FRAGMENT return_err("discard is currently fragment-stage only.");
+        if stmt.call_expr.args.count != 0 return_err("discard expects 0 args.");
+        add_op(s, tprint("               OpKill"));
+        return true, true, diag;
       }
 
       helper := find_function(s, helper_name);

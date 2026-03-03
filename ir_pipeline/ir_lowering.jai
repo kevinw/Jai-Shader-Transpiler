@@ -1536,6 +1536,7 @@ ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   name := ir_canonical_callee_name(callee);
   if ir_callee_matches_builtin(name, "sample_2d") return .SAMPLE_2D;
   if ir_callee_matches_builtin(name, "write_2d") return .WRITE_2D;
+  if ir_callee_matches_builtin(name, "discard") return .DISCARD;
   if ir_callee_matches_builtin(name, "saturate") return .SATURATE;
   if ir_callee_matches_builtin(name, "mix") return .MIX;
   if ir_callee_matches_builtin(name, "lerp") return .LERP;

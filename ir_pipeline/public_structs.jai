@@ -176,6 +176,7 @@ IR_Call_Builtin_Kind :: enum {
   NONE;
   SAMPLE_2D;
   WRITE_2D;
+  DISCARD;
   SATURATE;
   MIX;
   LERP;
