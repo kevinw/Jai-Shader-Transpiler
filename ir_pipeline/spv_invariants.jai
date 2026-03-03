@@ -27,7 +27,8 @@ ir_validate_expr_invariants :: (expr: *IR_Expr) -> (ok: bool, diag: IR_Diagnosti
     if expr.call_target_kind == .HELPER && expr.call_builtin_kind != .NONE {
       return false, make_diag("IR invariant: call expression '%' is marked helper but also has builtin kind %.", expr_text(expr), expr.call_builtin_kind);
     }
-    if expr.call_target_kind != .UNKNOWN {
+    has_resolved_name := expr.call_resolved_name.count != 0;
+    if expr.call_target_kind != .UNKNOWN && !has_resolved_name {
       if !expr.left || (expr.left.kind != .IDENT && expr.left.kind != .MEMBER) {
         return false, make_diag("IR invariant: typed call metadata on '%' requires ident/member callee expression.", expr_text(expr));
       }

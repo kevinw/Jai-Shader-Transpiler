@@ -217,6 +217,7 @@ IR_Expr :: struct {
   member_access: IR_Member_Access_Kind;
   call_target_kind: IR_Call_Target_Kind;
   call_builtin_kind: IR_Call_Builtin_Kind;
+  call_resolved_name: string;
   binary_operator_type: Operator_Type;
   text: string;
   left: *IR_Expr;

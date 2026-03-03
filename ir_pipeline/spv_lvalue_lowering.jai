@@ -52,6 +52,9 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
         ptr, elem_type, ptr_ok, ptr_diag := emit_uniform_array_element_ptr(s, uniform_name, uniform_field, idx, idx_type);
         if ptr_ok return ptr, elem_type, true, diag;
       }
+
+      buffer_ptr, buffer_elem_type, buffer_ptr_ok, _ := emit_buffer_struct_array_element_ptr(s, expr.left, expr.right);
+      if buffer_ptr_ok return buffer_ptr, buffer_elem_type, true, diag;
     }
 
     buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left);

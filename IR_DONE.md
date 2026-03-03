@@ -114,6 +114,39 @@ Status: Fixed (March 1, 2026).
   - Mapped `exp` to `GLSL.std.450 Exp` in SPIR-V emission.
   - Added compute semantics regression coverage (`intrinsic_exp`).
 
+## 24) Graphics parameter blocks nested-struct layout in struct-buffer path
+Status: Fixed (March 3, 2026).
+- Symptom before:
+  - `SPIR-V generic backend: buffer struct '...' field '...' has unsupported layout type '...'.`
+- Implemented:
+  - Added nested-field flattening in struct-buffer layout planning for true nested structs, while preserving simple struct aliases (e.g. vector wrapper aliases) as scalar/vector fields.
+  - Added member-path field resolution for flattened names in graphics expression/lvalue lowering (e.g. `params.core.mix_gain`).
+  - Added recursive local-struct initialization from struct-buffer subscripts so nested local copies work with flattened field paths.
+- Regression coverage:
+  - Added `ir_headless_fragment_nested_params_main` in `headless_ir/ir_headless_runner.jai`.
+
+## 25) Casted pointer alias indexing against graphics parameter buffers
+Status: Fixed (March 3, 2026) for casted fixed-array reinterpret access.
+- Symptom before:
+  - Casted reinterpret subscript paths in graphics parameter buffers were brittle and failed to resolve buffer roots/types.
+- Implemented:
+  - Hardened identifier/member root normalization for cast-shaped buffer expressions.
+  - Added struct-buffer reinterpret constant-subscript lowering for casted access patterns, including array-field slot mapping within struct-backed parameter buffers.
+  - Kept regular typed-field access paths unchanged.
+- Regression coverage:
+  - Added `ir_headless_fragment_casted_fixed_alias_params_main` in `headless_ir/ir_headless_runner.jai`.
+
+## 26) BOOL <-> integer conversion support in SPIR-V coercion
+Status: Fixed (March 3, 2026).
+- Symptom before:
+  - `SPIR-V backend: unsupported conversion from BOOL to UINT.`
+- Implemented:
+  - Added explicit BOOL -> INT/UINT/INT64/UINT64 lowering via `OpSelect` (1/0 constants).
+  - Added INT/UINT/INT64/UINT64 -> BOOL lowering via non-zero comparisons.
+  - Added FLOAT/FLOAT16 -> BOOL lowering via ordered non-zero compare.
+- Regression coverage:
+  - Added bool-cast usage in `ir_headless_fragment_nested_params_main` and SPIR-V text assertion for `OpSelect`.
+
 ## 1) Helper procs with `void` return are not supported in compute lowering
 Status: Fixed (February 28, 2026) for statement-level void helper calls with side effects.
 - Symptom:

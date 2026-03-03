@@ -92,6 +92,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"boid_component_compound_chain", .Boids},
   {"boid_constructor_from_members", .Boids},
   {"boid_struct_temp_roundtrip", .Boids},
+  {"boid_subscript_struct_copy", .Boids},
   {"matrix_vector_reassign", .Bare},
   {"vector3_scalar_mix_floor", .Bare},
   {"helper_pointer_table_arg", .Table},
@@ -1388,6 +1389,14 @@ boid_struct_temp_roundtrip :: (using in: Compute_Semantics_In, values: *u32, boi
   b.pos.y = a.pos.x + a.vel.y;
   boids[idx] = b;
   values[idx] = cast(u32) (b.pos.x * 7.0 + b.pos.y * 2.0);
+} @compute_shader
+
+boid_subscript_struct_copy :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  boids[idx] = boids[idx];
+  b := boids[idx];
+  values[idx] = cast(u32) (b.pos.x * 3.0 + b.pos.y * 5.0 + b.vel.x * 2.0 + b.vel.y * 7.0);
 } @compute_shader
 
 matrix_vector_reassign :: (using in: Compute_Semantics_In, values: *u32) {

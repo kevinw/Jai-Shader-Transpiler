@@ -35,6 +35,13 @@ Vector2 :: struct { x, y: float; }
 Vector3 :: struct { x, y, z: float; }
 Vector4 :: struct { x, y, z, w: float; }
 
+IR_Headless_Project_Params :: struct {
+  camera_pos_proj_x: Vector4;
+  camera_right_proj_y: Vector4;
+  camera_up_near: Vector4;
+  camera_forward_far: Vector4;
+}
+
 sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 {
   _ = texture_index;
   _ = sampler_index;
@@ -87,6 +94,33 @@ ir_headless_vertex_uint_div_main :: (using input: IR_Headless_Vertex_In, using u
   return out;
 } @vertex_shader
 
+ir_headless_project_camera_like :: (x: float, y: float, using params: *IR_Headless_Project_Params) -> Vector4 {
+  sx := camera_pos_proj_x.w;
+  sy := camera_right_proj_y.w;
+  return .{x * sx, y * sy, 0.0, 1.0};
+}
+
+ir_headless_vertex_using_pointer_helper_main :: (using input: IR_Headless_Vertex_In, params: *IR_Headless_Project_Params) -> IR_Headless_Vertex_Out {
+  using out: IR_Headless_Vertex_Out;
+  position = ir_headless_project_camera_like(a_pos.x, a_pos.y, params);
+  color = Vector4.{1.0, 0.5, 0.0, 1.0};
+  return out;
+} @vertex_shader
+
+ir_headless_fn_alias_leaf :: (x: float) -> float {
+  return x * 0.5;
+}
+
+ir_headless_fn_alias_global :: ir_headless_fn_alias_leaf;
+
+ir_headless_vertex_local_fn_alias_main :: (using input: IR_Headless_Vertex_In, using un: IR_Headless_Vertex_Uniforms) -> IR_Headless_Vertex_Out {
+  using out: IR_Headless_Vertex_Out;
+  px := ir_headless_fn_alias_global(a_pos.x);
+  position = Vector4.{px, a_pos.y, 0.0, 1.0};
+  color = Vector4.{0.4, 0.8, 0.2, 1.0};
+  return out;
+} @vertex_shader
+
 IR_Headless_Fragment_Out :: struct {
   out_color: Vector4; @semantic_SV_Target0
 }
@@ -107,6 +141,33 @@ IR_Headless_Fragment_Layout_Params :: struct {
   _pad0_y: float;
   _pad0_z: float;
   tint: Vector4;
+}
+
+IR_Headless_Fragment_Casted_Subscript_Params :: struct {
+  packed: [2] Vector4;
+}
+
+IR_Headless_Fragment_Using_Pointer_Params :: struct {
+  gain: float;
+  _pad0_x: float;
+  _pad0_y: float;
+  _pad0_z: float;
+}
+
+IR_Headless_Fragment_Nested_Core :: struct {
+  tint: Vector4;
+  mix_gain: float;
+  _pad0_x: float;
+  _pad0_y: float;
+  _pad0_z: float;
+}
+
+IR_Headless_Fragment_Nested_Params :: struct {
+  gain: float;
+  _pad0_x: float;
+  _pad0_y: float;
+  _pad0_z: float;
+  core: IR_Headless_Fragment_Nested_Core;
 }
 
 IR_Headless_Position_Semantic_Vertex_Out :: struct {
@@ -225,6 +286,46 @@ ir_headless_fragment_layout_params_main :: (using input: IR_Headless_Vertex_Out,
     input.color.z * params.gain + params.tint.z,
     1.0
   };
+  return out;
+} @fragment_shader
+
+ir_headless_fragment_casted_subscript_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Casted_Subscript_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  i: u32 = 0;
+  if input.position.x > 0.0 i = 1;
+  out_color = params.packed[i];
+  return out;
+} @fragment_shader
+
+ir_headless_apply_using_pointer_gain :: (x: float, using params: *IR_Headless_Fragment_Using_Pointer_Params) -> float {
+  return x * gain;
+}
+
+ir_headless_fragment_using_pointer_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Using_Pointer_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  boosted := ir_headless_apply_using_pointer_gain(input.color.x + 0.25, params);
+  out_color = Vector4.{boosted, input.color.y, input.color.z, 1.0};
+  return out;
+} @fragment_shader
+
+ir_headless_fragment_nested_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Nested_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  i := cast(u32) (input.position.x > 0.0);
+  f := cast(float) i;
+  extra := params.core.mix_gain + f * 0.01;
+  out_color = Vector4.{
+    input.color.x * params.gain + extra,
+    input.color.y * params.gain + extra,
+    input.color.z * params.gain + extra,
+    1.0,
+  };
+  return out;
+} @fragment_shader
+
+ir_headless_fragment_casted_fixed_alias_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Casted_Subscript_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  v := (cast(*[2] Vector4) params).*[1];
+  out_color = Vector4.{v.x + input.color.x * 0.0, v.y, v.z, v.w};
   return out;
 } @fragment_shader
 
@@ -492,6 +593,18 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   uint_div_pair_path := tprint("%/ir_pair_uint_div.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(uint_div_pair_path, uint_div_pair);
 
+  using_pointer_helper_pair := get_transpiled(.METAL, ir_headless_vertex_using_pointer_helper_main, ir_headless_fragment_main);
+  check_contains(using_pointer_helper_pair, "vertex", "using-pointer helper pair metal output");
+  check_contains(using_pointer_helper_pair, "fragment", "using-pointer helper pair metal output");
+  using_pointer_helper_pair_path := tprint("%/ir_pair_using_pointer_helper.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(using_pointer_helper_pair_path, using_pointer_helper_pair);
+
+  local_fn_alias_pair := get_transpiled(.METAL, ir_headless_vertex_local_fn_alias_main, ir_headless_fragment_main);
+  check_contains(local_fn_alias_pair, "vertex", "local-fn-alias helper pair metal output");
+  check_contains(local_fn_alias_pair, "fragment", "local-fn-alias helper pair metal output");
+  local_fn_alias_pair_path := tprint("%/ir_pair_local_fn_alias_helper.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(local_fn_alias_pair_path, local_fn_alias_pair);
+
   position_semantic_pair := get_transpiled(.METAL, ir_headless_vertex_position_semantic_main, ir_headless_fragment_position_semantic_main);
   check_contains(position_semantic_pair, "vertex", "position-semantic pair metal output");
   check_contains(position_semantic_pair, "fragment", "position-semantic pair metal output");
@@ -522,6 +635,30 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   check_contains(layout_params_pair, "fragment", "layout-validated fragment-params pair metal output");
   layout_params_pair_path := tprint("%/ir_pair_fragment_layout_params.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(layout_params_pair_path, layout_params_pair);
+
+  casted_subscript_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_casted_subscript_params_main);
+  check_contains(casted_subscript_pair, "fragment", "casted-subscript fragment-params pair metal output");
+  casted_subscript_pair_path := tprint("%/ir_pair_fragment_casted_subscript_params.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(casted_subscript_pair_path, casted_subscript_pair);
+
+  using_pointer_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_using_pointer_params_main);
+  check_contains(using_pointer_pair, "fragment", "using-pointer fragment-params pair metal output");
+  using_pointer_pair_path := tprint("%/ir_pair_fragment_using_pointer_params.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(using_pointer_pair_path, using_pointer_pair);
+
+  nested_params_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_nested_params_main);
+  check_contains(nested_params_pair, "fragment", "nested fragment-params pair metal output");
+  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_nested_params_main_pair.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpSelect",
+                               "nested fragment-params pair bool-to-u32 cast SPIR-V output");
+  nested_params_pair_path := tprint("%/ir_pair_fragment_nested_params.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(nested_params_pair_path, nested_params_pair);
+
+  casted_alias_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_casted_fixed_alias_params_main);
+  check_contains(casted_alias_pair, "fragment", "casted-fixed-alias fragment-params pair metal output");
+  casted_alias_pair_path := tprint("%/ir_pair_fragment_casted_fixed_alias_params.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(casted_alias_pair_path, casted_alias_pair);
 
   log("IR headless runner passed. Outputs in %", HEADLESS_IR_DIR);
 }

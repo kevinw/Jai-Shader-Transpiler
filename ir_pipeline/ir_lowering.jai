@@ -355,8 +355,18 @@ ir_collect_parameter_using_sources :: (header: *Code_Procedure_Header, out_sourc
     if !decl continue;
 
     decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
-    if !decl_type || decl_type.type != .STRUCT continue;
-    st := cast(*Type_Info_Struct) decl_type;
+    if !decl_type continue;
+
+    st: *Type_Info_Struct = null;
+    if decl_type.type == .STRUCT {
+      st = cast(*Type_Info_Struct) decl_type;
+    } else if decl_type.type == .POINTER {
+      ptr := cast(*Type_Info_Pointer) decl_type;
+      if ptr.pointer_to && ptr.pointer_to.type == .STRUCT {
+        st = cast(*Type_Info_Struct) ptr.pointer_to;
+      }
+    }
+    if !st continue;
 
     src: IR_Using_Source;
     src.expression_node = cast(*Code_Node) it.expression;
@@ -1221,7 +1231,21 @@ ir_lower_expr :: (node: *Code_Node,
         if !ok return null, false;
         array_add(*out.args, arg);
       }
-      out.call_target_kind, out.call_builtin_kind = ir_classify_call_target(callee);
+      resolved_name, resolved_ok := ir_resolve_call_target_name_from_code_node(pc.resolved_procedure_expression);
+      if !resolved_ok resolved_name, resolved_ok = ir_resolve_call_target_name_from_code_node(pc.procedure_expression);
+      if resolved_ok {
+        out.call_resolved_name = resolved_name;
+        resolved_builtin := ir_builtin_call_kind_from_callee(resolved_name);
+        if resolved_builtin != .NONE {
+          out.call_target_kind = .BUILTIN;
+          out.call_builtin_kind = resolved_builtin;
+        } else {
+          out.call_target_kind = .HELPER;
+          out.call_builtin_kind = .NONE;
+        }
+      } else {
+        out.call_target_kind, out.call_builtin_kind = ir_classify_call_target(callee);
+      }
       return out, true;
     }
 
@@ -1572,6 +1596,48 @@ ir_classify_call_target :: (callee_expr: *IR_Expr) -> (IR_Call_Target_Kind, IR_C
     return .HELPER, .NONE;
   }
   return .UNKNOWN, .NONE;
+}
+
+ir_resolve_call_target_name_from_code_node :: (node: *Code_Node, depth: s64 = 0) -> (string, bool) {
+  if !node || depth > 8 return "", false;
+
+  if node.kind == .PROCEDURE_HEADER {
+    header := cast(*Code_Procedure_Header) node;
+    if header.name.count == 0 return "", false;
+    return ir_canonical_callee_name(header.name), true;
+  }
+
+  if node.kind == .PROCEDURE_BODY {
+    body := cast(*Code_Procedure_Body) node;
+    if body && body.header && body.header.name.count != 0 return ir_canonical_callee_name(body.header.name), true;
+    return "", false;
+  }
+
+  if node.kind == .DECLARATION {
+    decl := cast(*Code_Declaration) node;
+    if !decl.expression return "", false;
+    nested_name, nested_ok := ir_resolve_call_target_name_from_code_node(decl.expression, depth + 1);
+    return nested_name, nested_ok;
+  }
+
+  if node.kind == .IDENT {
+    ident := cast(*Code_Ident) node;
+    if ident.resolved_declaration {
+      resolved_name, resolved_ok := ir_resolve_call_target_name_from_code_node(cast(*Code_Node) ident.resolved_declaration, depth + 1);
+      if resolved_ok return resolved_name, true;
+    }
+    if ident.name.count == 0 return "", false;
+    return ir_canonical_callee_name(ident.name), true;
+  }
+
+  if node.kind == .CAST {
+    cast_node := cast(*Code_Cast) node;
+    if !cast_node.expression return "", false;
+    nested_name, nested_ok := ir_resolve_call_target_name_from_code_node(cast_node.expression, depth + 1);
+    return nested_name, nested_ok;
+  }
+
+  return "", false;
 }
 
 ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct, bool) {

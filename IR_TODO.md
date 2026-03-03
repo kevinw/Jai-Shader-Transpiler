@@ -23,6 +23,28 @@ Direction note:
   - Add lowering support for UINT bitwise integer ops used by common hash functions (including `~`) in SPIR-V backend.
   - Add a focused compute/graphics semantics test that exercises UINT hash-style expressions so regressions are caught early.
 
+## 27) Graphics cast reinterpret still relies on weak type metadata for raw pointer casts
+- Symptom:
+  - Some casted graphics reinterpret expressions can still surface unknown-result-type failures when IR does not carry complete cast/subscript type metadata.
+- Where hit:
+  - Direct raw-pointer cast patterns like `cast(*Vector4) params` in fragment parameter-buffer paths.
+- Current workaround:
+  - Prefer fixed-array reinterpret casts (`cast(*[N] Vector4) params`) or typed field access.
+- Desired fix:
+  - Thread explicit cast target type info through IR expression lowering for cast/subscript nodes in graphics paths.
+  - Remove text-based fallback type inference in SPIR-V reinterpret lowering once typed metadata is available.
+
+## 28) Function-typed local declarations are unsupported in IR lowering
+- Symptom:
+  - `IR lowering: unsupported typed declaration info for '<local_name>'`.
+- Where hit:
+  - Shader helper alias patterns inside function bodies, e.g. local declarations like `project := some_helper; project(...)`.
+- Current workaround:
+  - Call helpers directly, or use global compile-time aliases that lower as direct helper identifiers.
+- Desired fix:
+  - Add IR declaration/lvalue support for procedure-typed locals (or explicit rejection earlier with targeted diagnostic and suggestion).
+  - Add a focused headless regression covering local helper alias call sites once supported.
+
 ## 4) Pointer-style `normalize(*v, fallback=...)` is not shader-IR compatible
 - Symptom:
   - `SPIR-V backend: normalize expects 1 arg.`

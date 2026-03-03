@@ -909,21 +909,43 @@ ir_shared_is_builtin_function_name :: (name: string) -> bool {
 }
 
 ir_shared_collect_calls_in_node :: (node: *Code_Node, called_headers: *[..] *Code_Procedure_Header) {
+  resolve_header_from_node :: (candidate: *Code_Node, depth: s64 = 0) -> (*Code_Procedure_Header, bool) {
+    if !candidate || depth > 8 return null, false;
+    if candidate.kind == .PROCEDURE_HEADER {
+      return cast(*Code_Procedure_Header) candidate, true;
+    }
+    if candidate.kind == .PROCEDURE_BODY {
+      body := cast(*Code_Procedure_Body) candidate;
+      if body && body.header return body.header, true;
+      return null, false;
+    }
+    if candidate.kind == .DECLARATION {
+      decl := cast(*Code_Declaration) candidate;
+      if decl.expression {
+        nested_header, nested_ok := resolve_header_from_node(decl.expression, depth + 1);
+        return nested_header, nested_ok;
+      }
+      return null, false;
+    }
+    if candidate.kind == .IDENT {
+      ident := cast(*Code_Ident) candidate;
+      if ident.resolved_declaration {
+        nested_header, nested_ok := resolve_header_from_node(cast(*Code_Node) ident.resolved_declaration, depth + 1);
+        return nested_header, nested_ok;
+      }
+      return null, false;
+    }
+    return null, false;
+  }
+
   if !node return;
 
   if node.kind == {
     case .PROCEDURE_CALL; {
       pc := cast(*Code_Procedure_Call) node;
-      header: *Code_Procedure_Header;
-      if pc.resolved_procedure_expression && pc.resolved_procedure_expression.kind == .PROCEDURE_HEADER {
-        header = cast(*Code_Procedure_Header) pc.resolved_procedure_expression;
-      } else if pc.procedure_expression && pc.procedure_expression.kind == .IDENT {
-        ident := cast(*Code_Ident) pc.procedure_expression;
-        if ident.resolved_declaration && ident.resolved_declaration.expression &&
-          ident.resolved_declaration.expression.kind == .PROCEDURE_HEADER {
-          header = cast(*Code_Procedure_Header) ident.resolved_declaration.expression;
-        }
-      }
+      header: *Code_Procedure_Header = null;
+      header, _ = resolve_header_from_node(pc.resolved_procedure_expression);
+      if !header header, _ = resolve_header_from_node(pc.procedure_expression);
 
       if header {
         if ir_shared_is_builtin_function_name(header.name) {
@@ -1056,7 +1078,9 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
     });
   }
 
-  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], header.returns.count == 1, state, .[], .[]) return out, false;
+  parameter_usings: [..] IR_Using_Source;
+  ir_collect_parameter_using_sources(header, *parameter_usings);
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], header.returns.count == 1, state, parameter_usings, .[]) return out, false;
   return out, true;
 }
 
