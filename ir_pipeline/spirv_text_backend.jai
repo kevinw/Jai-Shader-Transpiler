@@ -2089,7 +2089,12 @@ emit_int_binary_op :: (s: *IR_SPV_Gen_State, op: string, kind: IR_SPV_Gen_Type, 
   if op == "%"  { add_op(s, result_id, ifx is_signed then "OpSMod" else "OpUMod", type_id, left_id, right_id); return result_id, kind, true, diag; }
   if op == "|"  { add_op(s, result_id, "OpBitwiseOr",        type_id, left_id, right_id); return result_id, kind, true, diag; }
   if op == "&"  { add_op(s, result_id, "OpBitwiseAnd",       type_id, left_id, right_id); return result_id, kind, true, diag; }
-  if op == "^"  { add_op(s, result_id, "OpBitwiseXor",       type_id, left_id, right_id); return result_id, kind, true, diag; }
+  if op == "^"  { add_op(s, result_id, "OpBitwiseXor", type_id, left_id, right_id); return result_id, kind, true, diag; }
+  if op == "~"  {
+    // Jai binary '~' is a boolean equivalence comparison on scalar integers.
+    add_op(s, result_id, "OpIEqual", s.id_bool, left_id, right_id);
+    return result_id, .BOOL, true, diag;
+  }
   if op == "<<" { add_op(s, result_id, "OpShiftLeftLogical", type_id, left_id, right_id); return result_id, kind, true, diag; }
   if op == ">>" { add_op(s, result_id, ifx is_signed then "OpShiftRightArithmetic" else "OpShiftRightLogical", type_id, left_id, right_id); return result_id, kind, true, diag; }
   if op == "<"  { add_op(s, result_id, ifx is_signed then "OpSLessThan" else "OpULessThan", s.id_bool, left_id, right_id); return result_id, .BOOL, true, diag; }
@@ -2222,23 +2227,31 @@ coerce_to_float2 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen
   assert(s != null);
   diag: IR_Diagnostic;
   if value_type == .FLOAT2 return value_id, true, diag;
-  if value_type == .FLOAT return splat_float2(s, value_id), true, diag;
-  diag.message = "cannot coerce value to float2.";
+  scalar_id, scalar_ok, scalar_diag := coerce_to_float(s, value_id, value_type);
+  if scalar_ok return splat_float2(s, scalar_id), true, diag;
+  diag.message = tprint("cannot coerce value type % to float2.", value_type);
+  if scalar_diag.message.count != 0 diag.message = tprint("% (detail: %)", diag.message, scalar_diag.message);
   return 0, false, diag;
 }
 
 coerce_to_float3 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float3_id: s64, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   if value_type == .FLOAT3 return value_id, true, {};
-  if value_type == .FLOAT  return splat_float3(s, value_id), true, {};
-  return 0, false, make_diag("cannot coerce value to float3.");
+  scalar_id, scalar_ok, scalar_diag := coerce_to_float(s, value_id, value_type);
+  if scalar_ok return splat_float3(s, scalar_id), true, {};
+  message := tprint("cannot coerce value type % to float3.", value_type);
+  if scalar_diag.message.count != 0 message = tprint("% (detail: %)", message, scalar_diag.message);
+  return 0, false, make_diag(message);
 }
 
 coerce_to_float4 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float4_id: s64, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   if value_type == .FLOAT4 return value_id, true, {};
-  if value_type == .FLOAT return splat_float4(s, value_id), true, {};
-  return 0, false, make_diag("cannot coerce value to float4.");
+  scalar_id, scalar_ok, scalar_diag := coerce_to_float(s, value_id, value_type);
+  if scalar_ok return splat_float4(s, scalar_id), true, {};
+  message := tprint("cannot coerce value type % to float4.", value_type);
+  if scalar_diag.message.count != 0 message = tprint("% (detail: %)", message, scalar_diag.message);
+  return 0, false, make_diag(message);
 }
 
 coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, ok: bool, diag: IR_Diagnostic) {

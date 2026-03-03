@@ -1058,6 +1058,20 @@ ir_lower_expr :: (node: *Code_Node,
       left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings, active_aliases, state);
       if !left_ok return null, false;
 
+      right_expected_type: *Type_Info = null;
+      if bn.right && bn.right.kind == .LITERAL && bn.left {
+        right_lit := cast(*Code_Literal) bn.right;
+        // Anonymous struct/vector literals like `.{...}` in binary expressions need
+        // expected-type propagation from the opposite operand for constructor inference.
+        if right_lit.value_type == .STRUCT {
+          has_explicit_ctor_type := false;
+          if right_lit.struct_literal_info.type_expression && right_lit.struct_literal_info.type_expression.type_valued_expression {
+            has_explicit_ctor_type = true;
+          }
+          if !has_explicit_ctor_type right_expected_type = bn.left.type;
+        }
+      }
+
       if bn.operator_type == .ARRAY_SUBSCRIPT {
         right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state);
         if !right_ok return null, false;
@@ -1073,7 +1087,7 @@ ir_lower_expr :: (node: *Code_Node,
         left_is_matrix := ir_type_is_matrix_like(left_type);
         right_is_matrix := ir_type_is_matrix_like(right_type);
         if left_is_matrix || right_is_matrix {
-          right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state);
+          right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state, right_expected_type);
           if !right_ok return null, false;
           out := ir_expr_new(.CALL);
           out.left = ir_expr_new(.IDENT);
@@ -1129,7 +1143,7 @@ ir_lower_expr :: (node: *Code_Node,
         return null, false;
       }
 
-      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state);
+      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state, right_expected_type);
       if !right_ok return null, false;
       out := ir_expr_new(.BINARY);
       out.binary_operator_type = bn.operator_type;

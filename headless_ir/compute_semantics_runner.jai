@@ -45,6 +45,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"buffer_struct_copy_temp", .Boids},
   {"unary_not_bool", .Bare},
   {"unary_bit_not", .Bare},
+  {"binary_bit_xor_tilde", .Bare},
   {"float4_swizzle_xy", .Bare},
   {"matrix_ctor_mul", .Bare},
   {"using_inside_nested_block", .Bare},
@@ -151,6 +152,9 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"call_arg_implicit_cast_to_s64", .Bare},
   {"shaderfuncs_vector_mix_clamp", .Bare},
   {"shaderfuncs_vector_step_smoothstep_mod", .Bare},
+  {"shaderfuncs_vector_coerce_int_scalars", .Bare},
+  {"vector_anonymous_literal_chain", .Bare},
+  {"vector_anonymous_literal_chain_34", .Bare},
   {"vector_negate", .Bare},
   {"helper_nested_call", .Bare},
   {"struct_constructor_from_member_expr", .Boids},
@@ -671,6 +675,14 @@ unary_bit_not :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
   values[idx] = ~values[idx];
+} @compute_shader
+
+binary_bit_xor_tilde :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  a := idx & 7;
+  b := ifx (idx % 3) == 0 then a else a + 1;
+  values[idx] = ifx a ~ b then cast(u32) 1 else cast(u32) 0;
 } @compute_shader
 
 switch_sparse :: (using in: Compute_Semantics_In, values: *u32) {
@@ -2237,6 +2249,44 @@ shaderfuncs_vector_step_smoothstep_mod :: (using in: Compute_Semantics_In, value
   values[idx] = cast(u32) (wrapped.x * 101.0 + wrapped.y * 113.0 + wrapped.z * 127.0 +
                            st.x * 19.0 + st.y * 23.0 + st.z * 29.0 +
                            sm.x * 31.0 + sm.y * 37.0 + sm.z * 41.0);
+} @compute_shader
+
+shaderfuncs_vector_coerce_int_scalars :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  base := cast(float) (idx % 13) * 0.125;
+  v2 := Vector2.{base + 0.2, base * 0.75 + 0.4};
+  h := base + 0.125;
+  v2m := v2 * h + Vector2.{h, h};
+  v2c := clamp(v2m, cast(float) 0.0, cast(float) 1.0);
+
+  v3 := Vector3.{v2c.x, v2c.y, base + 0.3};
+  v3m := v3 * h + Vector3.{h, h, h};
+  v3c := clamp(v3m, cast(float) 0.0, cast(float) 1.0);
+
+  v4 := Vector4.{v3c.x, v3c.y, v3c.z, 0.25};
+  v4m := v4 * h + Vector4.{h, h, h, h};
+  v4c := clamp(v4m, cast(float) 0.0, cast(float) 1.0);
+  values[idx] = cast(u32) floor((v4c.x + v4c.y + v4c.z + v4c.w) * 80.0 + 0.5);
+} @compute_shader
+
+vector_anonymous_literal_chain :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  p := Vector2.{cast(float) (idx % 11) * 0.15 + 0.2, cast(float) (idx % 7) * 0.11 + 0.4};
+  q := p * 2.03 + .{19.1, 7.7};
+  r := p * 4.07 + .{3.3, 27.9};
+  values[idx] = cast(u32) floor((q.x + q.y + r.x * 0.25 + r.y * 0.125) * 10.0 + 0.5);
+} @compute_shader
+
+vector_anonymous_literal_chain_34 :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  p3 := Vector3.{cast(float) (idx % 5) * 0.21 + 0.1, cast(float) (idx % 9) * 0.13 + 0.2, cast(float) (idx % 7) * 0.17 + 0.3};
+  q3 := p3 * 1.37 + .{1.0, 2.0, 3.0};
+  p4 := Vector4.{q3.x, q3.y, q3.z, 0.5};
+  q4 := p4 * 0.91 + .{0.1, 0.2, 0.3, 0.4};
+  values[idx] = cast(u32) floor((q4.x + q4.y + q4.z + q4.w) * 30.0 + 0.5);
 } @compute_shader
 
 // Gap probes (not in ALL_TEST_FUNCTIONS yet):

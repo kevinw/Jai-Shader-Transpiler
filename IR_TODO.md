@@ -12,17 +12,6 @@ Direction note:
 - Add one case per builtin alias pattern and coercion edge (`f16/f32/int`).
 - Add one case per key pointer/lvalue/resource shape to catch regressions early.
 
-## 23) Unsigned integer `~` binary op is unsupported in SPIR-V backend
-- Symptom:
-  - `SPIR-V backend: unsupported integer binary op '~' for kind UINT.`
-- Where hit:
-  - `src/apps/shaders/flux_shader.jai` (`flux_grass_vertex_main`) when switching grass placement RNG to a PCG-style integer hash using `~` in shader code.
-- Current workaround:
-  - Avoid UINT bit-twiddling hash paths in shader code; use backend-safe float-domain sequences/hashes for randomized placement.
-- Desired fix:
-  - Add lowering support for UINT bitwise integer ops used by common hash functions (including `~`) in SPIR-V backend.
-  - Add a focused compute/graphics semantics test that exercises UINT hash-style expressions so regressions are caught early.
-
 ## 27) Graphics cast reinterpret still relies on weak type metadata for raw pointer casts
 - Symptom:
   - Some casted graphics reinterpret expressions can still surface unknown-result-type failures when IR does not carry complete cast/subscript type metadata.
