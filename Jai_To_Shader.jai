@@ -165,7 +165,9 @@ get_transpiled :: (target: Transpiled_Target, args: ..Any, call: Code = #caller_
         workspace := get_current_workspace();
         return tprint(#string END
 G :: #import,file "%";
-return %;
+_shader_source := %;
+assert(_shader_source.count > 0, "Transpiled shader bytes had zero count.");
+return _shader_source;
 END, compute_path_to_shader_bucket_module(workspace), get_transpiled_result_expr_from_call(call, loc));
     };
 }
