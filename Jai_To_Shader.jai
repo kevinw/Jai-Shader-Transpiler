@@ -76,11 +76,61 @@ expression_to_source_string :: (node: *Code_Node) -> string {
 transpiled_target_from_expr_string :: (expr: string) -> (single_note: string, pair_note: string, supports_pair: bool, is_metal: bool, ok: bool) {
   if expr == {
     case ".METAL";       return "shader_to_metal",  "shader_pair_to_metal",  true,  true,  true;
+    case "Transpiled_Target.METAL"; return "shader_to_metal",  "shader_pair_to_metal",  true,  true,  true;
     case ".HLSL";        return "shader_to_hlsl",   "",                      false, false, true;
+    case "Transpiled_Target.HLSL"; return "shader_to_hlsl",   "",                      false, false, true;
     case ".OPENGL_GLSL"; return "shader_to_glsl",   "shader_pair_to_glsl",   true,  false, true;
+    case "Transpiled_Target.OPENGL_GLSL"; return "shader_to_glsl",   "shader_pair_to_glsl",   true,  false, true;
     case ".VULKAN_GLSL"; return "shader_to_vulkan", "shader_pair_to_vulkan", true,  false, true;
+    case "Transpiled_Target.VULKAN_GLSL"; return "shader_to_vulkan", "shader_pair_to_vulkan", true,  false, true;
   }
   return "", "", false, false, false;
+}
+
+canonical_transpiled_target_expr_string :: (expr: string) -> (string, bool) {
+  if expr == {
+    case ".METAL"; #through;
+    case "Transpiled_Target.METAL"; return ".METAL", true;
+    case ".HLSL"; #through;
+    case "Transpiled_Target.HLSL"; return ".HLSL", true;
+    case ".OPENGL_GLSL"; #through;
+    case "Transpiled_Target.OPENGL_GLSL"; return ".OPENGL_GLSL", true;
+    case ".VULKAN_GLSL"; #through;
+    case "Transpiled_Target.VULKAN_GLSL"; return ".VULKAN_GLSL", true;
+  }
+  return "", false;
+}
+
+resolve_transpiled_target_expr_string :: (node: *Code_Node, depth: s64 = 0) -> (string, bool) #compile_time {
+  if !node return "", false;
+  if depth > 4 {
+      log_error("hit depth max in resolve_transpiled_target_expr_string");
+      return "", false;
+  }
+
+  expr := trim_ascii_whitespace(expression_to_source_string(node));
+  if expr.count > 0 {
+    _, _, _, _, ok := transpiled_target_from_expr_string(expr);
+    if ok return expr, true;
+  }
+
+  if node.kind == .IDENT {
+    ident := cast(*Code_Ident) node;
+    if ident.resolved_declaration && ident.resolved_declaration.expression {
+      nested_expr, nested_ok := resolve_transpiled_target_expr_string(ident.resolved_declaration.expression, depth + 1);
+      return nested_expr, nested_ok;
+    }
+  }
+
+  if node.kind == .DECLARATION {
+    decl := cast(*Code_Declaration) node;
+    if decl.expression {
+      nested_expr, nested_ok := resolve_transpiled_target_expr_string(decl.expression, depth + 1);
+      return nested_expr, nested_ok;
+    }
+  }
+
+  return "", false;
 }
 
 sanitize_identifier_component :: (in: string) -> string {
@@ -119,10 +169,13 @@ get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) 
   }
 
   target_expr := trim_ascii_whitespace(expression_to_source_string(pc.arguments_unsorted[0].expression));
-  target_ident := sanitize_identifier_component(target_expr);
-  single_note, pair_note, supports_pair, _, target_ok := transpiled_target_from_expr_string(target_expr);
-  if !target_ok {
-    compiler_report("Jai Shader Transpiler: First argument to get_transpiled must be .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.", loc=loc);
+  resolved_target_expr, resolved_target_ok := resolve_transpiled_target_expr_string(pc.arguments_unsorted[0].expression);
+  target_parse_expr := ifx resolved_target_ok then resolved_target_expr else target_expr;
+  canonical_target_expr, canonical_target_ok := canonical_transpiled_target_expr_string(target_parse_expr);
+  target_ident := sanitize_identifier_component(canonical_target_expr);
+  single_note, pair_note, supports_pair, _, target_ok := transpiled_target_from_expr_string(canonical_target_expr);
+  if !target_ok || !canonical_target_ok {
+    compiler_report("Jai Shader Transpiler: First argument to get_transpiled must resolve to .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.", loc=loc);
     return "";
   }
 
@@ -138,7 +191,7 @@ get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) 
     key := tprint("single|%|%", single_note, shader_name);
     request_source := tprint("% :: %; @%\n", request_name, shader_name, single_note);
     ensure_get_transpiled_request_registered(key, request_source);
-    return tprint("G.lookup_transpiled(\"%\", \"%\", \"\")", target_expr, shader_name);
+    return tprint("G.lookup_transpiled(\"%\", \"%\", \"\")", canonical_target_expr, shader_name);
   }
 
   if !supports_pair {
@@ -157,7 +210,7 @@ get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) 
   key := tprint("pair|%|%|%", pair_note, shader_name, fragment_name);
   request_source := tprint("% :: %; @%(%)\n", request_name, shader_name, pair_note, fragment_name);
   ensure_get_transpiled_request_registered(key, request_source);
-  return tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", target_expr, shader_name, fragment_name);
+  return tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, shader_name, fragment_name);
 }
 
 get_transpiled :: (target: Transpiled_Target, args: ..Any, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> string #expand {
