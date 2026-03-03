@@ -1512,14 +1512,13 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
     positional_index += 1;
   }
 
-  for 0..resolved_args.count-1 {
-    if !resolved_args[it] {
-      return false, make_diag("constructor for '%' is missing field '%'.", dst.type_name, dst.fields[it].name);
-    }
-  }
-
   for dst.fields {
     arg_expr := resolved_args[it_index];
+    if !arg_expr {
+      // Local struct fields are zero-initialized at allocation time; omitted constructor
+      // members keep that default value.
+      continue;
+    }
     if it.type == .STRUCT {
       nested_dst := find_local_struct(s, it.nested_struct_name);
       if !nested_dst {
@@ -2173,7 +2172,8 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
 
   expr := arg_expr;
   if expr && expr.kind == .CAST && expr.left expr = expr.left;
-  if expr && expr.kind == .UNARY && expr.left && expr.unary_op == .ADDRESS_OF expr = expr.left;
+  if expr && expr.kind == .UNARY && expr.left &&
+     (expr.unary_op == .ADDRESS_OF || expr.unary_op == .DEREF) expr = expr.left;
 
   expected_kind := spv_kind_from_ir_type_kind(arg.type.pointee_kind);
 

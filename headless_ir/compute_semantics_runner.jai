@@ -178,6 +178,10 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"used_struct_in_proc_body", .Bare},
   
   {"early_return", .Bare},
+  
+  {"local_enum", .Bare},
+  {"struct_with_enum", .Bare},
+  {"enum_types", .Bare},
 ];
 
 ELEMENT_COUNT :: 64;
@@ -2426,8 +2430,8 @@ used_struct_in_proc_body :: (using in: Compute_Semantics_In, values: *u32) {
 } @compute_shader
 
 early_return_helper :: (val: u32) -> u32 {
-    return 5;
-    if val > 10 {
+    return 5; 
+    if val > 10 { // Warning here ok and intentional.
         return 15;
     }
     return val;
@@ -2436,6 +2440,85 @@ early_return_helper :: (val: u32) -> u32 {
 early_return :: (using in: Compute_Semantics_In, values: *u32) {
     if thread_id.x >= ELEMENT_COUNT return;
     values[thread_id.x] = early_return_helper(thread_id.x);
+} @compute_shader
+
+local_enum :: (using in: Compute_Semantics_In, values: *u32) {
+    My_Enum :: enum { 
+        A :: 42; 
+        B :: 99; 
+        C :: 200;
+    }
+    
+    if thread_id.x >= ELEMENT_COUNT return;
+    
+    my_enum: My_Enum;
+    if thread_id.x % 2 == 0 {
+        my_enum = .A;
+    } else if thread_id.x % 3 == 0 {
+        my_enum = .B;
+    } else {
+        my_enum = .C;
+    }
+    
+    values[thread_id.x] = cast(u32) my_enum + thread_id.x;
+} @compute_shader
+
+Brush_Type :: enum u16 {
+    None :: 0;
+    Carve :: 1;
+    Heat :: 2;
+}
+
+toggle_brush_type :: (brush_type: *Brush_Type) {
+    if brush_type.* == {
+    case .None;  brush_type.* = .Carve;
+    case .Carve; brush_type.* = .Heat;
+    case .Heat;  brush_type.* = .None;
+    }
+}
+
+Control :: struct {
+    brush: Brush_Type;
+    brush_active: bool;
+}
+
+struct_with_enum :: (using in: Compute_Semantics_In, values: *u32) {
+    if thread_id.x >= ELEMENT_COUNT return;
+    
+    control: Control = { brush_active = true };
+    control.brush = .Carve;
+    values[thread_id.x] = cast(u32)control.brush;
+    for 0..thread_id.x-1 {
+        toggle_brush_type(*control.brush);
+    }
+    values[thread_id.x] += cast(u32)control.brush;
+} @compute_shader
+
+Enum_3 :: enum u64 {
+    A :: 0;
+    B :: 10;
+    C :: 20;
+}
+
+enum_types :: (using in: Compute_Semantics_In, values: *u32) {
+    Enum_1 :: enum u8 {
+        A :: 1;
+        B :: 2;
+        C :: 3;
+    }
+    
+    Enum_2 :: enum s16 {
+        A :: -10;
+        B :: 0;
+        C :: 10;
+    }
+    
+    e1: Enum_1 = .B;
+    e2: Enum_2 = .C;
+    e3: Enum_3 = .B;
+    
+    if thread_id.x >= ELEMENT_COUNT return;
+    values[thread_id.x] += cast,no_check(u32)e1 + cast,no_check(u32)e2 + cast,no_check(u32)e3;
 } @compute_shader
 
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {

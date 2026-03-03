@@ -14,7 +14,7 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
         if local_ptr return local_ptr.ptr_id, local_ptr.type, true, diag;
       }
       buffer_name, buffer_name_ok := resolve_buffer_name_from_expr(expr.left);
-      if !buffer_name_ok return_err("unsupported unary '*' lvalue base.");
+      if !buffer_name_ok return_err("unsupported unary '*' lvalue base (kind=% text='%').", expr.left.kind, expr_text(expr.left));
       buffer := find_buffer(s, buffer_name);
       if !buffer return_err("unknown unary '*' lvalue base '%'.", buffer_name);
       if buffer.element_kind == .STRUCT return_err("struct buffer '%' requires member access on lvalue.", buffer.name);

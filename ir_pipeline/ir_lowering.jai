@@ -44,6 +44,14 @@ ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
     return "", false;
   }
 
+  if type.type == .ENUM {
+    enum_type := cast(*Type_Info_Enum) type;
+    if !enum_type.internal_type return "", false;
+    // SPIR-V path models enums as integer-backed scalar values.
+    lowered_name, lowered_ok := ir_type_to_shader_name(enum_type.internal_type);
+    return lowered_name, lowered_ok;
+  }
+
   if type.type == .POINTER {
     ptr := cast(*Type_Info_Pointer) type;
     if !ptr.pointer_to return "", false;
@@ -65,11 +73,11 @@ ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
       inttype := cast(*Type_Info_Integer) type;
       if inttype.signed {
         if type.runtime_size == 8 return "int64_t", true;
-        if type.runtime_size == 4 return "int32_t", true;
+        if type.runtime_size == 4 || type.runtime_size == 2 || type.runtime_size == 1 return "int32_t", true;
         return "", false;
       } else {
         if type.runtime_size == 8 return "uint64_t", true;
-        if type.runtime_size == 4 return "uint", true;
+        if type.runtime_size == 4 || type.runtime_size == 2 || type.runtime_size == 1 return "uint", true;
         return "", false;
       }
     }
@@ -573,7 +581,7 @@ ir_unary_op_from_compiler_operator :: (op: Operator_Type) -> (IR_Unary_Op, bool)
   if op == cast(Operator_Type) #char "!" return .LOGICAL_NOT, true;
   if op == cast(Operator_Type) #char "~" return .BIT_NOT, true;
   if op == cast(Operator_Type) #char "*" return .ADDRESS_OF, true;
-  if op == .POINTER_DEREFERENCE return .DEREF, true;
+  if op == .POINTER_DEREFERENCE return .ADDRESS_OF, true;
   if op == .POSTFIX_DEREFERENCE return .DEREF, true;
   return .UNKNOWN, false;
 }
@@ -973,6 +981,24 @@ ir_lower_expr :: (node: *Code_Node,
 
     case .UNARY_OPERATOR; {
       un := cast(*Code_Unary_Operator) node;
+
+      if un.operator_type == cast(Operator_Type) #char "." {
+        // Distinguish enum shorthand `.Value` from postfix dereference `value.*`.
+        if un.subexpression && un.subexpression.kind == .IDENT {
+          ident := cast(*Code_Ident) un.subexpression;
+          if ident.resolved_declaration && ir_decl_is_compile_constant(ident.resolved_declaration) {
+            lowered_enum, lowered_enum_ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases, state);
+            return lowered_enum, lowered_enum_ok;
+          }
+        }
+        inner, ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases, state);
+        if !ok return null, false;
+        out := ir_expr_new(.UNARY);
+        out.unary_op = .DEREF;
+        out.left = inner;
+        return out, true;
+      }
+
       inner, ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases, state);
       if !ok return null, false;
       out := ir_expr_new(.UNARY);
@@ -988,6 +1014,22 @@ ir_lower_expr :: (node: *Code_Node,
 
     case .BINARY_OPERATOR; {
       bn := cast(*Code_Binary_Operator) node;
+      if bn.operator_type == cast(Operator_Type) #char "." &&
+         bn.left && bn.left.kind == .IDENT &&
+         bn.right && bn.right.kind == .IDENT {
+        left_ident := cast(*Code_Ident) bn.left;
+        right_ident := cast(*Code_Ident) bn.right;
+        // Support enum type member constants like `Brush_Type.RAISE` by
+        // lowering the RHS compile-time constant directly.
+        if right_ident.resolved_declaration && ir_decl_is_compile_constant(right_ident.resolved_declaration) &&
+           left_ident.resolved_declaration && left_ident.resolved_declaration.expression &&
+           (left_ident.resolved_declaration.expression.kind == .TYPE_DEFINITION ||
+            left_ident.resolved_declaration.expression.kind == .ENUM) {
+          lowered_const, lowered_const_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
+          if lowered_const_ok return lowered_const, true;
+        }
+      }
+
       if bn.operator_type == cast(Operator_Type) #char "." &&
          bn.left && bn.left.kind == .IDENT &&
          bn.right && bn.right.kind == .IDENT {
