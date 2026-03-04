@@ -220,3 +220,17 @@ Direction note:
 - Desired fix:
   - Normalize scalar cast-target parsing so `float` aliases map to backend scalar float type in all expression contexts.
   - Add regression tests covering cast usage in call args, vector constructors, and intermediate local expressions.
+
+## 40) Helper return-shape support is incomplete (multi-return / local POD return structs)
+- Symptom:
+  - Fragment/helper lowering can fail when shader helpers return composite shapes used for debug/inspection paths, for example:
+    - IR lowering helper-collection failure for tuple-style helper returns (`float, s32`).
+    - `SPIR-V backend: unsupported declaration type '<Helper_Return_Struct>'` for local POD return structs.
+- Where hit:
+  - Brickmap cache debug instrumentation while adding:
+    - sampled-distance + selected-LOD helper return in one call.
+- Current workaround:
+  - Keep helper returns scalar-only and split extra debug data into separate helper calls.
+- Desired fix:
+  - Add backend support for helper return tuples and/or POD local struct return/value propagation in shader IR lowering.
+  - Add focused regressions for helper returns with `(scalar, scalar)` and simple local POD struct returns used in fragment shaders.
