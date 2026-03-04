@@ -97,3 +97,33 @@ Direction note:
 - Status:
   - Active. Major typed-first backend simplification work has landed; see `IR_DONE.md` for completed milestones.
   - Remaining work: remove the last semantic dependencies on `expr.text` / `*_type_name` in backend decision paths.
+
+## 29) Integer fragment varyings can fail output-pointer typing in SPIR-V backend
+- Symptom:
+  - Pair shader lowering can fail with: `SPIR-V backend: missing output pointer type for field '<field>'` when passing integer varyings (e.g. `u32 flags`) from vertex to fragment.
+- Where hit:
+  - New Tetris pair shader (`src/apps/shaders/tetris_shader.jai`) when carrying per-instance flags through vertex output.
+- Current workaround:
+  - Carry the varying as `float`, cast back to integer in fragment.
+- Desired fix:
+  - Ensure integer varyings in stage I/O structs always produce valid pointer/result types in SPIR-V text backend, including interpolation/storage decorations as needed.
+
+## 30) Structured-buffer element layout/alignment is fragile for non-16-byte strides
+- Symptom:
+  - `spirv-opt` rejects generated SPIR-V with block-layout errors such as: `array with stride 44 not satisfying alignment to 16`.
+- Where hit:
+  - Structured buffer element `Tetris_Block_Instance` (2x vec2 + vec4 + scalar tail fields) generated a 44-byte stride.
+- Current workaround:
+  - Add explicit padding field(s) to force 16-byte-aligned struct stride (`48` bytes here).
+- Desired fix:
+  - Backend should enforce/validate target block layout proactively and/or auto-pad reflected struct layout for storage buffers so misaligned host-side structs fail early with actionable diagnostics.
+
+## 31) Shader-side `normalize` overload resolution still trips host pointer-style forms
+- Symptom:
+  - Shader lowering emits `SPIR-V backend: normalize expects 1 arg.` in contexts that pick or preserve host-style overload forms.
+- Where hit:
+  - Tetris shader normal computation in pair shader path.
+- Current workaround:
+  - Use explicit local normalize helper (`len2/sqrt/inv`) in shader code.
+- Desired fix:
+  - Route shader lowering through unambiguous value-vector normalize lowering (or improve overload filtering/diagnostics so host pointer-style forms never leak into shader IR paths).
