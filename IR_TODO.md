@@ -139,3 +139,48 @@ Direction note:
   - Expand to explicit per-component scalar comparisons (`ifx` / scalar `min`/`max`) before scalar reductions.
 - Desired fix:
   - Ensure vector `min`/`max` builtins preserve vector result typing through IR + SPIR-V lowering (including overload selection and temporary type propagation), so element-wise vector ops don’t degrade to scalar conversion paths.
+
+## 33) Storage-buffer struct fields cannot currently be arrays of user-defined structs
+- Symptom:
+  - Pair shader lowering fails for storage buffer payloads with array-of-struct fields, e.g.:
+    - `buffer struct 'Brickmap_Params' field 'lod_info' array element type 'Brickmap_Lod_Info' is unsupported.`
+    - `... field 'edits' array element type 'SDF_Edit' is unsupported.`
+- Where hit:
+  - New brickmap prototype (`src/apps/shaders/brickmap_shader.jai`) for clipmap LOD/edit/dirty queues in a single storage payload.
+- Current workaround:
+  - Flatten arrays of structs into parallel primitive/vector arrays (`u32`/`s32`/`float`/`Vector4`) and pack/unpack on CPU.
+- Desired fix:
+  - Add SPIR-V storage buffer type emission + access support for arrays of user-defined struct element types.
+  - Include layout/stride validation diagnostics for nested/arrayed struct fields.
+
+## 34) `tan(...)` intrinsic is missing in SPIR-V backend call lowering
+- Symptom:
+  - Pair shader lowering fails with: `unsupported call target 'tan'`.
+- Where hit:
+  - Brickmap fragment ray setup used `tan(fov * 0.5)`.
+- Current workaround:
+  - Precompute `tan_half_fov` on CPU and pass as uniform field.
+- Desired fix:
+  - Add intrinsic lowering for `tan` scalar/vector overloads consistent with existing trig builtin support.
+
+## 35) Temporary/local user-defined struct declarations in shader code are not broadly supported
+- Symptom:
+  - Backend can fail with unsupported declaration type errors for shader-local custom struct declarations/returns (hit with `Brickmap_Sample_Result` return path).
+- Where hit:
+  - Brickmap cached-sample helper initially returned a custom struct (`dist`, `from_cache`).
+- Current workaround:
+  - Avoid custom local return structs in shader helpers; use scalar returns/arguments instead.
+- Desired fix:
+  - Support user-defined POD local structs in IR/SPIR-V expression/declaration lowering, including function return/value propagation.
+
+## 36) Root-parameter helper lowering is fragile for nested pointer/resource-container access
+- Symptom:
+  - Helper lowering can fail with errors like:
+    - `helper '...' pointer arg 'params' expected storage buffer identifier, got 'params'`
+  - Observed when helper traverses nested resource pointers hanging off a root param struct.
+- Where hit:
+  - Brickmap helper sampling path with root `params` that contained resource pointers.
+- Current workaround:
+  - Use flat monolithic payload buffers and avoid nested pointer/resource-container indirection in helper-call chains.
+- Desired fix:
+  - Allow helper lowering to resolve and propagate root storage identifiers through nested pointer/resource container expressions reliably.
