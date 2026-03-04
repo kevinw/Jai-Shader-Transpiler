@@ -12,6 +12,9 @@ IR_INTERMEDIATE_DIR :: ".build/ir_intermediate";
 DEBUG_OUTDIR :: ".generated_shaders";
 MY_MODULE_NAME :: "Jai-Shader-Transpiler";
 
+jst_pipeline_fingerprint_ready: bool;
+jst_pipeline_fingerprint_cache: string;
+
 Transpiled_Target :: enum {
   METAL;
   HLSL;
@@ -63,6 +66,126 @@ get_plugin :: () -> *Jai_To_Shader_Plugin {
   }
 
   return p;
+}
+
+jst_hash_u64_append_byte :: (h: *u64, b: u8) {
+  h.* = (h.* ^ cast(u64) b) * 1099511628211;
+}
+
+jst_hash_u64_append_string :: (h: *u64, s: string) {
+  for s jst_hash_u64_append_byte(h, it);
+}
+
+jst_trim_newlines :: (s: string) -> string {
+  out := s;
+  while out.count > 0 && (out[out.count-1] == #char "\n" || out[out.count-1] == #char "\r") out.count -= 1;
+  return out;
+}
+
+jst_detect_module_root :: () -> string {
+  cwd := get_working_directory();
+  if contains(cwd, "modules/Jai-Shader-Transpiler") return ".";
+  return "modules/Jai-Shader-Transpiler";
+}
+
+jst_collect_module_jai_files :: (module_root: string) -> [..] string {
+  files: [..] string;
+  if module_root.count == 0 return files;
+
+  cmd := tprint("find \"%\" -type f -name \"*.jai\" -not -path \"*/.build/*\" -not -path \"*/.git/*\" | LC_ALL=C sort", module_root);
+  result, stdout, stderr, timeout_reached := Process.run_command("sh", "-lc", cmd, capture_and_return_output=true, timeout_ms=10_000);
+  if timeout_reached return files;
+  if result.type != .EXITED || result.exit_code != 0 {
+    if VERBOSE && stderr.count != 0 log("JST fingerprint find stderr: %", stderr);
+    return files;
+  }
+
+  i: s64 = 0;
+  while i < stdout.count {
+    start := i;
+    while i < stdout.count && stdout[i] != #char "\n" i += 1;
+    line: string = .{i - start, stdout.data + start};
+    if i < stdout.count && stdout[i] == #char "\n" i += 1;
+    line = trim_ascii_whitespace(line);
+    if line.count == 0 continue;
+    array_add(*files, copy_string(line));
+  }
+  return files;
+}
+
+jst_tool_version_fingerprint_line :: (args: ..string) -> string {
+  result, stdout, stderr, timeout_reached := Process.run_command(..args, capture_and_return_output=true, timeout_ms=3_000);
+  if timeout_reached return tprint("timeout:%", args[0]);
+  stdout = jst_trim_newlines(stdout);
+  stderr = jst_trim_newlines(stderr);
+  return tprint("tool=% type=% exit=% out=% err=%", args[0], result.type, result.exit_code, stdout, stderr);
+}
+
+jst_compute_pipeline_fingerprint :: () -> string {
+  h: u64 = 1469598103934665603;
+  jst_hash_u64_append_string(*h, "jai-shader-transpiler-pipeline-v1");
+  jst_hash_u64_append_string(*h, tprint("USE_SPIRV_OPT=%", USE_SPIRV_OPT));
+
+  module_root := jst_detect_module_root();
+  files := jst_collect_module_jai_files(module_root);
+  for files {
+    content, ok := read_entire_file(it);
+    if !ok continue;
+    jst_hash_u64_append_string(*h, "file:");
+    jst_hash_u64_append_string(*h, it);
+    jst_hash_u64_append_string(*h, "\n");
+    jst_hash_u64_append_string(*h, content);
+    jst_hash_u64_append_string(*h, "\n");
+  }
+
+  jst_hash_u64_append_string(*h, jst_tool_version_fingerprint_line("spirv-cross", "--version"));
+  jst_hash_u64_append_string(*h, jst_tool_version_fingerprint_line("spirv-opt", "--version"));
+  jst_hash_u64_append_string(*h, jst_tool_version_fingerprint_line("spirv-as", "--version"));
+  jst_hash_u64_append_string(*h, jst_tool_version_fingerprint_line("spirv-val", "--version"));
+
+  hex := sprint("%", formatInt(h, base=16));
+  if hex.count == 0 return "0";
+  return copy_string(hex);
+}
+
+jst_pipeline_fingerprint :: () -> string {
+  if !jst_pipeline_fingerprint_ready {
+    jst_pipeline_fingerprint_cache = jst_compute_pipeline_fingerprint();
+    jst_pipeline_fingerprint_ready = true;
+  }
+  return jst_pipeline_fingerprint_cache;
+}
+
+jst_use_fingerprinted_artifact_dirs :: () -> bool {
+  cwd := get_working_directory();
+  if contains(cwd, "/headless_ir") return false;
+  return true;
+}
+
+jst_generated_dir :: () -> string {
+  if !jst_use_fingerprinted_artifact_dirs() return DEBUG_OUTDIR;
+  fp := jst_pipeline_fingerprint();
+  if fp.count == 0 return DEBUG_OUTDIR;
+  return tprint("%/%", DEBUG_OUTDIR, fp);
+}
+
+jst_ir_intermediate_dir :: () -> string {
+  if !jst_use_fingerprinted_artifact_dirs() return IR_INTERMEDIATE_DIR;
+  fp := jst_pipeline_fingerprint();
+  if fp.count == 0 return IR_INTERMEDIATE_DIR;
+  return tprint("%/%", IR_INTERMEDIATE_DIR, fp);
+}
+
+jst_mirror_to_legacy_intermediate_if_needed :: (path: string) {
+  if !jst_use_fingerprinted_artifact_dirs() return;
+  if path.count == 0 return;
+  filename := path_filename(path);
+  if filename.count == 0 return;
+  data, ok := read_entire_file(path);
+  if !ok return;
+  make_directory_if_it_does_not_exist(IR_INTERMEDIATE_DIR, recursive=true);
+  legacy_path := tprint("%/%", IR_INTERMEDIATE_DIR, filename);
+  _ = write_entire_file(legacy_path, data);
 }
 
 get_transpiled_requests_seen: Table(string, bool);
@@ -292,8 +415,9 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           if plugin.output_shaders {
             ext := tprint("%", pair_ctx.language);
             to_lower_in_place(ext);
-            make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
-            filename := tprint("%/%.%", DEBUG_OUTDIR, pair_ctx.name, ext);
+            generated_dir := jst_generated_dir();
+            make_directory_if_it_does_not_exist(generated_dir, recursive = true);
+            filename := tprint("%/%.%", generated_dir, pair_ctx.name, ext);
             ok := false;
             ir_source_path := ir_output_path_from_pair_context(pair_ctx);
             file_source, read_ok := read_entire_file(ir_source_path);
@@ -367,8 +491,9 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             if plugin.output_shaders {
               ext := tprint("%", ctx.language);
               to_lower_in_place(ext);
-              make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive = true);
-              filename := tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ext);
+              generated_dir := jst_generated_dir();
+              make_directory_if_it_does_not_exist(generated_dir, recursive = true);
+              filename := tprint("%/%.%", generated_dir, ctx.name, ext);
               ok := false;
               ir_source_path := ir_output_path_from_context(ctx);
               file_source, read_ok := read_entire_file(ir_source_path);
@@ -486,11 +611,11 @@ ir_output_ext_from_context :: (ctx: *Shader_Write_Context) -> string {
 }
 
 ir_output_path_from_context :: (ctx: *Shader_Write_Context) -> string {
-  return tprint("%/%.%", DEBUG_OUTDIR, ctx.name, ir_output_ext_from_context(ctx));
+  return tprint("%/%.%", jst_generated_dir(), ctx.name, ir_output_ext_from_context(ctx));
 }
 
 ir_output_path_from_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> string {
-  return tprint("%/%.metal", DEBUG_OUTDIR, pair_ctx.name);
+  return tprint("%/%.metal", jst_generated_dir(), pair_ctx.name);
 }
 
 is_internal_transpiled_request_name :: (name: string) -> bool {
@@ -659,7 +784,7 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
     return false, spvasm_diag;
   }
 
-  build_dir := IR_INTERMEDIATE_DIR;
+  build_dir := jst_ir_intermediate_dir();
   make_directory_if_it_does_not_exist(build_dir, recursive=true);
   stage_short := ir_stage_short_from_context(ctx);
   output_ext := ifx ctx.language == .METAL then "metal" else "glsl";
@@ -682,6 +807,7 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
     diag.message = tprint("SPIR-V backend: failed writing SPIR-V text file '%'.", job.spvasm_path);
     return false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(job.spvasm_path);
 
   return true, diag;
 }
@@ -692,6 +818,7 @@ run_spirv_external_single_job :: (job: *SPV_External_Single_Job) -> bool {
     job.error_message = copy_string(tprint("SPIR-V backend: failed assembling SPIR-V text for '%'. Source: %", job.ctx.name, job.spvasm_path));
     return false;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(job.spv_path);
 
   if job.validate_before_opt {
     if !validate_spirv_binary(job.spv_path) {
@@ -705,6 +832,7 @@ run_spirv_external_single_job :: (job: *SPV_External_Single_Job) -> bool {
       job.error_message = copy_string(tprint("SPIR-V backend: spirv-opt failed for '%'. SPIR-V: %", job.ctx.name, job.spv_path));
       return false;
     }
+    jst_mirror_to_legacy_intermediate_if_needed(job.spv_opt_path);
   } else {
     job.spv_opt_path = job.spv_path;
   }
@@ -718,6 +846,7 @@ run_spirv_external_single_job :: (job: *SPV_External_Single_Job) -> bool {
     job.error_message = copy_string(tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", job.ctx.name, job.spv_opt_path));
     return false;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(job.output_path);
 
   return true;
 }
@@ -938,7 +1067,7 @@ build_metal_artifacts_for_manifest_entries :: (plugin: *Jai_To_Shader_Plugin, wo
   }
 
   workspace_name := stable_metallib_workspace_name(plugin);
-  generated_dir := DEBUG_OUTDIR;
+  generated_dir := jst_generated_dir();
   make_directory_if_it_does_not_exist(generated_dir, recursive=true);
   metallib_rel_path := tprint("%/%_app.metallib", generated_dir, workspace_name);
 
@@ -1076,7 +1205,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  build_dir := IR_INTERMEDIATE_DIR;
+  build_dir := jst_ir_intermediate_dir();
   make_directory_if_it_does_not_exist(build_dir, recursive=true);
 
   stage_short := ir_stage_short_from_context(ctx);
@@ -1107,6 +1236,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     diag.message = tprint("SPIR-V backend: failed writing SPIR-V text file '%'.", spvasm_path);
     return "", "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(spvasm_path);
   if !assemble_spirv_text(spvasm_path, spv_path) {
     diag.message = tprint("SPIR-V backend: failed assembling SPIR-V text for '%'. Source: %", ctx.name, spvasm_path);
     if ctx.main_fn && ctx.main_fn.header {
@@ -1115,6 +1245,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     }
     return "", "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(spv_path);
 
   spv_for_target := spv_path;
   if !optimize_spirv_binary(spv_path, spv_opt_path) {
@@ -1125,6 +1256,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     }
     return "", "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(spv_opt_path);
   spv_for_target = spv_opt_path;
 
   if !validate_spirv_binary(spv_for_target) {
@@ -1144,6 +1276,7 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     }
     return "", "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(output_path);
 
   target_source, ok := read_entire_file(output_path);
   if !ok {
@@ -1360,7 +1493,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     }
     return "", false, pair_spvasm_diag;
   }
-  build_dir := IR_INTERMEDIATE_DIR;
+  build_dir := jst_ir_intermediate_dir();
   make_directory_if_it_does_not_exist(build_dir, recursive=true);
   vertex_spvasm_path := tprint("%/%_vert.spvasm", build_dir, pair_ctx.name);
   fragment_spvasm_path := tprint("%/%_frag.spvasm", build_dir, pair_ctx.name);
@@ -1377,10 +1510,14 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     diag.message = "SPIR-V backend: failed writing pair SPIR-V text files.";
     return "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(vertex_spvasm_path);
+  jst_mirror_to_legacy_intermediate_if_needed(fragment_spvasm_path);
   if !assemble_spirv_text(vertex_spvasm_path, vertex_spv_path) || !assemble_spirv_text(fragment_spvasm_path, fragment_spv_path) {
     diag.message = "SPIR-V backend: failed assembling pair SPIR-V text.";
     return "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(vertex_spv_path);
+  jst_mirror_to_legacy_intermediate_if_needed(fragment_spv_path);
   if !link_spirv_binaries(.[vertex_spv_path, fragment_spv_path], pair_spv_path) {
     vertex_model := spv_memory_model_from_text(vertex_spvasm);
     fragment_model := spv_memory_model_from_text(fragment_spvasm);
@@ -1391,10 +1528,12 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     }
     return "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(pair_spv_path);
   if !optimize_spirv_binary(pair_spv_path, pair_opt_spv_path) {
     diag.message = "SPIR-V backend: spirv-opt failed for pair module.";
     return "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(pair_opt_spv_path);
   if !validate_spirv_binary(pair_opt_spv_path) {
     diag.message = "SPIR-V backend: spirv-val failed for pair module.";
     return "", false, diag;
@@ -1403,14 +1542,17 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     diag.message = "SPIR-V backend: spirv-dis failed for optimized pair module.";
     return "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(pair_spvasm_path);
   if !emit_spirv_cross_target_source(pair_opt_spv_path, metal_vertex_entry_name, .Vertex, .METAL, vertex_output_path, use_metal_argument_buffers, source_entry_name=ir_vertex.entry_name) {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(vertex_output_path);
   if !emit_spirv_cross_target_source(pair_opt_spv_path, metal_fragment_entry_name, .Fragment, .METAL, fragment_output_path, use_metal_argument_buffers, source_entry_name=ir_fragment.entry_name) {
     diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
     return "", false, diag;
   }
+  jst_mirror_to_legacy_intermediate_if_needed(fragment_output_path);
 
   vertex_source, v_ok   := read_entire_file(vertex_output_path);
   fragment_source, f_ok := read_entire_file(fragment_output_path);

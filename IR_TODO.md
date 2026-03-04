@@ -12,6 +12,8 @@ Direction note:
 - Add one case per builtin alias pattern and coercion edge (`f16/f32/int`).
 - Add one case per key pointer/lvalue/resource shape to catch regressions early.
 
+## 26) Maintain identifier names in IR for better diagnostics and debugging
+
 ## 27) Graphics cast reinterpret still relies on weak type metadata for raw pointer casts
 - Symptom:
   - Some casted graphics reinterpret expressions can still surface unknown-result-type failures when IR does not carry complete cast/subscript type metadata.

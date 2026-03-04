@@ -22,7 +22,7 @@ manifest_output_source_path :: (request_name: string, target: string) -> string 
   if request_name.count == 0 return "";
   ext := manifest_ext_from_target(target);
   if ext.count == 0 return "";
-  return tprint(".generated_shaders/%.%", request_name, ext);
+  return tprint("%/%.%", jst_generated_dir(), request_name, ext);
 }
 
 manifest_stage_from_shader_type :: (type: Shader_Type) -> string {
@@ -353,6 +353,7 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
 
   sb: String_Builder;
   append(*sb, "version 3\n");
+  append(*sb, tprint("pipeline_fingerprint %\n", jst_pipeline_fingerprint()));
   append(*sb, tprint("entry_count %\n", plugin.manifest_entries.count));
   append(*sb, tprint("global_dependency_count %\n", global_dependencies.count));
   for global_dependencies append(*sb, tprint("global_dependency %\n", it));

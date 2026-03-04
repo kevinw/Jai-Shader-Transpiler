@@ -504,6 +504,11 @@ IR_SPV_Gen_Debug_Member_Name :: struct {
 IR_SPV_Inline_Helper_Context :: struct {
   exit_label: s64;
   return_flag_ptr: s64;
+  has_return_value: bool;
+  return_value_ptr: s64;
+  return_value_type: IR_SPV_Gen_Type;
+  break_targets_base_count: s64;
+  control_merge_targets_base_count: s64;
 }
 
 IR_SPV_PS_Struct_Info :: struct {
@@ -1332,9 +1337,6 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   return true, diag;
 }
 
-load_thread_x :: (s: *IR_SPV_Gen_State) -> s64 {
-  return load_thread_component(s, 0);
-}
 
 load_builtin_vec3_component :: (s: *IR_SPV_Gen_State, builtin_var_id: s64, component_index: s64) -> s64 {
   assert(s != null);
@@ -1349,9 +1351,6 @@ load_builtin_u32 :: (s: *IR_SPV_Gen_State, builtin_var_id: s64) -> s64 {
   return add_op(s, new_id(s), "OpLoad", s.id_uint, builtin_var_id);
 }
 
-load_thread_component :: (s: *IR_SPV_Gen_State, component_index: s64) -> s64 {
-  return load_builtin_vec3_component(s, s.id_gl_global_invocation_id, component_index);
-}
 
 physical_aligned_suffix :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> string {
   assert(s != null);
@@ -2566,126 +2565,6 @@ emit_write_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
   return true, diag;
 }
 
-eval_inline_function_return_chain :: (s: *IR_SPV_Gen_State, helper: *IR_Function, return_kind: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
-  assert(s != null);
-  diag: IR_Diagnostic;
-  if !helper return 0, .UNKNOWN, false, false, diag;
-
-  eval_return_block_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, return_kind: IR_SPV_Gen_Type, block: *IR_Block) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, handled: bool, diag: IR_Diagnostic) {
-    diag: IR_Diagnostic;
-    if !block || block.statements.count == 0 return 0, .UNKNOWN, false, false, diag;
-
-    // Canonical helper-return block:
-    //   <side-effect statements...>
-    //   return X;
-    // or:
-    //   <side-effect statements...>
-    //   if (...) { ...return... } else { ...return... }
-    for i: 0..block.statements.count-2 {
-      pre_stmt := *block.statements[i];
-      if pre_stmt.kind == .RETURN {
-        if !pre_stmt.return_expr {
-          return 0, .UNKNOWN, false, true, make_diag("helper '%' must return a value.", helper.name);
-        }
-        raw_id, raw_type, raw_ok, raw_diag := emit_expr(s, pre_stmt.return_expr);
-        if !raw_ok return 0, .UNKNOWN, false, true, raw_diag;
-        coerced_id, coerced_type, coerced_ok, coerced_diag := coerce_to_exact_kind(s, raw_id, raw_type, return_kind);
-        if !coerced_ok {
-          if coerced_diag.message.count == 0 coerced_diag.message = tprint("SPIR-V backend: helper '%' return expression must lower to %.", helper.name, return_kind);
-          return 0, .UNKNOWN, false, true, coerced_diag;
-        }
-        // Early top-level return with dead trailing statements.
-        return coerced_id, coerced_type, true, true, diag;
-      }
-      pre_ok, pre_terminated, pre_diag := emit_stmt(s, pre_stmt);
-      if !pre_ok return 0, .UNKNOWN, false, true, pre_diag;
-      if pre_terminated {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' has unsupported early control-flow termination in return prelude.", helper.name);
-      }
-    }
-
-    stmt := *block.statements[block.statements.count-1];
-
-    if stmt.kind == .RETURN {
-      if !stmt.return_expr {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' must return a value.", helper.name);
-      }
-      raw_id, raw_type, raw_ok, raw_diag := emit_expr(s, stmt.return_expr);
-      if !raw_ok return 0, .UNKNOWN, false, true, raw_diag;
-      coerced_id, coerced_type, coerced_ok, coerced_diag := coerce_to_exact_kind(s, raw_id, raw_type, return_kind);
-      if !coerced_ok {
-        if coerced_diag.message.count == 0 coerced_diag.message = tprint("SPIR-V backend: helper '%' return expression must lower to %.", helper.name, return_kind);
-        return 0, .UNKNOWN, false, true, coerced_diag;
-      }
-      return coerced_id, coerced_type, true, true, diag;
-    }
-
-    if stmt.kind == .IF && stmt.if_then && stmt.if_else {
-      cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.if_condition);
-      if !cond_ok return 0, .UNKNOWN, false, true, cond_diag;
-      if cond_type != .BOOL {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' if-condition must lower to bool.", helper.name);
-      }
-
-      result_type_id := type_id_from_kind(s, return_kind);
-      if result_type_id == 0 {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' return type % is unsupported for if-return lowering.", helper.name, return_kind);
-      }
-
-      result_ptr_type := func_ptr_type_id_from_kind(s, return_kind);
-      if result_ptr_type == 0 {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' return type % has no function pointer type.", helper.name, return_kind);
-      }
-      result_ptr := new_id(s);
-      result_zero := get_null_const(s, result_type_id);
-      add_local_decl(s, tprint("         % = OpVariable % Function %",
-                               id_text(result_ptr),
-                               id_text(result_ptr_type),
-                               id_text(result_zero)));
-
-      then_label := new_id(s);
-      else_label := new_id(s);
-      merge_label := new_id(s);
-      add_op(s, tprint("OpSelectionMerge % None", id_text(merge_label)));
-      add_op(s, "OpBranchConditional", cond_id, then_label, else_label);
-
-      add_op(s, then_label, "OpLabel");
-      then_id, then_type, then_ok, then_handled, then_diag := eval_return_block_value(s, helper, return_kind, stmt.if_then);
-      if !then_handled return 0, .UNKNOWN, false, false, diag;
-      if !then_ok return 0, .UNKNOWN, false, true, then_diag;
-      if then_type != return_kind {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' then-branch return type mismatch (expected %, got %).", helper.name, return_kind, then_type);
-      }
-      add_op(s, "OpStore", result_ptr, then_id);
-      if !spv_last_op_is_terminator(s.op_lines) add_op(s, "OpBranch", merge_label);
-
-      add_op(s, else_label, "OpLabel");
-      else_id, else_type, else_ok, else_handled, else_diag := eval_return_block_value(s, helper, return_kind, stmt.if_else);
-      if !else_handled return 0, .UNKNOWN, false, false, diag;
-      if !else_ok return 0, .UNKNOWN, false, true, else_diag;
-      if else_type != return_kind {
-        return 0, .UNKNOWN, false, true, make_diag("helper '%' else-branch return type mismatch (expected %, got %).", helper.name, return_kind, else_type);
-      }
-      add_op(s, "OpStore", result_ptr, else_id);
-      if !spv_last_op_is_terminator(s.op_lines) add_op(s, "OpBranch", merge_label);
-
-      add_op(s, merge_label, "OpLabel");
-      selected := new_id(s);
-      add_op(s, selected, "OpLoad", result_type_id, result_ptr);
-      return selected, return_kind, true, true, diag;
-    }
-
-    return 0, .UNKNOWN, false, false, diag;
-  }
-
-  // Canonical helper bodies:
-  //   <prelude...>; return X;
-  //   <prelude...>; if (...) ...return... else ...return...
-  value_id, value_type, ok, handled, chain_diag := eval_return_block_value(s, helper, return_kind, *helper.body);
-  if handled return value_id, value_type, ok, true, chain_diag;
-  return 0, .UNKNOWN, false, true, make_diag("helper '%' body is not in canonical return form (normalize pass required).", helper.name);
-}
-
 spv_kind_from_ir_type_kind :: (kind: IR_Type_Kind) -> IR_SPV_Gen_Type {
   if kind == .BOOL return .BOOL;
   if kind == .I32 return .INT;
@@ -3167,6 +3046,23 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
     return 0, .UNKNOWN, false, make_diag("helper '%' has unsupported return type '%'.", helper.name, helper_return_text);
   }
 
+  value_id, value_type, ok, diag := eval_inline_function_value(s, helper, call_args, return_kind);
+  return value_id, value_type, ok, diag;
+}
+
+eval_inline_function_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr, return_kind: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  assert(helper != null);
+
+  result_type_id := type_id_from_kind(s, return_kind);
+  if result_type_id == 0 {
+    return 0, .UNKNOWN, false, make_diag("helper '%' return type % has no SPIR-V type id.", helper.name, return_kind);
+  }
+  result_ptr_type_id := func_ptr_type_id_from_kind(s, return_kind);
+  if result_ptr_type_id == 0 {
+    return 0, .UNKNOWN, false, make_diag("helper '%' return type % has no function pointer type.", helper.name, return_kind);
+  }
+
   local_count_before := s.locals.count;
   local_array_count_before := s.local_arrays.count;
   local_struct_count_before := s.local_structs.count;
@@ -3177,17 +3073,72 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
     s.local_structs.count = local_struct_count_before;
     s.buffers.count = buffer_count_before;
   }
+
   bind_ok, bind_diag := bind_inline_function_args(s, helper, call_args);
   if !bind_ok return 0, .UNKNOWN, false, bind_diag;
 
-  return_id, return_type, return_ok, return_handled, return_diag := eval_inline_function_return_chain(s, helper, return_kind);
-  s.locals.count = local_count_before;
-  s.local_structs.count = local_struct_count_before;
-  if !return_handled {
-    return 0, .UNKNOWN, false, make_diag("helper '%' body shape is unsupported for inline value return.", helper.name);
+  helper_exit_label := new_id(s);
+  helper_return_flag_ptr := new_id(s);
+  helper_return_flag_zero := get_null_const(s, s.id_bool);
+  add_local_decl(s, tprint("         % = OpVariable % Function %",
+                           id_text(helper_return_flag_ptr),
+                           id_text(s.id_ptr_func_bool),
+                           id_text(helper_return_flag_zero)));
+  add_debug_name(s, helper_return_flag_ptr, tprint("__helper_returned_%", helper.name));
+  add_op(s, "OpStore", helper_return_flag_ptr, s.id_bool_false);
+
+  helper_return_value_ptr := new_id(s);
+  helper_return_value_zero := get_null_const(s, result_type_id);
+  add_local_decl(s, tprint("         % = OpVariable % Function %",
+                           id_text(helper_return_value_ptr),
+                           id_text(result_ptr_type_id),
+                           id_text(helper_return_value_zero)));
+  add_debug_name(s, helper_return_value_ptr, tprint("__helper_return_value_%", helper.name));
+
+  array_add(*s.inline_return_targets, helper_exit_label);
+  array_add(*s.inline_helper_contexts, .{
+    exit_label = helper_exit_label,
+    return_flag_ptr = helper_return_flag_ptr,
+    has_return_value = true,
+    return_value_ptr = helper_return_value_ptr,
+    return_value_type = return_kind,
+    break_targets_base_count = s.break_targets.count,
+    control_merge_targets_base_count = s.control_merge_targets.count,
+  });
+
+  for helper.body.statements {
+    guard_body_label := new_id(s);
+    guard_merge_label := new_id(s);
+    guard_flag_id := new_id(s);
+    add_op(s, guard_flag_id, "OpLoad", s.id_bool, helper_return_flag_ptr);
+    add_op(s, tprint("OpSelectionMerge % None", id_text(guard_merge_label)));
+    add_op(s, "OpBranchConditional", guard_flag_id, guard_merge_label, guard_body_label);
+    add_op(s, guard_body_label, "OpLabel");
+    array_add(*s.control_merge_targets, guard_merge_label);
+
+    stmt_ok, stmt_terminated, stmt_diag := emit_stmt(s, *it);
+    if !stmt_ok {
+      if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
+      if s.inline_helper_contexts.count > 0 s.inline_helper_contexts.count -= 1;
+      if s.inline_return_targets.count > 0 s.inline_return_targets.count -= 1;
+      return 0, .UNKNOWN, false, stmt_diag;
+    }
+    if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
+    if !stmt_terminated {
+      add_op(s, "OpBranch", guard_merge_label);
+    }
+    add_op(s, guard_merge_label, "OpLabel");
   }
-  if !return_ok return 0, .UNKNOWN, false, return_diag;
-  return return_id, return_type, true, {};
+
+  if s.inline_helper_contexts.count > 0 s.inline_helper_contexts.count -= 1;
+  if s.inline_return_targets.count > 0 s.inline_return_targets.count -= 1;
+
+  add_op(s, "OpBranch", helper_exit_label);
+  add_op(s, helper_exit_label, "OpLabel");
+
+  helper_value := new_id(s);
+  add_op(s, helper_value, "OpLoad", result_type_id, helper_return_value_ptr);
+  return helper_value, return_kind, true, {};
 }
 
 helper_returns_void :: (helper: *IR_Function) -> bool {
@@ -3227,7 +3178,12 @@ eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_a
   add_op(s, "OpStore", helper_return_flag_ptr, s.id_bool_false);
 
   array_add(*s.inline_return_targets, helper_exit_label);
-  array_add(*s.inline_helper_contexts, .{exit_label=helper_exit_label, return_flag_ptr=helper_return_flag_ptr});
+  array_add(*s.inline_helper_contexts, .{
+    exit_label = helper_exit_label,
+    return_flag_ptr = helper_return_flag_ptr,
+    break_targets_base_count = s.break_targets.count,
+    control_merge_targets_base_count = s.control_merge_targets.count,
+  });
   for helper.body.statements {
     guard_body_label := new_id(s);
     guard_merge_label := new_id(s);
@@ -5382,16 +5338,30 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       inline_helper_context, has_inline_helper_context := get_current_inline_helper_context(s);
       if has_inline_helper_context {
         if stmt.return_expr {
-          return_err("inline void helper return cannot return a value.");
+          if !inline_helper_context.has_return_value {
+            return_err("inline void helper return cannot return a value.");
+          }
+          raw_id, raw_type, raw_ok, raw_diag := emit_expr(s, stmt.return_expr);
+          if !raw_ok return false, false, raw_diag;
+          coerced_id, coerced_type, coerced_ok, coerced_diag := coerce_to_exact_kind(s, raw_id, raw_type, inline_helper_context.return_value_type);
+          if !coerced_ok return false, false, coerced_diag;
+          if coerced_type != inline_helper_context.return_value_type {
+            return_err("inline helper return type does not match expected value type.");
+          }
+          add_op(s, "OpStore", inline_helper_context.return_value_ptr, coerced_id);
+        } else if inline_helper_context.has_return_value {
+          return_err("inline helper return must return a value.");
         }
         add_op(s, "OpStore", inline_helper_context.return_flag_ptr, s.id_bool_true);
         branch_target := inline_helper_context.exit_label;
-        break_target, has_break_target := get_current_break_target(s);
-        if has_break_target {
-          branch_target = break_target;
+        helper_has_break_target := s.break_targets.count > inline_helper_context.break_targets_base_count;
+        if helper_has_break_target {
+          branch_target = s.break_targets[s.break_targets.count-1];
         } else {
-          merge_target, has_merge_target := get_current_control_merge_target(s);
-          if has_merge_target branch_target = merge_target;
+          helper_has_merge_target := s.control_merge_targets.count > inline_helper_context.control_merge_targets_base_count;
+          if helper_has_merge_target {
+            branch_target = s.control_merge_targets[s.control_merge_targets.count-1];
+          }
         }
         add_op(s, "OpBranch", branch_target);
         return true, true, diag;

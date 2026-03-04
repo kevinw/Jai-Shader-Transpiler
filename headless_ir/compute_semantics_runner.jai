@@ -60,6 +60,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"switch_without_default", .Bare},
   {"helper_multiple_returns", .Bare},
   {"helper_return_inside_loop", .Bare},
+  {"helper_return_inside_loop_called_in_outer_loop", .Bare},
   {"early_return_in_nested_if", .Bare},
   {"int64_bitwise_mix", .Bare},
   {"local_struct_using_update", .Bare},
@@ -1022,24 +1023,31 @@ helper_multiple_returns :: (using in: Compute_Semantics_In, values: *u32) {
   values[idx] = helper_pick_value(idx % 30);
 } @compute_shader
 
-helper_return_inside_loop_pick_void :: (out: *u32, x: u32) {
+helper_return_inside_loop_pick :: (x: u32) -> u32 {
   acc := x + 3;
   for 0..4 {
     if (x & 1) == 0 {
-      out.* = acc + cast(u32) it;
-      return;
+      return acc + cast(u32) it;
     }
     acc += 2;
   }
-  out.* = acc + 11;
+  return acc + 11;
 }
 
 helper_return_inside_loop :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
-  out: u32 = 0;
-  helper_return_inside_loop_pick_void(*out, idx);
-  values[idx] = out;
+  values[idx] = helper_return_inside_loop_pick(idx);
+} @compute_shader
+
+helper_return_inside_loop_called_in_outer_loop :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  acc: u32 = 0;
+  for 0..3 {
+    acc += helper_return_inside_loop_pick(idx + cast(u32) it);
+  }
+  values[idx] = acc;
 } @compute_shader
 
 early_return_in_nested_if :: (using in: Compute_Semantics_In, values: *u32) {
