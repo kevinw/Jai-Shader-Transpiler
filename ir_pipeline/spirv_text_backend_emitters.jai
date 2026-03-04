@@ -1,6 +1,9 @@
 SAMPLE_2D_TEXTURES_BINDING :: 1;
 SAMPLE_2D_SAMPLERS_BINDING :: 0;
+SAMPLE_3D_TEXTURES_BINDING :: 1;
+SAMPLE_3D_SAMPLERS_BINDING :: 0;
 WRITE_2D_TEXTURES_BINDING :: 1;
+WRITE_3D_TEXTURES_BINDING :: 1;
 
 spv_append_sample_2d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   if !s.uses_sample_2d return;
@@ -21,6 +24,25 @@ spv_append_sample_2d_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_sample_2d_samplers_var), id_text(s.id_ptr_uniformconst_sampler_array)));
 }
 
+spv_append_sample_3d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  if !s.uses_sample_3d return;
+  append(sb, tprint("% = OpTypeImage % 3D 0 0 0 1 Unknown\n", id_text(s.id_image3d), id_text(s.id_float)));
+  append(sb, tprint("% = OpTypeSampler\n", id_text(s.id_sampler)));
+  append(sb, tprint("% = OpTypeSampledImage %\n", id_text(s.id_sampled_image3d), id_text(s.id_image3d)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_image3d_array), id_text(s.id_image3d), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_sampler_array), id_text(s.id_sampler), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_image3d_array), id_text(s.id_image3d_array)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_sampler_array), id_text(s.id_sampler_array)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_image3d), id_text(s.id_image3d)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_sampler), id_text(s.id_sampler)));
+}
+
+spv_append_sample_3d_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  if !s.uses_sample_3d return;
+  append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_sample_3d_textures_var), id_text(s.id_ptr_uniformconst_image3d_array)));
+  append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_sample_3d_samplers_var), id_text(s.id_ptr_uniformconst_sampler_array)));
+}
+
 spv_append_write_2d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   if !s.uses_write_2d return;
   append(sb, tprint("% = OpTypeImage % 2D 0 0 0 2 Unknown\n", id_text(s.id_storage_image2d), id_text(s.id_float)));
@@ -32,6 +54,19 @@ spv_append_write_2d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
 spv_append_write_2d_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   if !s.uses_write_2d return;
   append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_write_2d_textures_var), id_text(s.id_ptr_uniformconst_storage_image2d_array)));
+}
+
+spv_append_write_3d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  if !s.uses_write_3d return;
+  append(sb, tprint("% = OpTypeImage % 3D 0 0 0 2 Unknown\n", id_text(s.id_storage_image3d), id_text(s.id_float)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_storage_image3d_array), id_text(s.id_storage_image3d), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_storage_image3d_array), id_text(s.id_storage_image3d_array)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_storage_image3d), id_text(s.id_storage_image3d)));
+}
+
+spv_append_write_3d_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  if !s.uses_write_3d return;
+  append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_write_3d_textures_var), id_text(s.id_ptr_uniformconst_storage_image3d_array)));
 }
 
 emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
@@ -226,8 +261,15 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_textures_var));
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_samplers_var));
   }
+  if state.uses_sample_3d {
+    append(*entry_point_sb, " ", id_text(state.id_sample_3d_textures_var));
+    append(*entry_point_sb, " ", id_text(state.id_sample_3d_samplers_var));
+  }
   if state.uses_write_2d {
     append(*entry_point_sb, " ", id_text(state.id_write_2d_textures_var));
+  }
+  if state.uses_write_3d {
+    append(*entry_point_sb, " ", id_text(state.id_write_3d_textures_var));
   }
   append(*entry_point_sb, "\n");
   append(*sb, builder_to_string(*entry_point_sb));
@@ -242,8 +284,15 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     append(*sb, tprint("               OpName % \"sample_2d_textures\"\n", id_text(state.id_sample_2d_textures_var)));
     append(*sb, tprint("               OpName % \"sample_2d_samplers\"\n", id_text(state.id_sample_2d_samplers_var)));
   }
+  if state.uses_sample_3d {
+    append(*sb, tprint("               OpName % \"sample_3d_textures\"\n", id_text(state.id_sample_3d_textures_var)));
+    append(*sb, tprint("               OpName % \"sample_3d_samplers\"\n", id_text(state.id_sample_3d_samplers_var)));
+  }
   if state.uses_write_2d {
     append(*sb, tprint("               OpName % \"write_2d_textures\"\n", id_text(state.id_write_2d_textures_var)));
+  }
+  if state.uses_write_3d {
+    append(*sb, tprint("               OpName % \"write_3d_textures\"\n", id_text(state.id_write_3d_textures_var)));
   }
   for ps_infos {
     ps_info := it;
@@ -268,9 +317,19 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_2d_samplers_var), SAMPLE_2D_SAMPLERS_BINDING));
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_samplers_var)));
   }
+  if state.uses_sample_3d {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_3d_textures_var), SAMPLE_3D_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_3d_textures_var)));
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_3d_samplers_var), SAMPLE_3D_SAMPLERS_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_3d_samplers_var)));
+  }
   if state.uses_write_2d {
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_write_2d_textures_var), WRITE_2D_TEXTURES_BINDING));
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_write_2d_textures_var)));
+  }
+  if state.uses_write_3d {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_write_3d_textures_var), WRITE_3D_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_write_3d_textures_var)));
   }
   spv_append_base_buffer_decorations(*sb, *state);
   spv_append_buffer_layout_decorations(*sb, *state);
@@ -297,7 +356,9 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   spv_append_common_type_decls(*sb, *state, storage_class);
   spv_append_numeric_constants(*sb, *state);
   spv_append_sample_2d_type_decls(*sb, *state);
+  spv_append_sample_3d_type_decls(*sb, *state);
   spv_append_write_2d_type_decls(*sb, *state);
+  spv_append_write_3d_type_decls(*sb, *state);
   for ps_infos append(*sb, tprint("               OpTypeForwardPointer % %\n", id_text(it.ptr_type_id), storage_class));
   for state.buffers append(*sb, tprint("               OpTypeForwardPointer % %\n", id_text(it.ptr_wrapper_type_id), storage_class));
   for ps_infos {
@@ -343,7 +404,9 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   for state.output_vars append(*sb, tprint("% = OpVariable % Output\n", id_text(it.var_id), id_text(it.ptr_id)));
   append(*sb, tprint("% = OpVariable % StorageBuffer\n", id_text(root_var_id), id_text(root_var_ptr_type_id)));
   spv_append_sample_2d_vars(*sb, *state);
+  spv_append_sample_3d_vars(*sb, *state);
   spv_append_write_2d_vars(*sb, *state);
+  spv_append_write_3d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
   spv_append_null_constants(*sb, *state);
 
@@ -371,7 +434,9 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   array_add(*state.extra_structs, output);
   state.output_struct_type_name = output.name;
   state.uses_write_2d = analysis.uses_write_2d;
+  state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
+  state.uses_sample_3d = analysis.uses_sample_3d;
   init_ok, init_diag := init_base(*state, analysis.expanded_buffers, 1);
   if !init_ok return "", false, init_diag;
 
@@ -559,8 +624,15 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_textures_var));
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_samplers_var));
   }
+  if state.uses_sample_3d {
+    append(*entry_point_sb, " ", id_text(state.id_sample_3d_textures_var));
+    append(*entry_point_sb, " ", id_text(state.id_sample_3d_samplers_var));
+  }
   if state.uses_write_2d {
     append(*entry_point_sb, " ", id_text(state.id_write_2d_textures_var));
+  }
+  if state.uses_write_3d {
+    append(*entry_point_sb, " ", id_text(state.id_write_3d_textures_var));
   }
   append(*entry_point_sb, "\n");
   append(*sb, builder_to_string(*entry_point_sb));
@@ -575,8 +647,15 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     append(*sb, tprint("               OpName % \"sample_2d_textures\"\n", id_text(state.id_sample_2d_textures_var)));
     append(*sb, tprint("               OpName % \"sample_2d_samplers\"\n", id_text(state.id_sample_2d_samplers_var)));
   }
+  if state.uses_sample_3d {
+    append(*sb, tprint("               OpName % \"sample_3d_textures\"\n", id_text(state.id_sample_3d_textures_var)));
+    append(*sb, tprint("               OpName % \"sample_3d_samplers\"\n", id_text(state.id_sample_3d_samplers_var)));
+  }
   if state.uses_write_2d {
     append(*sb, tprint("               OpName % \"write_2d_textures\"\n", id_text(state.id_write_2d_textures_var)));
+  }
+  if state.uses_write_3d {
+    append(*sb, tprint("               OpName % \"write_3d_textures\"\n", id_text(state.id_write_3d_textures_var)));
   }
   for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
   for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
@@ -591,9 +670,19 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_2d_samplers_var), SAMPLE_2D_SAMPLERS_BINDING));
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_samplers_var)));
   }
+  if state.uses_sample_3d {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_3d_textures_var), SAMPLE_3D_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_3d_textures_var)));
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_3d_samplers_var), SAMPLE_3D_SAMPLERS_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_3d_samplers_var)));
+  }
   if state.uses_write_2d {
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_write_2d_textures_var), WRITE_2D_TEXTURES_BINDING));
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_write_2d_textures_var)));
+  }
+  if state.uses_write_3d {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_write_3d_textures_var), WRITE_3D_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_write_3d_textures_var)));
   }
   for state.uniform_blocks {
     uniform := it;
@@ -609,7 +698,9 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   spv_append_common_type_decls(*sb, *state, "StorageBuffer");
   spv_append_numeric_constants(*sb, *state);
   spv_append_sample_2d_type_decls(*sb, *state);
+  spv_append_sample_3d_type_decls(*sb, *state);
   spv_append_write_2d_type_decls(*sb, *state);
+  spv_append_write_3d_type_decls(*sb, *state);
   for state.uniform_blocks {
     type_line: String_Builder;
     for it.fields {
@@ -631,7 +722,9 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   spv_append_buffer_vars(*sb, *state, "StorageBuffer");
   for state.uniform_blocks append(*sb, tprint("% = OpVariable % Uniform\n", id_text(it.var_id), id_text(it.ptr_uniform_struct_type_id)));
   spv_append_sample_2d_vars(*sb, *state);
+  spv_append_sample_3d_vars(*sb, *state);
   spv_append_write_2d_vars(*sb, *state);
+  spv_append_write_3d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
   spv_append_null_constants(*sb, *state);
 
@@ -646,67 +739,73 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
 IR_SPV_Compute_Analysis :: struct {
   bound_value: u32;
   uses_write_2d: bool;
+  uses_write_3d: bool;
   uses_sample_2d: bool;
+  uses_sample_3d: bool;
   expanded_buffers: [..] IR_Compute_Buffer;
 }
 
 IR_SPV_Graphics_Analysis :: struct {
   uses_pointer_abi: bool;
   uses_write_2d: bool;
+  uses_write_3d: bool;
   uses_sample_2d: bool;
+  uses_sample_3d: bool;
   expanded_buffers: [..] IR_Compute_Buffer;
 }
 
-spv_analyze_builtin_usage_expr :: (expr: *IR_Expr, uses_write_2d: *bool, uses_sample_2d: *bool) {
+spv_analyze_builtin_usage_expr :: (expr: *IR_Expr, uses_write_2d: *bool, uses_write_3d: *bool, uses_sample_2d: *bool, uses_sample_3d: *bool) {
   if !expr return;
   if expr.kind == .CALL {
     call_builtin := call_builtin_kind_for_expr(expr);
     if call_builtin == .WRITE_2D uses_write_2d.* = true;
+    if call_builtin == .WRITE_3D uses_write_3d.* = true;
     if call_builtin == .SAMPLE_2D uses_sample_2d.* = true;
+    if call_builtin == .SAMPLE_3D uses_sample_3d.* = true;
   }
-  spv_analyze_builtin_usage_expr(expr.left, uses_write_2d, uses_sample_2d);
-  spv_analyze_builtin_usage_expr(expr.right, uses_write_2d, uses_sample_2d);
-  for expr.args spv_analyze_builtin_usage_expr(it, uses_write_2d, uses_sample_2d);
+  spv_analyze_builtin_usage_expr(expr.left, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+  spv_analyze_builtin_usage_expr(expr.right, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+  for expr.args spv_analyze_builtin_usage_expr(it, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
 }
 
-spv_analyze_builtin_usage_block :: (block: *IR_Block, uses_write_2d: *bool, uses_sample_2d: *bool) {
+spv_analyze_builtin_usage_block :: (block: *IR_Block, uses_write_2d: *bool, uses_write_3d: *bool, uses_sample_2d: *bool, uses_sample_3d: *bool) {
   if !block return;
   for block.statements {
     stmt := it;
     if stmt.kind == {
       case .DECL; {
-        spv_analyze_builtin_usage_expr(stmt.decl_init, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.decl_init, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
       }
       case .BINARY; {
-        spv_analyze_builtin_usage_expr(stmt.binary_left, uses_write_2d, uses_sample_2d);
-        spv_analyze_builtin_usage_expr(stmt.binary_right, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.binary_left, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.binary_right, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
       }
       case .IF; {
-        spv_analyze_builtin_usage_expr(stmt.if_condition, uses_write_2d, uses_sample_2d);
-        spv_analyze_builtin_usage_block(stmt.if_then, uses_write_2d, uses_sample_2d);
-        spv_analyze_builtin_usage_block(stmt.if_else, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.if_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_block(stmt.if_then, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_block(stmt.if_else, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
       }
       case .SWITCH; {
-        spv_analyze_builtin_usage_expr(stmt.switch_condition, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.switch_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
         for stmt.switch_cases {
-          spv_analyze_builtin_usage_expr(it.condition, uses_write_2d, uses_sample_2d);
-          spv_analyze_builtin_usage_block(it.body, uses_write_2d, uses_sample_2d);
+          spv_analyze_builtin_usage_expr(it.condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+          spv_analyze_builtin_usage_block(it.body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
         }
       }
       case .FOR; {
-        spv_analyze_builtin_usage_expr(stmt.for_start, uses_write_2d, uses_sample_2d);
-        spv_analyze_builtin_usage_expr(stmt.for_end, uses_write_2d, uses_sample_2d);
-        spv_analyze_builtin_usage_block(stmt.for_body, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.for_start, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.for_end, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_block(stmt.for_body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
       }
       case .WHILE; {
-        spv_analyze_builtin_usage_expr(stmt.while_condition, uses_write_2d, uses_sample_2d);
-        spv_analyze_builtin_usage_block(stmt.while_body, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.while_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_block(stmt.while_body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
       }
       case .CALL; {
-        spv_analyze_builtin_usage_expr(stmt.call_expr, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.call_expr, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
       }
       case .RETURN; {
-        spv_analyze_builtin_usage_expr(stmt.return_expr, uses_write_2d, uses_sample_2d);
+        spv_analyze_builtin_usage_expr(stmt.return_expr, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
       }
       case .BREAK;
       case .CONTINUE;
@@ -728,8 +827,14 @@ spv_analyze_graphics_shader :: (stage: IR_SPV_Gen_Stage,
   root_arg, use_pointer_abi := find_pointer_root_arg(args, extra_structs);
   out.uses_pointer_abi = use_pointer_abi && root_arg;
 
-  spv_analyze_builtin_usage_block(body, *out.uses_write_2d, *out.uses_sample_2d);
-  for functions spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_sample_2d);
+  spv_analyze_builtin_usage_block(body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_3d);
+  for functions spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_3d);
+  if out.uses_sample_2d && out.uses_sample_3d {
+    return_err("SPIR-V backend: sample_2d and sample_3d cannot currently be used in the same shader.");
+  }
+  if out.uses_write_2d && out.uses_write_3d {
+    return_err("SPIR-V backend: write_2d and write_3d cannot currently be used in the same shader.");
+  }
 
   if out.uses_pointer_abi return out, true, .{};
 
@@ -816,9 +921,15 @@ spv_analyze_compute_shader :: (shader: IR_Compute_Shader) -> (analysis: IR_SPV_C
     if bound_ok out.bound_value = b;
   }
 
-  spv_analyze_builtin_usage_block(*shader.body, *out.uses_write_2d, *out.uses_sample_2d);
+  spv_analyze_builtin_usage_block(*shader.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_3d);
   for shader.functions {
-    spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_sample_2d);
+    spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_3d);
+  }
+  if out.uses_sample_2d && out.uses_sample_3d {
+    return_err("SPIR-V backend: sample_2d and sample_3d cannot currently be used in the same shader.");
+  }
+  if out.uses_write_2d && out.uses_write_3d {
+    return_err("SPIR-V backend: write_2d and write_3d cannot currently be used in the same shader.");
   }
 
   expand_state: IR_SPV_Gen_State;
@@ -842,7 +953,9 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   state.functions = shader.functions;
   for shader.extra_structs array_add(*state.extra_structs, it);
   state.uses_write_2d = analysis.uses_write_2d;
+  state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
+  state.uses_sample_3d = analysis.uses_sample_3d;
   init_ok, init_diag := init_base(*state, analysis.expanded_buffers, analysis.bound_value);
   if !init_ok return "", false, init_diag;
 
@@ -863,6 +976,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
                                  id_text(state.id_gl_local_invocation_index)));
   spv_append_var_ids(*entry_point_sb, state.buffers);
   if state.uses_write_2d append(*entry_point_sb, " ", id_text(state.id_write_2d_textures_var));
+  if state.uses_write_3d append(*entry_point_sb, " ", id_text(state.id_write_3d_textures_var));
   append(*entry_point_sb, "\n");
   append(*sb, builder_to_string(*entry_point_sb));
   append(*sb, tprint("               OpExecutionMode % LocalSize 1 1 1\n", id_text(state.id_main)));
@@ -874,6 +988,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   append(*sb, tprint("               OpName % \"gl_LocalInvocationIndex\"\n", id_text(state.id_gl_local_invocation_index)));
   for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   if state.uses_write_2d append(*sb, tprint("               OpName % \"write_2d_textures\"\n", id_text(state.id_write_2d_textures_var)));
+  if state.uses_write_3d append(*sb, tprint("               OpName % \"write_3d_textures\"\n", id_text(state.id_write_3d_textures_var)));
   for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
   for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
   append(*sb, tprint("               OpDecorate % BuiltIn GlobalInvocationId\n", id_text(state.id_gl_global_invocation_id)));
@@ -887,11 +1002,16 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_write_2d_textures_var), WRITE_2D_TEXTURES_BINDING));
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_write_2d_textures_var)));
   }
+  if state.uses_write_3d {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_write_3d_textures_var), WRITE_3D_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_write_3d_textures_var)));
+  }
 
   spv_append_common_type_decls(*sb, *state, "StorageBuffer");
   // OpTypeArray length operands must be declared constants beforehand.
   spv_append_numeric_constants(*sb, *state);
   spv_append_write_2d_type_decls(*sb, *state);
+  spv_append_write_3d_type_decls(*sb, *state);
   append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_global_invocation_id), id_text(state.id_ptr_input_v3uint)));
   append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_local_invocation_id), id_text(state.id_ptr_input_v3uint)));
   append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_workgroup_id), id_text(state.id_ptr_input_v3uint)));
@@ -899,6 +1019,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   spv_append_buffer_type_decls(*sb, *state, "StorageBuffer");
   spv_append_buffer_vars(*sb, *state, "StorageBuffer");
   spv_append_write_2d_vars(*sb, *state);
+  spv_append_write_3d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
   spv_append_null_constants(*sb, *state);
 

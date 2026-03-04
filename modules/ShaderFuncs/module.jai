@@ -230,10 +230,12 @@ texture :: (sampler: $T, point: $S, bias: float = 0) -> Vector4 {
 // Sampling helper for the IR SPIR-V backend path.
 // `texture_index` and `sampler_index` index into backend-managed descriptor arrays.
 sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 { return {}; }
+sample_3d :: (texture_index: u32, sampler_index: u32, uvw: Vector3) -> Vector4 { return {}; }
 
 // Storage-image write helper for the IR SPIR-V backend path.
 // `texture_index` indexes into backend-managed writable texture descriptor arrays.
 write_2d :: (texture_index: u32, x: u32, y: u32, value: Vector4) { }
+write_3d :: (texture_index: u32, x: u32, y: u32, z: u32, value: Vector4) { }
 
 // Fragment kill helper for the IR SPIR-V backend path.
 discard :: () { }

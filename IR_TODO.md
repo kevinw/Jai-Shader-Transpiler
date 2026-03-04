@@ -118,6 +118,17 @@ Direction note:
 - Desired fix:
   - Backend should enforce/validate target block layout proactively and/or auto-pad reflected struct layout for storage buffers so misaligned host-side structs fail early with actionable diagnostics.
 
+## 37) Hard-fail compile-time validation is missing for host-vs-shader struct ABI alignment mismatches
+- Symptom:
+  - Runtime-only rendering failures can occur when host-side struct layout (Jai) diverges from shader-side ABI layout (for example `Vector3` 12-byte host layout vs MSL `float3` 16-byte alignment rules in constant/device buffers).
+- Where hit:
+  - Brickmap raw-Metal path after moving to 3D atlas resources; params buffer fields were misread until shader structs used packed vector fields.
+- Current workaround:
+  - Manually mirror/pack shader structs (for example `packed_float3`) and validate by runtime rendering checks.
+- Desired fix:
+  - Add compile-time ABI checks that compare generated/reflected host layout against target shader layout rules and fail the build on mismatch.
+  - Error output should name the struct/field, expected offset/align/stride, actual host values, and a concrete fix hint (`packed_*`, explicit padding, or layout-safe type substitution).
+
 ## 31) Shader-side `normalize` overload resolution still trips host pointer-style forms
 - Symptom:
   - Shader lowering emits `SPIR-V backend: normalize expects 1 arg.` in contexts that pick or preserve host-style overload forms.
@@ -184,3 +195,28 @@ Direction note:
   - Use flat monolithic payload buffers and avoid nested pointer/resource-container indirection in helper-call chains.
 - Desired fix:
   - Allow helper lowering to resolve and propagate root storage identifiers through nested pointer/resource container expressions reliably.
+
+## 38) Builtin call-result member access can mis-route through helper path
+- Symptom:
+  - Backend can fail with helper-resolution diagnostics for builtin call results used with member access, e.g. `sample_3d(...).x`:
+    - `SPIR-V backend: unknown helper 'sample_3d'`
+- Where hit:
+  - Brickmap fragment path after moving to 3D atlas sampling.
+- Current workaround:
+  - Keep expressions simple / avoid forms that trigger helper-only call-member paths; validate with headless regression.
+- Desired fix:
+  - In member access lowering, recognize builtin calls before helper lookup and route through builtin emission (`sample_2d`/`sample_3d`/etc.) consistently.
+  - Add dedicated regression coverage for member access on builtin call results.
+
+## 39) Some `cast(float)` code paths still fail with unsupported-cast diagnostics
+- Symptom:
+  - Backend can fail with:
+    - `SPIR-V backend: unsupported cast target 'float'`
+  - Triggered by specific expression shapes in newer shader/debug code paths.
+- Where hit:
+  - Brickmap shader iterations while adding atlas debug/interp controls.
+- Current workaround:
+  - Simplify/reshape expressions to avoid the failing cast forms.
+- Desired fix:
+  - Normalize scalar cast-target parsing so `float` aliases map to backend scalar float type in all expression contexts.
+  - Add regression tests covering cast usage in call args, vector constructors, and intermediate local expressions.

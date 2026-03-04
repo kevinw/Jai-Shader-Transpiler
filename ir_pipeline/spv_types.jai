@@ -267,7 +267,7 @@ spv_append_capabilities :: (sb: *String_Builder, state: *IR_SPV_Gen_State, use_p
   append(sb, "               OpCapability Shader\n");
   if state_uses_int64(state) append(sb, "               OpCapability Int64\n");
   if state_uses_float16(state) append(sb, "               OpCapability Float16\n");
-  if state.uses_write_2d append(sb, "               OpCapability StorageImageWriteWithoutFormat\n");
+  if state.uses_write_2d || state.uses_write_3d append(sb, "               OpCapability StorageImageWriteWithoutFormat\n");
   if use_physical_storage append(sb, "               OpCapability PhysicalStorageBufferAddresses\n");
 }
 

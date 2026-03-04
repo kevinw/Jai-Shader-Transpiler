@@ -1,7 +1,6 @@
 //
 // Jai IR -> SPIR-V text
 // 
-
 to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) {
     validate_ok, validate_diag := ir_validate_shader_invariants(shader);
     if !validate_ok return {"", false, validate_diag};
@@ -218,12 +217,17 @@ callee_matches_builtin :: (callee: string, builtin: string) -> bool {
   if callee == builtin return true;
   if callee.count <= builtin.count return false;
   if !begins_with(callee, builtin) return false;
-  return callee[builtin.count] == #char "_";
+  next := callee[builtin.count];
+  is_digit := next >= #char "0" && next <= #char "9";
+  is_alpha := (next >= #char "a" && next <= #char "z") || (next >= #char "A" && next <= #char "Z");
+  return !is_alpha || is_digit;
 }
 
 call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee_matches_builtin(callee, "sample_2d") return .SAMPLE_2D;
+  if callee_matches_builtin(callee, "sample_3d") return .SAMPLE_3D;
   if callee_matches_builtin(callee, "write_2d") return .WRITE_2D;
+  if callee_matches_builtin(callee, "write_3d") return .WRITE_3D;
   if callee_matches_builtin(callee, "discard") return .DISCARD;
   if callee_matches_builtin(callee, "saturate") return .SATURATE;
   if callee_matches_builtin(callee, "mix") return .MIX;
@@ -277,6 +281,10 @@ call_helper_name_for_expr :: (expr: *IR_Expr) -> (string, bool) {
 }
 
 call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
+  if kind == .SAMPLE_2D return "sample_2d";
+  if kind == .SAMPLE_3D return "sample_3d";
+  if kind == .WRITE_2D return "write_2d";
+  if kind == .WRITE_3D return "write_3d";
   if kind == .FLOOR return "floor";
   if kind == .MIN return "min";
   if kind == .MAX return "max";
@@ -543,7 +551,9 @@ IR_SPV_Gen_State :: struct {
   output_vars: [..] IR_SPV_Gen_Interface_Var;
   use_physical_storage: bool;
   uses_sample_2d: bool;
+  uses_sample_3d: bool;
   uses_write_2d: bool;
+  uses_write_3d: bool;
   
   using const_ids: struct {
     id_uint_0: s64;
@@ -611,21 +621,33 @@ IR_SPV_Gen_State :: struct {
     id_ptr_uniform_int64: s64;
     id_ptr_uniform_uint64: s64;
     id_image2d: s64;
+    id_image3d: s64;
     id_sampler: s64;
     id_sampled_image2d: s64;
+    id_sampled_image3d: s64;
     id_image2d_array: s64;
+    id_image3d_array: s64;
     id_sampler_array: s64;
     id_ptr_uniformconst_image2d_array: s64;
+    id_ptr_uniformconst_image3d_array: s64;
     id_ptr_uniformconst_sampler_array: s64;
     id_ptr_uniformconst_image2d: s64;
+    id_ptr_uniformconst_image3d: s64;
     id_ptr_uniformconst_sampler: s64;
     id_sample_2d_textures_var: s64;
     id_sample_2d_samplers_var: s64;
+    id_sample_3d_textures_var: s64;
+    id_sample_3d_samplers_var: s64;
     id_storage_image2d: s64;
+    id_storage_image3d: s64;
     id_storage_image2d_array: s64;
+    id_storage_image3d_array: s64;
     id_ptr_uniformconst_storage_image2d_array: s64;
+    id_ptr_uniformconst_storage_image3d_array: s64;
     id_ptr_uniformconst_storage_image2d: s64;
+    id_ptr_uniformconst_storage_image3d: s64;
     id_write_2d_textures_var: s64;
+    id_write_3d_textures_var: s64;
     id_ptr_func_float: s64;
     id_ptr_func_float2: s64;
     id_ptr_func_float3: s64;
@@ -2427,6 +2449,42 @@ emit_sample_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s
   return result, .FLOAT4, true, diag;
 }
 
+emit_sample_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if s.stage != .FRAGMENT return 0, .UNKNOWN, false, make_diag("sample_3d is currently fragment-stage only.");
+  if args.count != 3      return 0, .UNKNOWN, false, make_diag("sample_3d expects 3 args (texture_index, sampler_index, uvw).");
+
+  texture_index_id, texture_index_type, texture_index_ok, texture_index_diag := emit_expr(s, args[0]);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+  texture_index_id, texture_index_ok, texture_index_diag = coerce_to_kind(s, texture_index_id, texture_index_type, .UINT);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+
+  sampler_index_id, sampler_index_type, sampler_index_ok, sampler_index_diag := emit_expr(s, args[1]);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+  sampler_index_id, sampler_index_ok, sampler_index_diag = coerce_to_kind(s, sampler_index_id, sampler_index_type, .UINT);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+
+  sample_3d_max_index := get_u32_const(s, 15);
+  clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, sample_3d_max_index);
+  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_3d_max_index);
+
+  uvw_id, uvw_type, uvw_ok, uvw_diag := emit_expr(s, args[2]);
+  if !uvw_ok return 0, .UNKNOWN, false, uvw_diag;
+  uvw_id, uvw_ok, uvw_diag = coerce_to_kind(s, uvw_id, uvw_type, .FLOAT3);
+  if !uvw_ok return 0, .UNKNOWN, false, uvw_diag;
+
+  tex_ptr       := spv_access_chain1(s, s.id_ptr_uniformconst_image3d, s.id_sample_3d_textures_var, clamped_texture_index);
+  tex_id        := spv_load(s, s.id_image3d, tex_ptr);
+  sampler_ptr   := spv_access_chain1(s, s.id_ptr_uniformconst_sampler, s.id_sample_3d_samplers_var, clamped_sampler_index);
+  sampler_id    := spv_load(s, s.id_sampler, sampler_ptr);
+  sampled_image := add_op(s, new_id(s), "OpSampledImage", s.id_sampled_image3d, tex_id, sampler_id);
+  result        := add_op(s, new_id(s), "OpImageSampleImplicitLod", s.id_float4, sampled_image, uvw_id);
+
+  s.uses_sample_3d = true;
+  return result, .FLOAT4, true, diag;
+}
+
 emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   diag: IR_Diagnostic;
@@ -2462,6 +2520,48 @@ emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
   tex_ptr := spv_access_chain1(s, s.id_ptr_uniformconst_storage_image2d, s.id_write_2d_textures_var, clamped_texture_index);
   tex_id := spv_load(s, s.id_storage_image2d, tex_ptr);
   coord_id := add_op(s, new_id(s), "OpCompositeConstruct", s.id_v2uint, x_id, y_id);
+  add_op(s, "OpImageWrite", tex_id, coord_id, value_id);
+  return true, diag;
+}
+
+emit_write_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if s.stage != .COMPUTE return false, make_diag("write_3d is currently compute-stage only.");
+  if !s.uses_write_3d return false, make_diag("internal backend error: write_3d call was not pre-analyzed before compute emission.");
+  if args.count != 5      return false, make_diag("write_3d expects 5 args (texture_index, x, y, z, value).");
+
+  texture_index_id, texture_index_type, texture_index_ok, texture_index_diag := emit_expr(s, args[0]);
+  if !texture_index_ok return false, texture_index_diag;
+  texture_index_id, texture_index_ok, texture_index_diag = coerce_to_kind(s, texture_index_id, texture_index_type, .UINT);
+  if !texture_index_ok return false, texture_index_diag;
+
+  x_id, x_type, x_ok, x_diag := emit_expr(s, args[1]);
+  if !x_ok return false, x_diag;
+  x_id, x_ok, x_diag = coerce_to_kind(s, x_id, x_type, .UINT);
+  if !x_ok return false, x_diag;
+
+  y_id, y_type, y_ok, y_diag := emit_expr(s, args[2]);
+  if !y_ok return false, y_diag;
+  y_id, y_ok, y_diag = coerce_to_kind(s, y_id, y_type, .UINT);
+  if !y_ok return false, y_diag;
+
+  z_id, z_type, z_ok, z_diag := emit_expr(s, args[3]);
+  if !z_ok return false, z_diag;
+  z_id, z_ok, z_diag = coerce_to_kind(s, z_id, z_type, .UINT);
+  if !z_ok return false, z_diag;
+
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[4]);
+  if !value_ok return false, value_diag;
+  value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, .FLOAT4);
+  if !value_ok return false, value_diag;
+
+  write_3d_max_index := get_u32_const(s, 15);
+  clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, write_3d_max_index);
+
+  tex_ptr := spv_access_chain1(s, s.id_ptr_uniformconst_storage_image3d, s.id_write_3d_textures_var, clamped_texture_index);
+  tex_id := spv_load(s, s.id_storage_image3d, tex_ptr);
+  coord_id := add_op(s, new_id(s), "OpCompositeConstruct", s.id_v3uint, x_id, y_id, z_id);
   add_op(s, "OpImageWrite", tex_id, coord_id, value_id);
   return true, diag;
 }
@@ -3407,6 +3507,25 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         return load_builtin_u32(s, s.id_gl_local_invocation_index), .UINT, true, diag;
       }
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
+        call_builtin := call_builtin_kind_for_expr(expr.left);
+        if call_builtin == .NONE {
+          call_builtin = call_builtin_kind_from_callee_name(expr.left.left.text);
+          if call_builtin == .NONE {
+            has_sample_3d, _ := contains(expr.left.left.text, "sample_3d");
+            has_write_3d, _ := contains(expr.left.left.text, "write_3d");
+            if has_sample_3d call_builtin = .SAMPLE_3D;
+            if has_write_3d call_builtin = .WRITE_3D;
+          }
+        }
+        if call_builtin != .NONE {
+          call_value_id, call_value_type, call_ok, call_diag := emit_expr(s, expr.left);
+          if !call_ok return 0, .UNKNOWN, false, call_diag;
+          access_kind := ir_member_access_kind_from_name(expr.text);
+          if access_kind != .NONE {
+            member_id, member_type, member_ok, member_diag := spv_extract_vector_member(s, call_value_id, call_value_type, access_kind, expr.text);
+            return member_id, member_type, member_ok, member_diag;
+          }
+        }
         helper := find_function(s, expr.left.left.text);
         if !helper return_err("unknown helper '%'.", expr.left.left.text);
         helper_ret_kind := spv_kind_from_ir_type(helper.return_type);
@@ -3949,13 +4068,29 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if !expr.left return_err("unsupported call target expression.");
       builtin_kind := call_builtin_kind_for_expr(expr);
       helper_name, helper_name_ok := call_helper_name_for_expr(expr);
+      if builtin_kind == .NONE && helper_name_ok {
+        builtin_kind = call_builtin_kind_from_callee_name(helper_name);
+        if builtin_kind == .NONE {
+          has_sample_3d, _ := contains(helper_name, "sample_3d");
+          has_write_3d, _ := contains(helper_name, "write_3d");
+          if has_sample_3d builtin_kind = .SAMPLE_3D;
+          if has_write_3d builtin_kind = .WRITE_3D;
+        }
+      }
       if !helper_name_ok && builtin_kind == .NONE return_err("unsupported call target expression.");
       if builtin_kind == .SAMPLE_2D {
         sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_2d_call(s, expr.args);
         return sampled_id, sampled_type, sampled_ok, sampled_diag;
       }
+      if builtin_kind == .SAMPLE_3D {
+        sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_3d_call(s, expr.args);
+        return sampled_id, sampled_type, sampled_ok, sampled_diag;
+      }
       if builtin_kind == .WRITE_2D {
         return_err("write_2d has no return value and must be used as a statement.");
+      }
+      if builtin_kind == .WRITE_3D {
+        return_err("write_3d has no return value and must be used as a statement.");
       }
       if builtin_kind == .DISCARD {
         return_err("discard has no return value and must be used as a statement.");
@@ -5203,10 +5338,24 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 
       builtin_kind := call_builtin_kind_for_expr(stmt.call_expr);
       helper_name, helper_name_ok := call_helper_name_for_expr(stmt.call_expr);
+      if builtin_kind == .NONE && helper_name_ok {
+        builtin_kind = call_builtin_kind_from_callee_name(helper_name);
+        if builtin_kind == .NONE {
+          has_sample_3d, _ := contains(helper_name, "sample_3d");
+          has_write_3d, _ := contains(helper_name, "write_3d");
+          if has_sample_3d builtin_kind = .SAMPLE_3D;
+          if has_write_3d builtin_kind = .WRITE_3D;
+        }
+      }
       if !helper_name_ok && builtin_kind == .NONE return_err("unsupported call target expression.");
 
       if builtin_kind == .WRITE_2D {
         write_ok, write_diag := emit_write_2d_call(s, stmt.call_expr.args);
+        if !write_ok return false, false, write_diag;
+        return true, false, diag;
+      }
+      if builtin_kind == .WRITE_3D {
+        write_ok, write_diag := emit_write_3d_call(s, stmt.call_expr.args);
         if !write_ok return false, false, write_diag;
         return true, false, diag;
       }

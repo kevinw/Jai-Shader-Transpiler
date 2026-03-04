@@ -900,11 +900,17 @@ ir_shared_is_builtin_function_name :: (name: string) -> bool {
   if ir_shared_name_matches_builtin(name, "saturate") return true;
   if ir_shared_name_matches_builtin(name, "reflect") return true;
   if name == "sample_2d" return true;
+  if name == "sample_3d" return true;
   if name == "write_2d" return true;
+  if name == "write_3d" return true;
   has_sample_2d, _ := contains(name, "sample_2d");
   if has_sample_2d return true;
+  has_sample_3d, _ := contains(name, "sample_3d");
+  if has_sample_3d return true;
   has_write_2d, _ := contains(name, "write_2d");
   if has_write_2d return true;
+  has_write_3d, _ := contains(name, "write_3d");
+  if has_write_3d return true;
   return false;
 }
 

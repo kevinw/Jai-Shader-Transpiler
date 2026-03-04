@@ -1567,13 +1567,18 @@ ir_callee_matches_builtin :: (callee: string, builtin: string) -> bool {
   if callee == builtin return true;
   if callee.count <= builtin.count return false;
   if !begins_with(callee, builtin) return false;
-  return callee[builtin.count] == #char "_";
+  next := callee[builtin.count];
+  is_digit := next >= #char "0" && next <= #char "9";
+  is_alpha := (next >= #char "a" && next <= #char "z") || (next >= #char "A" && next <= #char "Z");
+  return !is_alpha || is_digit;
 }
 
 ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   name := ir_canonical_callee_name(callee);
   if ir_callee_matches_builtin(name, "sample_2d") return .SAMPLE_2D;
+  if ir_callee_matches_builtin(name, "sample_3d") return .SAMPLE_3D;
   if ir_callee_matches_builtin(name, "write_2d") return .WRITE_2D;
+  if ir_callee_matches_builtin(name, "write_3d") return .WRITE_3D;
   if ir_callee_matches_builtin(name, "discard") return .DISCARD;
   if ir_callee_matches_builtin(name, "saturate") return .SATURATE;
   if ir_callee_matches_builtin(name, "mix") return .MIX;

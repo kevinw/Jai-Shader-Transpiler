@@ -49,6 +49,21 @@ sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 {
   return .{};
 }
 
+sample_3d :: (texture_index: u32, sampler_index: u32, uvw: Vector3) -> Vector4 {
+  _ = texture_index;
+  _ = sampler_index;
+  _ = uvw;
+  return .{};
+}
+
+write_3d :: (texture_index: u32, x: u32, y: u32, z: u32, value: Vector4) {
+  _ = texture_index;
+  _ = x;
+  _ = y;
+  _ = z;
+  _ = value;
+}
+
 IR_Headless_Vertex_In :: struct {
   a_pos: Vector2; @semantic_ATTRIBUTE0
   vertex_id: u32; @semantic_SV_VertexID
@@ -267,6 +282,13 @@ ir_headless_fragment_bindless_main :: (using input: IR_Headless_Vertex_Out, para
   return out;
 } @fragment_shader
 
+ir_headless_fragment_bindless_3d_main :: (using input: IR_Headless_Vertex_Out, params: IR_Headless_Bindless_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  uvw := Vector3.{input.position.x, input.position.y, 0.5};
+  out_color = sample_3d(params.texture_index, params.sampler_index, uvw);
+  return out;
+} @fragment_shader
+
 ir_headless_fragment_vec3_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Vec3_Params) -> IR_Headless_Fragment_Out {
   using out: IR_Headless_Fragment_Out;
   out_color = Vector4.{
@@ -428,6 +450,14 @@ ir_headless_compute_fixed_array_pointer_helper_main :: (using input: IR_Headless
   }
 } @compute_shader
 
+ir_headless_compute_write_3d_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_Root) {
+  if thread_id.x < 8 {
+    v := cast(float) thread_id.x * 0.125;
+    write_3d(0, thread_id.x, 0, 0, .{v, 0.0, 1.0 - v, 1.0});
+    data.values[thread_id.x] = data.values[thread_id.x] + 1;
+  }
+} @compute_shader
+
 // Intentionally declared after the entry points above to validate order-independence.
 ir_headless_chain_leaf :: (x: float) -> float {
   return x * 2.0;
@@ -530,6 +560,27 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   check_contains(metal_fragment_bindless, "array<sampler, 16>", "bindless fragment metal output");
   check_contains(metal_fragment_bindless, "sample_2d_samplers [[sampler(0)]]", "bindless fragment metal output");
 
+  vulkan_fragment_bindless_3d := get_transpiled(.VULKAN_GLSL, ir_headless_fragment_bindless_3d_main);
+  check_contains(vulkan_fragment_bindless_3d, "#version", "bindless fragment 3d Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless_3d, "sampler3D", "bindless fragment 3d Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless_3d, "sample_3d_textures[16]", "bindless fragment 3d Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless_3d, "sample_3d_samplers[16]", "bindless fragment 3d Vulkan GLSL output");
+  check_generated_file_contains(tprint("%/ir_headless_fragment_bindless_3d_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpTypeImage",
+                               "bindless fragment 3d SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_fragment_bindless_3d_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               " 3D ",
+                               "bindless fragment 3d SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_fragment_bindless_3d_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpImageSampleImplicitLod",
+                               "bindless fragment 3d SPIR-V text output");
+
+  metal_fragment_bindless_3d := get_transpiled(.METAL, ir_headless_fragment_bindless_3d_main);
+  check_contains(metal_fragment_bindless_3d, "array<texture3d<float>, 16>", "bindless fragment 3d metal output");
+  check_contains(metal_fragment_bindless_3d, "sample_3d_textures [[texture(1)]]", "bindless fragment 3d metal output");
+  check_contains(metal_fragment_bindless_3d, "array<sampler, 16>", "bindless fragment 3d metal output");
+  check_contains(metal_fragment_bindless_3d, "sample_3d_samplers [[sampler(0)]]", "bindless fragment 3d metal output");
+
   metal_fragment_anonymous := get_transpiled(.METAL, ir_headless_fragment_anonymous_main);
   check_contains(metal_fragment_anonymous, "fragment", "anonymous fragment metal output");
   check_contains(metal_fragment_anonymous, "[[color(0)]]", "anonymous fragment metal output");
@@ -578,6 +629,20 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   check_contains(metal_compute_fixed_array_pointer_helper, "buffer(0)", "compute fixed-array-pointer-helper metal output");
   compute_fixed_array_pointer_helper_path := tprint("%/ir_compute_fixed_array_pointer_helper.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(compute_fixed_array_pointer_helper_path, metal_compute_fixed_array_pointer_helper);
+
+  metal_compute_write_3d := get_transpiled(.METAL, ir_headless_compute_write_3d_main);
+  check_contains(metal_compute_write_3d, "kernel", "compute write_3d metal output");
+  check_contains(metal_compute_write_3d, "array<texture3d<float, access::write>, 16>", "compute write_3d metal output");
+  check_contains(metal_compute_write_3d, "write_3d_textures [[texture(1)]]", "compute write_3d metal output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_write_3d_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpTypeImage",
+                               "compute write_3d SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_write_3d_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               " 3D ",
+                               "compute write_3d SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_write_3d_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpImageWrite",
+                               "compute write_3d SPIR-V text output");
 
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
   check_contains(metal_pair, "vertex", "pair metal output");
