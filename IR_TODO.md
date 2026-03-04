@@ -127,3 +127,15 @@ Direction note:
   - Use explicit local normalize helper (`len2/sqrt/inv`) in shader code.
 - Desired fix:
   - Route shader lowering through unambiguous value-vector normalize lowering (or improve overload filtering/diagnostics so host pointer-style forms never leak into shader IR paths).
+
+## 32) Vector `min`/`max` lowering can mis-type element-wise expressions
+- Symptom:
+  - Pair shader lowering can fail with: `SPIR-V backend: unsupported conversion from FLOAT3 to FLOAT.`
+- Where hit:
+  - Raytracer shader AABB slab intersection when using vector element-wise forms:
+    - `tmin3 := min(t0, t1)`
+    - `tmax3 := max(t0, t1)`
+- Current workaround:
+  - Expand to explicit per-component scalar comparisons (`ifx` / scalar `min`/`max`) before scalar reductions.
+- Desired fix:
+  - Ensure vector `min`/`max` builtins preserve vector result typing through IR + SPIR-V lowering (including overload selection and temporary type propagation), so element-wise vector ops don’t degrade to scalar conversion paths.
