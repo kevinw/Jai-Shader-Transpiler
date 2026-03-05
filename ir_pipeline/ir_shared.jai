@@ -1013,6 +1013,13 @@ ir_shared_collect_calls_in_node :: (node: *Code_Node, called_headers: *[..] *Cod
       return;
     }
 
+    case .CASE; {
+      op := cast(*Code_Case) node;
+      if op.condition ir_shared_collect_calls_in_node(op.condition, called_headers);
+      if op.then_block for op.then_block.statements ir_shared_collect_calls_in_node(it, called_headers);
+      return;
+    }
+
     case .FOR; {
       op := cast(*Code_For) node;
       ir_shared_collect_calls_in_node(op.iteration_expression, called_headers);

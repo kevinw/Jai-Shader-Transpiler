@@ -921,7 +921,18 @@ apply_buffer_base_index :: (s: *IR_SPV_Gen_State, buffer: *IR_SPV_Gen_Buffer, id
   return out;
 }
 find_uniform_block :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Uniform_Block { return find_by_name(*s.uniform_blocks, name); }
-find_function :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Function { return find_by_name(*s.functions, name); }
+find_function :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Function {
+  if !s return null;
+  found := find_by_name(*s.functions, name);
+  if found return found;
+
+  target := canonical_callee_name(name);
+  for 0..s.functions.count-1 {
+    candidate := s.functions.data + it;
+    if canonical_callee_name(candidate.name) == target return candidate;
+  }
+  return null;
+}
 find_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Struct { return find_by_name(*s.extra_structs, name); }
 find_local_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Struct {
   i := s.local_structs.count - 1;
@@ -2311,6 +2322,16 @@ coerce_to_exact_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_G
   return coerced, dst_type, true, {};
 }
 
+coerce_to_expr_result_kind :: (s: *IR_SPV_Gen_State, expr: *IR_Expr, value_id: s64, value_type: IR_SPV_Gen_Type) -> (out_id: s64, out_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  target_kind := spv_kind_from_ir_expr_result(expr);
+  if target_kind == .UNKNOWN || target_kind == .STRUCT || target_kind == value_type {
+    return value_id, value_type, true, {};
+  }
+  coerced, coerced_ok, coerced_diag := coerce_to_kind(s, value_id, value_type, target_kind);
+  if !coerced_ok return 0, .UNKNOWN, false, coerced_diag;
+  return coerced, target_kind, true, {};
+}
+
 emit_float_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   assert(s != null);
   result := new_id(s);
@@ -2661,6 +2682,9 @@ spv_kind_from_struct_alias :: (s: *IR_SPV_Gen_State, struct_name: string) -> IR_
 
 spv_kind_from_ir_type_for_layout :: (s: *IR_SPV_Gen_State, type: IR_Type) -> IR_SPV_Gen_Type {
   kind := spv_kind_from_ir_type(type);
+  // For host-visible buffer layouts we store bool as 32-bit uint.
+  // This preserves CPU/GPU blittability while frontend semantics still coerce to bool at use sites.
+  if kind == .BOOL return .UINT;
   if kind == .STRUCT {
     alias_kind := spv_kind_from_struct_alias(s, spv_struct_name_from_ir_type(type));
     if alias_kind != .UNKNOWN return alias_kind;
@@ -3548,7 +3572,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           value_type_id := type_id_from_kind(s, field_type);
           if value_type_id == 0 return_err("unsupported loaded field type for '%'.", path);
           emit_load(s, value_id, value_type_id, field_ptr, field_type, needs_physical_align=true);
-          return value_id, field_type, true, diag;
+          out_id, out_type, out_ok, out_diag := coerce_to_expr_result_kind(s, expr, value_id, field_type);
+          if !out_ok return 0, .UNKNOWN, false, out_diag;
+          return out_id, out_type, true, diag;
         }
         // Non-buffer subscripts (for example uniform-array or local-array indexing) should
         // continue through the generic member-expression path below.
@@ -3592,7 +3618,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           value_type_id := type_id_from_kind(s, buffer_field_type);
           if value_type_id == 0 return_err("unsupported loaded field type for '%'.", path);
           emit_load(s, value_id, value_type_id, buffer_field_ptr, buffer_field_type, needs_physical_align=true);
-          return value_id, buffer_field_type, true, diag;
+          out_id, out_type, out_ok, out_diag := coerce_to_expr_result_kind(s, expr, value_id, buffer_field_type);
+          if !out_ok return 0, .UNKNOWN, false, out_diag;
+          return out_id, out_type, true, diag;
         }
 
         local := find_local(s, expr.left.text);
@@ -3709,7 +3737,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           if value_type_id == 0 return_err("unsupported struct-buffer array element type for '%'.", expr_text(expr.left));
           value_id := new_id(s);
           emit_load(s, value_id, value_type_id, ptr, elem_type, needs_physical_align=true);
-          return value_id, elem_type, true, diag;
+          out_id, out_type, out_ok, out_diag := coerce_to_expr_result_kind(s, expr, value_id, elem_type);
+          if !out_ok return 0, .UNKNOWN, false, out_diag;
+          return out_id, out_type, true, diag;
         }
         // Keep existing fallback paths for non-buffer member subscripts.
       }
@@ -5050,7 +5080,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
     case .IF; {
       cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.if_condition);
       if !cond_ok return false, false, cond_diag;
-      if cond_type != .BOOL return_err("if condition must be bool.");
+      cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .BOOL);
+      if !cond_ok return false, false, cond_diag;
 
       then_label := new_id(s);
       merge_label := new_id(s);
@@ -5289,7 +5320,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 
       cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.while_condition);
       if !cond_ok return false, false, cond_diag;
-      if cond_type != .BOOL return_err("while condition must be bool.");
+      cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .BOOL);
+      if !cond_ok return false, false, cond_diag;
       add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
       add_op(s, "OpBranchConditional", cond_id, body_label, merge_label);
 

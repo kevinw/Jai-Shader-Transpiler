@@ -169,6 +169,14 @@ IR_Headless_Fragment_Using_Pointer_Params :: struct {
   _pad0_z: float;
 }
 
+IR_Headless_Fragment_Bool_Params :: struct {
+  use_cache_raymarch: bool;
+  _pad0_x: float;
+  _pad0_y: float;
+  _pad0_z: float;
+  gain: float;
+}
+
 IR_Headless_Fragment_Nested_Core :: struct {
   tint: Vector4;
   mix_gain: float;
@@ -183,6 +191,18 @@ IR_Headless_Fragment_Nested_Params :: struct {
   _pad0_y: float;
   _pad0_z: float;
   core: IR_Headless_Fragment_Nested_Core;
+}
+
+IR_Headless_Enum_Mode :: enum u32 {
+  Sphere :: 0;
+  Box :: 1;
+}
+
+IR_Headless_Fragment_Enum_Params :: struct {
+  mode: IR_Headless_Enum_Mode;
+  _pad0_x: float;
+  _pad0_y: float;
+  _pad0_z: float;
 }
 
 IR_Headless_Position_Semantic_Vertex_Out :: struct {
@@ -330,6 +350,16 @@ ir_headless_fragment_using_pointer_params_main :: (using input: IR_Headless_Vert
   return out;
 } @fragment_shader
 
+ir_headless_fragment_bool_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Bool_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  gain := params.gain;
+  if params.use_cache_raymarch {
+    gain *= 1.5;
+  }
+  out_color = Vector4.{input.color.x * gain, input.color.y * gain, input.color.z * gain, 1.0};
+  return out;
+} @fragment_shader
+
 ir_headless_fragment_nested_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Nested_Params) -> IR_Headless_Fragment_Out {
   using out: IR_Headless_Fragment_Out;
   i := cast(u32) (input.position.x > 0.0);
@@ -341,6 +371,23 @@ ir_headless_fragment_nested_params_main :: (using input: IR_Headless_Vertex_Out,
     input.color.z * params.gain + extra,
     1.0,
   };
+  return out;
+} @fragment_shader
+
+ir_headless_sdf_box_like :: (x: float) -> float {
+  return x + 0.25;
+}
+
+ir_headless_fragment_enum_helper_call_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Enum_Params) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  v := input.color.x;
+  if #complete params.mode == {
+  case .Box;
+    v = ir_headless_sdf_box_like(v);
+  case .Sphere;
+    // keep baseline value
+  }
+  out_color = .{v, input.color.y, input.color.z, 1.0};
   return out;
 } @fragment_shader
 
@@ -711,6 +758,15 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   using_pointer_pair_path := tprint("%/ir_pair_fragment_using_pointer_params.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(using_pointer_pair_path, using_pointer_pair);
 
+  bool_params_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_bool_params_main);
+  check_contains(bool_params_pair, "fragment", "bool-field fragment-params pair metal output");
+  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_bool_params_main_pair.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "use_cache_raymarch",
+                               "bool-field fragment-params pair SPIR-V output");
+  bool_params_pair_path := tprint("%/ir_pair_fragment_bool_params.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(bool_params_pair_path, bool_params_pair);
+
   nested_params_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_nested_params_main);
   check_contains(nested_params_pair, "fragment", "nested fragment-params pair metal output");
   check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_nested_params_main_pair.spvasm",
@@ -719,6 +775,15 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
                                "nested fragment-params pair bool-to-u32 cast SPIR-V output");
   nested_params_pair_path := tprint("%/ir_pair_fragment_nested_params.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(nested_params_pair_path, nested_params_pair);
+
+  enum_helper_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_enum_helper_call_main);
+  check_contains(enum_helper_pair, "fragment", "enum helper-call fragment-params pair metal output");
+  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_enum_helper_call_main_pair.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpEntryPoint Fragment",
+                               "enum helper-call fragment-params pair SPIR-V output");
+  enum_helper_pair_path := tprint("%/ir_pair_fragment_enum_helper_call.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(enum_helper_pair_path, enum_helper_pair);
 
   casted_alias_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_casted_fixed_alias_params_main);
   check_contains(casted_alias_pair, "fragment", "casted-fixed-alias fragment-params pair metal output");
