@@ -179,6 +179,8 @@ Direction note:
 ## 35) Temporary/local user-defined struct declarations in shader code are not broadly supported
 - Symptom:
   - Backend can fail with unsupported declaration type errors for shader-local custom struct declarations/returns (hit with `Brickmap_Sample_Result` return path).
+  - Recent repro in fragment helper path:
+    - `SPIR-V backend: unsupported declaration type 'Brickmap_Cache_Sample'.`
 - Where hit:
   - Brickmap cached-sample helper initially returned a custom struct (`dist`, `from_cache`).
 - Current workaround:

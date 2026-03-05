@@ -7,6 +7,11 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
   diag: IR_Diagnostic;
   if !expr return_err("null lvalue expression.");
   if expr.kind == .UNARY {
+    if expr.unary_op == .ADDRESS_OF {
+      if !expr.left return_err("unary '&' missing operand.");
+      ptr_id, ptr_type, ptr_ok, ptr_diag := emit_lvalue_ptr(s, expr.left);
+      return ptr_id, ptr_type, ptr_ok, ptr_diag;
+    }
     if expr.unary_op == .DEREF {
       if !expr.left return_err("unary '*' missing operand.");
       if expr.left.kind == .IDENT {

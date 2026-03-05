@@ -240,6 +240,12 @@ write_3d :: (texture_index: u32, x: u32, y: u32, z: u32, value: Vector4) { }
 // Fragment kill helper for the IR SPIR-V backend path.
 discard :: () { }
 
+// Atomic helpers for storage-buffer uint fields.
+// Returns the previous value at *dst.
+atomic_add_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
+atomic_min_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
+atomic_max_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
+
 is_number :: (T: Type) -> bool {
   return T == float ||
          T == float64 ||

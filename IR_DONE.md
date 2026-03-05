@@ -292,3 +292,17 @@ Status: In large part fixed (March 1, 2026) across backend hot paths; remaining 
   - Removed compute thread builtin dependence on hardcoded identifier text (`thread_id.x` style): lowering now tags builtin provenance/components on IR expressions, and SPIR-V backend dispatch-thread handling consumes those tags.
 - Outcome:
   - Backend semantics now primarily come from lowered type metadata instead of reconstructed strings, with narrow compatibility fallbacks only where lowering completeness is still being finished.
+
+
+## 41) Transpiled shader cache invalidation can reuse stale backend output after source/transpiler changes
+- Symptom:
+  - Shader edits can appear to "do nothing" because previously cached transpiled backend output is reused.
+  - Behavior can look like backend miscompile even when source is fixed, until cache is manually busted.
+- Where hit:
+  - Brickmap shader/debug iterations while validating fragment/control-flow fixes against emitted Metal.
+- Current workaround:
+  - Manually clear cache or bump cache-version key.
+- Desired fix:
+  - Make cache keys content-addressed by effective inputs (shader source, backend, transpiler codegen-relevant version/feature fingerprint).
+  - Ensure transpiler/backend changes invalidate prior cached outputs automatically without manual version bumps.
+  - Add a regression check that recompiles after source mutation and asserts emitted backend text changes.

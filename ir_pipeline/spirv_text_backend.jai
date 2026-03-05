@@ -253,6 +253,9 @@ call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee == "normalize" return .NORMALIZE;
   if callee == "radians" return .RADIANS;
   if callee == "degrees" return .DEGREES;
+  if callee == "atomic_add_u32" return .ATOMIC_ADD_U32;
+  if callee == "atomic_min_u32" return .ATOMIC_MIN_U32;
+  if callee == "atomic_max_u32" return .ATOMIC_MAX_U32;
   return .NONE;
 }
 
@@ -285,6 +288,9 @@ call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
   if kind == .SAMPLE_3D return "sample_3d";
   if kind == .WRITE_2D return "write_2d";
   if kind == .WRITE_3D return "write_3d";
+  if kind == .ATOMIC_ADD_U32 return "atomic_add_u32";
+  if kind == .ATOMIC_MIN_U32 return "atomic_min_u32";
+  if kind == .ATOMIC_MAX_U32 return "atomic_max_u32";
   if kind == .FLOOR return "floor";
   if kind == .MIN return "min";
   if kind == .MAX return "max";
@@ -2565,6 +2571,28 @@ emit_write_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
   return true, diag;
 }
 
+emit_atomic_u32_call :: (s: *IR_SPV_Gen_State, op_name: string, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if s.stage != .COMPUTE return 0, .UNKNOWN, false, make_diag("% is currently compute-stage only.", op_name);
+  if args.count != 2 return 0, .UNKNOWN, false, make_diag("% expects 2 args (*dst, value).", op_name);
+
+  dst_ptr, dst_type, dst_ok, dst_diag := emit_lvalue_ptr(s, args[0]);
+  if !dst_ok return 0, .UNKNOWN, false, dst_diag;
+  if dst_type != .UINT return 0, .UNKNOWN, false, make_diag("% first arg must point to u32.", op_name);
+
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[1]);
+  if !value_ok return 0, .UNKNOWN, false, value_diag;
+  value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, .UINT);
+  if !value_ok return 0, .UNKNOWN, false, value_diag;
+
+  scope_device := get_u32_const(s, 1);
+  semantics_relaxed := get_u32_const(s, 0);
+  out := new_id(s);
+  add_op(s, out, op_name, s.id_uint, dst_ptr, scope_device, semantics_relaxed, value_id);
+  return out, .UINT, true, diag;
+}
+
 spv_kind_from_ir_type_kind :: (kind: IR_Type_Kind) -> IR_SPV_Gen_Type {
   if kind == .BOOL return .BOOL;
   if kind == .I32 return .INT;
@@ -4050,6 +4078,18 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       }
       if builtin_kind == .DISCARD {
         return_err("discard has no return value and must be used as a statement.");
+      }
+      if builtin_kind == .ATOMIC_ADD_U32 {
+        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicIAdd", expr.args);
+        return atomic_id, atomic_type, atomic_ok, atomic_diag;
+      }
+      if builtin_kind == .ATOMIC_MIN_U32 {
+        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicUMin", expr.args);
+        return atomic_id, atomic_type, atomic_ok, atomic_diag;
+      }
+      if builtin_kind == .ATOMIC_MAX_U32 {
+        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicUMax", expr.args);
+        return atomic_id, atomic_type, atomic_ok, atomic_diag;
       }
       if builtin_kind == .RADIANS {
         if expr.args.count != 1 return_err("radians expects 1 arg.");

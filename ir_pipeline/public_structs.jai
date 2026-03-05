@@ -203,6 +203,9 @@ IR_Call_Builtin_Kind :: enum {
   NORMALIZE;
   RADIANS;
   DEGREES;
+  ATOMIC_ADD_U32;
+  ATOMIC_MIN_U32;
+  ATOMIC_MAX_U32;
 }
 
 IR_Builtin_Ref :: struct {
