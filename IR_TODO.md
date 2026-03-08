@@ -218,6 +218,29 @@ Direction note:
     - `SPIR-V backend: unsupported cast target 'float'`
   - Triggered by specific expression shapes in newer shader/debug code paths.
 - Where hit:
+
+## 40) Graphics physical-pointer roots still fail for large host-blittable structs nested behind root pointers
+- Symptom:
+  - Pair shader lowering reaches `spirv-opt` block-layout failures for generated physical-storage wrappers, for example:
+    - `Structure ... Block for variable in PhysicalStorageBuffer ... array with stride ... not satisfying alignment to 16`
+- Where hit:
+  - `brickmap` attempt to switch from the direct `Brickmap_Params` ABI to a cleaner `Brickmap_Render_Data { params: *Brickmap_Params; state: *Brickmap_State; }` graphics root.
+- Current workaround:
+  - Keep the render path on the direct params buffer ABI and mirror any GPU-owned state needed by the fragment shader into that params buffer.
+- Desired fix:
+  - Make physical-pointer wrapper emission validate and emit legal block layout for pointed-to structs used from graphics roots, including large POD payloads with `Vector3` fields and fixed arrays.
+  - Add a focused pair-shader regression once the wrapper stride/layout rules are corrected.
+
+## 41) Storage-buffer struct-array support still does not cover whole-struct indexed loads/stores
+- Symptom:
+  - Backend rejects whole-struct lvalue access like:
+    - `unknown lvalue subscript base 'queues.candidates'`
+- Where hit:
+  - `brickmap` work queues after moving from SoA buffers to `Brick_Request[]` storage-buffer arrays.
+- Current workaround:
+  - Use field-by-field indexed access (`queues.candidates[i].lod`, `...brick_x`, etc.) instead of whole-struct assignment/load.
+- Desired fix:
+  - Extend lvalue lowering/emission so indexed storage-buffer struct elements can be assigned/loaded as whole POD structs, not only by field.
   - Brickmap shader iterations while adding atlas debug/interp controls.
 - Current workaround:
   - Simplify/reshape expressions to avoid the failing cast forms.

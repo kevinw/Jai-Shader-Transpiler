@@ -82,6 +82,9 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
   }
   if expr.kind == .MEMBER {
     if expr.left && expr.left.kind == .SUBSCRIPT {
+      array_field_ptr, array_field_type, array_field_ok, _ := emit_buffer_struct_array_element_field_ptr(s, expr.left, expr.text);
+      if array_field_ok return array_field_ptr, array_field_type, true, diag;
+
       ptr_id, ptr_type, ptr_ok, ptr_diag := emit_buffer_struct_field_ptr(s, expr.left, expr.text);
       if ptr_ok return ptr_id, ptr_type, true, diag;
 
@@ -110,7 +113,10 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       return ptr_id, ptr_type, false, ptr_diag;
     }
     if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .SUBSCRIPT {
-      field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
+      field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_array_element_field_ptr(s, expr.left.left, expr.left.text);
+      if !field_ok {
+        field_ptr, field_type, field_ok, field_diag = emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
+      }
       if !field_ok return 0, .UNKNOWN, false, field_diag;
       if field_type != .FLOAT2 && field_type != .FLOAT3 && field_type != .FLOAT4 return_err("lvalue component access requires float2/float3/float4 field, got %.", field_type);
       comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);

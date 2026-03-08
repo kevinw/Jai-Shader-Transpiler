@@ -206,7 +206,7 @@ shader_reload_manifest_find_entry :: (manifest: *Shader_Reload_Manifest, entry_i
 
 shader_reload_manifest_find_entry_source_for_manifest :: (manifest: *Shader_Reload_Manifest, entry: *Shader_Reload_Manifest_Entry, using paths: *Shader_Path_Context) -> (string, bool) {
     if !entry || entry.output_source_path.count == 0 return "", false;
-    out_path, found := manifest_resolve_existing_file_path(manifest, entry.entry_id, entry.output_source_path, "source", workspace_root);
+    out_path, found := manifest_resolve_existing_file_path(manifest, entry.entry_id, entry.output_source_path, "source", workspace_root,, temp);
     return out_path, found;
 }
 
@@ -217,7 +217,7 @@ shader_reload_manifest_find_entry_source_auto :: (entry: *Shader_Reload_Manifest
 
 shader_reload_manifest_find_entry_metallib_for_manifest :: (manifest: *Shader_Reload_Manifest, entry: *Shader_Reload_Manifest_Entry, using paths: *Shader_Path_Context) -> (string, bool) {
     if !entry || entry.output_metallib_path.count == 0 return "", false;
-    out_path, found := manifest_resolve_existing_file_path(manifest, entry.entry_id, entry.output_metallib_path, "metallib", workspace_root);
+    out_path, found := manifest_resolve_existing_file_path(manifest, entry.entry_id, entry.output_metallib_path, "metallib", workspace_root,, temp);
     return out_path, found;
 }
 
@@ -420,7 +420,7 @@ manifest_resolve_workspace_relative_path :: (watcher: *Shader_Reload_Watcher, re
     if manifest_path_is_absolute(rel_path) return rel_path;
 
     if watcher && watcher.paths.workspace_root.count != 0 {
-        rooted := String.path_join(watcher.paths.workspace_root, rel_path);
+        rooted := String.path_join(watcher.paths.workspace_root, rel_path,, temp);
         _, _, ok := File_Utilities.file_modtime_and_size(rooted);
         if ok return rooted;
         // Keep deterministic rooted path even if missing (for create/delete tracking).
@@ -600,8 +600,8 @@ make_path_context_auto :: (app_source_file: string) -> Shader_Path_Context {
         out.workspace_root = ".";
     }
 
-    out.generated_dir = copy_string(String.path_join(out.workspace_root, ".generated_shaders"));
-    out.manifest_latest_path = copy_string(String.path_join(out.generated_dir, "shader_reload_manifest_latest.txt"));
+    out.generated_dir = String.path_join(out.workspace_root, ".generated_shaders");
+    out.manifest_latest_path = String.path_join(out.generated_dir, "shader_reload_manifest_latest.txt");
     out.build_working_dir = copy_string(out.workspace_root);
     verbose_log("context cwd=% app=% root=% generated=%", cwd, app_source_file, out.workspace_root, out.generated_dir);
     return out;
@@ -618,7 +618,7 @@ manifest_find_workspace_root_auto :: (cwd: string, app_source_file: string) -> s
     if app_source_file.count != 0 {
         app_path := app_source_file;
         if !manifest_path_is_absolute(app_path) {
-            app_path = String.path_join(cwd, app_path);
+            app_path = String.path_join(cwd, app_path,, temp);
         }
         base := String.path_strip_filename(app_path);
         root := manifest_walk_up_for_workspace_root(base);
@@ -636,7 +636,7 @@ manifest_walk_up_for_workspace_root :: (start_path: string) -> string {
     for 0..16 {
         if path.count == 0 break;
         if manifest_is_workspace_root(path) return path;
-        next := manifest_parent_dir(path);
+        next := manifest_parent_dir(path,, temp);
         if next == path break;
         path = next;
     }
@@ -663,7 +663,7 @@ manifest_parent_dir :: (path: string) -> string {
 
 manifest_is_workspace_root :: (path: string) -> bool {
     if path.count == 0 return false;
-    marker := String.path_join(path, PEEL_WORKSPACE_SENTINEL);
+    marker := String.path_join(path, PEEL_WORKSPACE_SENTINEL,, temp);
     _, _, exists := File_Utilities.file_modtime_and_size(marker);
     return exists;
 }
@@ -738,6 +738,7 @@ manifest_try_hash_file :: (path: string) -> (u64, bool) {
     data, ok := read_entire_file(path);
     if !ok return 0, false;
     if data.count == 0 return 0, true;
+    defer free(data);
     return fnv1a_hash(data.data, data.count), true;
 }
 

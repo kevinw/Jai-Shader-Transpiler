@@ -254,6 +254,19 @@ IR_Headless_Compute_Alias_Root :: struct {
   items: *IR_Headless_Compute_Alias_Item;
 }
 
+IR_Headless_Compute_Struct_Array_Item :: struct {
+  packed: Vector4;
+  gain: float;
+  _pad0_x: float;
+  _pad0_y: float;
+  _pad0_z: float;
+}
+
+IR_Headless_Compute_Struct_Array_Params :: struct {
+  items: [4] IR_Headless_Compute_Struct_Array_Item;
+  out_value: Vector4;
+}
+
 IR_Boids_Vertex_Params :: struct {
   positions: *Vector2;
   instances: *Vector2;
@@ -497,6 +510,15 @@ ir_headless_compute_fixed_array_pointer_helper_main :: (using input: IR_Headless
   }
 } @compute_shader
 
+ir_headless_compute_struct_array_field_main :: (using input: IR_Headless_Compute_In, params: *IR_Headless_Compute_Struct_Array_Params) {
+  if thread_id.x < 4 {
+    i := thread_id.x;
+    packed := params.items[i].packed;
+    params.items[i].packed.x = packed.x + params.items[i].gain;
+    params.out_value = .{params.items[i].packed.x, packed.y, packed.z, packed.w};
+  }
+} @compute_shader
+
 ir_headless_compute_write_3d_main :: (using input: IR_Headless_Compute_In, data: *IR_Headless_Compute_Root) {
   if thread_id.x < 8 {
     v := cast(float) thread_id.x * 0.125;
@@ -676,6 +698,18 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   check_contains(metal_compute_fixed_array_pointer_helper, "buffer(0)", "compute fixed-array-pointer-helper metal output");
   compute_fixed_array_pointer_helper_path := tprint("%/ir_compute_fixed_array_pointer_helper.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(compute_fixed_array_pointer_helper_path, metal_compute_fixed_array_pointer_helper);
+
+  metal_compute_struct_array_field := get_transpiled(.METAL, ir_headless_compute_struct_array_field_main);
+  check_contains(metal_compute_struct_array_field, "kernel", "compute struct-array-field metal output");
+  check_contains(metal_compute_struct_array_field, "buffer(0)", "compute struct-array-field metal output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_struct_array_field_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpTypeArray",
+                               "compute struct-array-field SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_struct_array_field_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpAccessChain",
+                               "compute struct-array-field SPIR-V text output");
+  compute_struct_array_field_path := tprint("%/ir_compute_struct_array_field.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(compute_struct_array_field_path, metal_compute_struct_array_field);
 
   metal_compute_write_3d := get_transpiled(.METAL, ir_headless_compute_write_3d_main);
   check_contains(metal_compute_write_3d, "kernel", "compute write_3d metal output");

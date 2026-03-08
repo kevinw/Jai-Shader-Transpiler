@@ -221,6 +221,12 @@ declaration_get_semantic :: (decl: *Code_Declaration) -> (string, bool) {
 ir_collect_nested_structs_for_member_type :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> bool {
   if !type return false;
 
+  if type.type == .ARRAY {
+    arr := cast(*Type_Info_Array) type;
+    if !arr.element_type return false;
+    return ir_collect_nested_structs_for_member_type(arr.element_type, extra_structs);
+  }
+
   if type.type == .POINTER {
     ptr := cast(*Type_Info_Pointer) type;
     if !ptr.pointer_to return false;
@@ -498,6 +504,11 @@ ir_validate_parameter_block_layout :: (arg_name: string, struct_type: *Type_Info
 
 ir_collect_nested_structs_for_shader_arg_type :: (type: *Type_Info, extra_structs: *[..] IR_Struct) -> bool {
   if !type return false;
+  if type.type == .ARRAY {
+    arr := cast(*Type_Info_Array) type;
+    if !arr.element_type return false;
+    return ir_collect_nested_structs_for_shader_arg_type(arr.element_type, extra_structs);
+  }
   if type.type == .POINTER {
     ptr := cast(*Type_Info_Pointer) type;
     if !ptr.pointer_to return false;

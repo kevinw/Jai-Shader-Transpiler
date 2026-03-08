@@ -106,6 +106,60 @@ graphics_test_nested_resource_fragment :: (using input: Graphics_Bindless_Vertex
   return out;
 } @fragment_shader
 
+Graphics_Mixed_Resource_Params :: struct {
+  values: *u32;
+  gain: float;
+}
+
+Graphics_Mixed_Resource_Root :: struct {
+  params: Graphics_Mixed_Resource_Params;
+}
+
+graphics_test_mixed_resource_fragment :: (using input: Graphics_Bindless_Vertex_Out, resources: *Graphics_Mixed_Resource_Root) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  _ = input;
+  v := resources.params.values[1] & 1;
+  gain := resources.params.gain;
+  if v == 0 {
+    out_color = Vector4.{gain, 0.0, 1.0, 1.0};
+  } else {
+    out_color = Vector4.{0.0, gain, 1.0, 1.0};
+  }
+  return out;
+} @fragment_shader
+
+Graphics_Mixed_Resource_Vec3_Params :: struct {
+  values: *u32;
+  offset: Vector3;
+  gain: float;
+}
+
+Graphics_Mixed_Resource_Vec3_Root :: struct {
+  params: Graphics_Mixed_Resource_Vec3_Params;
+}
+
+graphics_test_bindless_ptrroot_vertex :: (using input: Graphics_Test_Vertex_In, resources: *Graphics_Mixed_Resource_Vec3_Root) -> Graphics_Bindless_Vertex_Out {
+  using out: Graphics_Bindless_Vertex_Out;
+  _ = resources;
+  position = Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
+  uv = Vector2.{(a_pos.x + 1.0) * 0.5, (a_pos.y + 1.0) * 0.5};
+  return out;
+} @vertex_shader
+
+graphics_test_mixed_resource_vec3_fragment :: (using input: Graphics_Bindless_Vertex_Out, resources: *Graphics_Mixed_Resource_Vec3_Root) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  _ = input;
+  v := resources.params.values[1] & 1;
+  offset := resources.params.offset;
+  gain := resources.params.gain;
+  if v == 0 {
+    out_color = Vector4.{gain + offset.x, offset.y, offset.z, 1.0};
+  } else {
+    out_color = Vector4.{offset.z, gain + offset.y, offset.x, 1.0};
+  }
+  return out;
+} @fragment_shader
+
 Graphics_Instance_Vertex_In :: struct {
   a_pos: Vector2; @semantic_ATTRIBUTE0
   vertex_id: u32; @semantic_SV_VertexID
@@ -923,6 +977,80 @@ run_nested_resource_container_case_metal :: () {
   log("[OK] graphics_nested_resource_container");
 }
 
+run_mixed_resource_container_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_bindless_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_mixed_resource_fragment);
+  check_contains(vertex_source, "vertex", "mixed-resource vertex metal");
+  check_contains(fragment_source, "fragment", "mixed-resource fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile mixed-resource vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile mixed-resource vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile mixed-resource fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile mixed-resource fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find mixed-resource vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find mixed-resource fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  log("[OK] graphics_mixed_resource_container");
+}
+
+run_mixed_resource_vec3_container_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  pair_source := get_transpiled(.METAL, graphics_test_bindless_ptrroot_vertex, graphics_test_mixed_resource_vec3_fragment);
+  check_contains(pair_source, "vertex", "mixed-resource-vec3 pair metal");
+  check_contains(pair_source, "fragment", "mixed-resource-vec3 pair metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  pair_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(pair_source), compile_options, *error);
+  if log_nserror("Failed to compile mixed-resource-vec3 pair metal source", error) || !pair_lib {
+    fail("Failed to compile mixed-resource-vec3 pair metal source");
+  }
+  defer release(pair_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find mixed-resource-vec3 vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find mixed-resource-vec3 fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  log("[OK] graphics_mixed_resource_vec3_container");
+}
+
 main :: () {
   #if OS != .MACOS {
     log("Skipping graphics semantics runner on % (Metal-only test).", OS);
@@ -935,5 +1063,6 @@ main :: () {
   run_bindless_sample_case_metal();
   run_nested_return_pair_case_metal();
   run_nested_resource_container_case_metal();
-  log("Passed 6 graphics semantics cases.");
+  run_mixed_resource_container_case_metal();
+  log("Passed 7 graphics semantics cases.");
 }

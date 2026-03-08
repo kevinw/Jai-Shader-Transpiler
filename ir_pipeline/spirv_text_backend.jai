@@ -182,6 +182,22 @@ split_path_root :: (path: string) -> (root: string, tail: string, ok: bool) {
   return path, "", true;
 }
 
+split_path_last :: (path: string) -> (prefix: string, tail: string, ok: bool) {
+  if path.count == 0 return "", "", false;
+  i := path.count - 1;
+  while i >= 0 {
+    if path[i] == #char "." {
+      if i <= 0 || i + 1 >= path.count return "", "", false;
+      prefix: string = .{i, path.data};
+      tail: string = .{path.count - i - 1, path.data + i + 1};
+      return prefix, tail, true;
+    }
+    if i == 0 break;
+    i -= 1;
+  }
+  return "", "", false;
+}
+
 resolve_buffer_root_and_field_path :: (expr: *IR_Expr) -> (buffer_name: string, field_path: string, ok: bool) {
   full_path, path_ok := resolve_member_path(expr);
   if !path_ok return "", "", false;
@@ -189,6 +205,32 @@ resolve_buffer_root_and_field_path :: (expr: *IR_Expr) -> (buffer_name: string, 
   if !split_ok return "", "", false;
   if tail.count == 0 return "", "", false;
   return root, tail, true;
+}
+
+resolve_buffer_prefix_and_field_path :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (buffer_name: string, field_path: string, ok: bool) {
+  assert(s != null);
+  if !expr return "", "", false;
+
+  full_path, path_ok := resolve_member_path(expr);
+  if !path_ok {
+    base_name, base_ok := resolve_buffer_name_from_expr(expr);
+    if !base_ok return "", "", false;
+    full_path = base_name;
+  }
+
+  if find_buffer(s, full_path) return full_path, "", true;
+
+  prefix := full_path;
+  suffix := "";
+  while true {
+    next_prefix, tail, split_ok := split_path_last(prefix);
+    if !split_ok break;
+    suffix = ifx suffix.count == 0 then tail else tprint("%.%", tail, suffix);
+    prefix = next_prefix;
+    if find_buffer(s, prefix) return prefix, suffix, true;
+  }
+
+  return "", "", false;
 }
 
 expr_text :: (expr: *IR_Expr) -> string {
@@ -404,12 +446,25 @@ IR_SPV_Gen_Buffer_Field :: struct {
   name: string;
   index: s64;
   type: IR_SPV_Gen_Type;
+  struct_name: string;
+  type_id: s64;
+  ptr_storage_type_id: s64;
   is_array: bool;
   array_count: s64;
   array_stride: s64;
   array_type_id: s64;
   array_length_const_id: s64;
+  array_element_struct_name: string;
+  array_element_type_id: s64;
   offset: s64;
+}
+
+IR_SPV_Gen_Buffer_Layout_Struct :: struct {
+  name: string;
+  type_id: s64;
+  max_align: s64;
+  stride: s64;
+  fields: [..] IR_SPV_Gen_Buffer_Field;
 }
 
 IR_SPV_Gen_Uniform_Field :: struct {
@@ -543,6 +598,7 @@ IR_SPV_Gen_State :: struct {
   const_f16: [..] IR_SPV_Gen_Const_F16;
   const_null: [..] IR_SPV_Gen_Const_Null;
   buffers: [..] IR_SPV_Gen_Buffer;
+  buffer_layout_structs: [..] IR_SPV_Gen_Buffer_Layout_Struct;
   uniform_blocks: [..] IR_SPV_Gen_Uniform_Block;
   loop_targets: [..] IR_SPV_Gen_Loop_Target;
   break_targets: [..] s64;
@@ -560,6 +616,11 @@ IR_SPV_Gen_State :: struct {
   output_struct_type_name: string;
   input_vars: [..] IR_SPV_Gen_Interface_Var;
   output_vars: [..] IR_SPV_Gen_Interface_Var;
+  physical_root_name: string;
+  physical_root_struct_name: string;
+  physical_root_var_id: s64;
+  physical_ps_infos: [..] IR_SPV_PS_Struct_Info;
+  physical_storage_struct_ptr_types: [..] IR_SPV_PS_Ptr_To_Ptr;
   use_physical_storage: bool;
   uses_sample_2d: bool;
   uses_sample_3d: bool;
@@ -1183,6 +1244,9 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 
           field_type := IR_SPV_Gen_Type.UNKNOWN;
           field_type_name := ir_string_first_non_empty(nested_field.type.display_name, nested_field.type.struct_name);
+          field_struct_name := "";
+          field_type_id: s64 = 0;
+          field_ptr_storage_type_id: s64 = 0;
           field_size: s64 = 0;
           field_align: s64 = 1;
           is_array := false;
@@ -1190,23 +1254,40 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
           array_stride: s64 = 0;
           array_type_id: s64 = 0;
           array_length_const_id: s64 = 0;
+          array_element_struct_name := "";
+          array_element_type_id: s64 = 0;
 
           if nested_field.type.kind == .FIXED_ARRAY {
-            field_type = spv_kind_from_ir_type_kind(nested_field.type.element_kind);
             field_type_name = ir_string_first_non_empty(nested_field.type.element_display_name, nested_field.type.element_struct_name);
-            if field_type == .UNKNOWN || field_type == .STRUCT {
-              return_err("SPIR-V generic backend: buffer struct '%' nested field '%.%' array element type '%' is unsupported.", struct_def.name, outer_field_name, nested_field.name, field_type_name);
-            }
             if nested_field.type.array_count <= 0 || nested_field.type.array_count > 0xFFFF_FFFF {
               return_err("SPIR-V generic backend: buffer struct '%' nested field '%.%' has invalid fixed array count %.", struct_def.name, outer_field_name, nested_field.name, nested_field.type.array_count);
             }
-            elem_size := byte_size_of_kind(field_type);
-            if elem_size <= 0 {
+
+            if nested_field.type.element_kind == .STRUCT {
+              nested_layout, nested_layout_ok, nested_layout_diag := register_buffer_layout_struct(s, nested_field.type.element_struct_name);
+              if !nested_layout_ok return false, nested_layout_diag;
+              field_type = .STRUCT;
+              field_struct_name = nested_layout.name;
+              field_type_id = nested_layout.type_id;
+              field_align = nested_layout.max_align;
+              field_size = nested_layout.stride;
+              array_element_struct_name = nested_layout.name;
+              array_element_type_id = nested_layout.type_id;
+            } else {
+              field_type = spv_kind_from_ir_type_kind(nested_field.type.element_kind);
+              if field_type == .UNKNOWN || field_type == .STRUCT {
+                return_err("SPIR-V generic backend: buffer struct '%' nested field '%.%' array element type '%' is unsupported.", struct_def.name, outer_field_name, nested_field.name, field_type_name);
+              }
+              field_type_id = type_id_from_kind(s, field_type);
+              field_ptr_storage_type_id = storage_ptr_type_id_from_kind(s, field_type);
+              field_align = host_blit_align_for_kind(field_type);
+              field_size = byte_size_of_kind(field_type);
+            }
+            if field_size <= 0 {
               return_err("SPIR-V generic backend: buffer struct '%' nested field '%.%' array element type '%' has unsupported layout.", struct_def.name, outer_field_name, nested_field.name, field_type_name);
             }
-            field_align = host_blit_align_for_kind(field_type);
             array_count = nested_field.type.array_count;
-            array_stride = align_up(elem_size, field_align);
+            array_stride = align_up(field_size, field_align);
             field_size = array_stride * array_count;
             array_length_const_id = get_u32_const(s, cast(u32) array_count);
             array_type_id = new_id(s);
@@ -1217,6 +1298,8 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
             if field_type == .UNKNOWN {
               return_err("SPIR-V generic backend: buffer struct '%' nested field '%.%' type '%' is unsupported.", struct_def.name, outer_field_name, nested_field.name, field_type_name);
             }
+            field_type_id = type_id_from_kind(s, field_type);
+            field_ptr_storage_type_id = storage_ptr_type_id_from_kind(s, field_type);
             field_size = byte_size_of_kind(field_type);
             if field_size <= 0 {
               return_err("SPIR-V generic backend: buffer struct '%' nested field '%.%' has unsupported layout type '%'.", struct_def.name, outer_field_name, nested_field.name, field_type_name);
@@ -1241,11 +1324,16 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
             name = nested_field_name,
             index = field_index,
             type = field_type,
+            struct_name = field_struct_name,
+            type_id = field_type_id,
+            ptr_storage_type_id = field_ptr_storage_type_id,
             is_array = is_array,
             array_count = array_count,
             array_stride = array_stride,
             array_type_id = array_type_id,
             array_length_const_id = array_length_const_id,
+            array_element_struct_name = array_element_struct_name,
+            array_element_type_id = array_element_type_id,
             offset = nested_offset,
           });
           add_debug_member_name(s, buffer_info.element_type_id, field_index, nested_field_name);
@@ -1267,6 +1355,9 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 
       field_type := IR_SPV_Gen_Type.UNKNOWN;
       field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
+      field_struct_name := "";
+      field_type_id: s64 = 0;
+      field_ptr_storage_type_id: s64 = 0;
       field_size: s64 = 0;
       field_align: s64 = 1;
       is_array := false;
@@ -1274,23 +1365,40 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       array_stride: s64 = 0;
       array_type_id: s64 = 0;
       array_length_const_id: s64 = 0;
+      array_element_struct_name := "";
+      array_element_type_id: s64 = 0;
 
       if it.type.kind == .FIXED_ARRAY {
-        field_type = spv_kind_from_ir_type_kind(it.type.element_kind);
         field_type_name = ir_string_first_non_empty(it.type.element_display_name, it.type.element_struct_name);
-        if field_type == .UNKNOWN || field_type == .STRUCT {
-          return_err("SPIR-V generic backend: buffer struct '%' field '%' array element type '%' is unsupported.", struct_def.name, it.name, field_type_name);
-        }
         if it.type.array_count <= 0 || it.type.array_count > 0xFFFF_FFFF {
           return_err("SPIR-V generic backend: buffer struct '%' field '%' has invalid fixed array count %.", struct_def.name, it.name, it.type.array_count);
         }
-        elem_size := byte_size_of_kind(field_type);
-        if elem_size <= 0 {
+
+        if it.type.element_kind == .STRUCT {
+          nested_layout, nested_layout_ok, nested_layout_diag := register_buffer_layout_struct(s, it.type.element_struct_name);
+          if !nested_layout_ok return false, nested_layout_diag;
+          field_type = .STRUCT;
+          field_struct_name = nested_layout.name;
+          field_type_id = nested_layout.type_id;
+          field_align = nested_layout.max_align;
+          field_size = nested_layout.stride;
+          array_element_struct_name = nested_layout.name;
+          array_element_type_id = nested_layout.type_id;
+        } else {
+          field_type = spv_kind_from_ir_type_kind(it.type.element_kind);
+          if field_type == .UNKNOWN || field_type == .STRUCT {
+            return_err("SPIR-V generic backend: buffer struct '%' field '%' array element type '%' is unsupported.", struct_def.name, it.name, field_type_name);
+          }
+          field_type_id = type_id_from_kind(s, field_type);
+          field_ptr_storage_type_id = storage_ptr_type_id_from_kind(s, field_type);
+          field_align = host_blit_align_for_kind(field_type);
+          field_size = byte_size_of_kind(field_type);
+        }
+        if field_size <= 0 {
           return_err("SPIR-V generic backend: buffer struct '%' field '%' array element type '%' has unsupported layout.", struct_def.name, it.name, field_type_name);
         }
-        field_align = host_blit_align_for_kind(field_type);
         array_count = it.type.array_count;
-        array_stride = align_up(elem_size, field_align);
+        array_stride = align_up(field_size, field_align);
         field_size = array_stride * array_count;
         array_length_const_id = get_u32_const(s, cast(u32) array_count);
         array_type_id = new_id(s);
@@ -1301,6 +1409,8 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
         if field_type == .UNKNOWN {
           return_err("SPIR-V generic backend: buffer struct '%' field '%' type '%' is unsupported.", struct_def.name, it.name, field_type_name);
         }
+        field_type_id = type_id_from_kind(s, field_type);
+        field_ptr_storage_type_id = storage_ptr_type_id_from_kind(s, field_type);
         field_size = byte_size_of_kind(field_type);
         if field_size <= 0 {
           return_err("SPIR-V generic backend: buffer struct '%' field '%' has unsupported layout type '%'.", struct_def.name, it.name, field_type_name);
@@ -1324,11 +1434,16 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
         name = it.name,
         index = field_index,
         type = field_type,
+        struct_name = field_struct_name,
+        type_id = field_type_id,
+        ptr_storage_type_id = field_ptr_storage_type_id,
         is_array = is_array,
         array_count = array_count,
         array_stride = array_stride,
         array_type_id = array_type_id,
         array_length_const_id = array_length_const_id,
+        array_element_struct_name = array_element_struct_name,
+        array_element_type_id = array_element_type_id,
         offset = offset,
       });
       add_debug_member_name(s, buffer_info.element_type_id, field_index, it.name);
@@ -1372,8 +1487,9 @@ load_builtin_u32 :: (s: *IR_SPV_Gen_State, builtin_var_id: s64) -> s64 {
 physical_aligned_suffix :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> string {
   assert(s != null);
   if !s.use_physical_storage return "";
-  align := byte_size_of_kind(kind);
+  align := host_blit_align_for_kind(kind);
   if align <= 0 align = 4;
+  assert((align & (align - 1)) == 0);
   return tprint(" Aligned %", align);
 }
 
@@ -1494,6 +1610,152 @@ host_blit_align_for_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
 find_buffer_field :: (buffer: *IR_SPV_Gen_Buffer, name: string) -> *IR_SPV_Gen_Buffer_Field {
   assert(buffer != null);
   return find_by_name(*buffer.fields, name);
+}
+
+find_buffer_layout_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Buffer_Layout_Struct {
+  assert(s != null);
+  return find_by_name(*s.buffer_layout_structs, name);
+}
+
+find_buffer_layout_field :: (layout: *IR_SPV_Gen_Buffer_Layout_Struct, name: string) -> *IR_SPV_Gen_Buffer_Field {
+  assert(layout != null);
+  return find_by_name(*layout.fields, name);
+}
+
+register_buffer_layout_struct :: (s: *IR_SPV_Gen_State, struct_name: string) -> (layout: *IR_SPV_Gen_Buffer_Layout_Struct, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  if struct_name.count == 0 return null, false, make_diag("buffer layout struct is missing a name.");
+
+  existing := find_buffer_layout_struct(s, struct_name);
+  if existing return existing, true, {};
+
+  struct_def := find_struct(s, struct_name);
+  if !struct_def return null, false, make_diag("buffer layout struct '%' is missing.", struct_name);
+
+  array_add(*s.buffer_layout_structs, .{
+    name = struct_name,
+    type_id = new_id(s),
+  });
+  layout := find_buffer_layout_struct(s, struct_name);
+  assert(layout != null);
+
+  offset: s64 = 0;
+  max_align: s64 = 1;
+  cpu_offset: s64 = 0;
+  cpu_max_align: s64 = 1;
+
+  for struct_def.fields {
+    field_type := IR_SPV_Gen_Type.UNKNOWN;
+    field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
+    field_struct_name := "";
+    field_type_id: s64 = 0;
+    field_ptr_storage_type_id: s64 = 0;
+    field_size: s64 = 0;
+    field_align: s64 = 1;
+    is_array := false;
+    array_count: s64 = 0;
+    array_stride: s64 = 0;
+    array_type_id: s64 = 0;
+    array_length_const_id: s64 = 0;
+    array_element_struct_name := "";
+    array_element_type_id: s64 = 0;
+
+    if it.type.kind == .STRUCT {
+      return null, false, make_diag("buffer layout struct '%' field '%' nested struct type '%' is unsupported.", struct_name, it.name, it.type.struct_name);
+    }
+
+    if it.type.kind == .FIXED_ARRAY {
+      if it.type.array_count <= 0 || it.type.array_count > 0xFFFF_FFFF {
+        return null, false, make_diag("buffer layout struct '%' field '%' has invalid fixed array count %.", struct_name, it.name, it.type.array_count);
+      }
+
+      if it.type.element_kind == .STRUCT {
+        nested_layout, nested_ok, nested_diag := register_buffer_layout_struct(s, it.type.element_struct_name);
+        if !nested_ok return null, false, nested_diag;
+        field_type = .STRUCT;
+        field_struct_name = nested_layout.name;
+        field_type_id = nested_layout.type_id;
+        field_align = nested_layout.max_align;
+        field_size = nested_layout.stride;
+        array_element_struct_name = nested_layout.name;
+        array_element_type_id = nested_layout.type_id;
+      } else {
+        field_type = spv_kind_from_ir_type_kind(it.type.element_kind);
+        field_type_name = ir_string_first_non_empty(it.type.element_display_name, it.type.element_struct_name);
+        if field_type == .UNKNOWN || field_type == .STRUCT {
+          return null, false, make_diag("buffer layout struct '%' field '%' array element type '%' is unsupported.", struct_name, it.name, field_type_name);
+        }
+        field_type_id = type_id_from_kind(s, field_type);
+        field_ptr_storage_type_id = storage_ptr_type_id_from_kind(s, field_type);
+        field_align = host_blit_align_for_kind(field_type);
+        field_size = byte_size_of_kind(field_type);
+      }
+
+      if field_size <= 0 {
+        return null, false, make_diag("buffer layout struct '%' field '%' array element type '%' has unsupported layout.", struct_name, it.name, field_type_name);
+      }
+      array_count = it.type.array_count;
+      array_stride = align_up(field_size, field_align);
+      field_size = array_stride * array_count;
+      array_length_const_id = get_u32_const(s, cast(u32) array_count);
+      array_type_id = new_id(s);
+      add_debug_name(s, array_type_id, debug_type_name(s, tprint("%_%_array", struct_name, it.name)));
+      is_array = true;
+    } else {
+      field_type = spv_kind_from_ir_type_for_layout(s, it.type);
+      if field_type == .UNKNOWN {
+        return null, false, make_diag("buffer layout struct '%' field '%' type '%' is unsupported.", struct_name, it.name, field_type_name);
+      }
+      field_type_id = type_id_from_kind(s, field_type);
+      field_ptr_storage_type_id = storage_ptr_type_id_from_kind(s, field_type);
+      field_size = byte_size_of_kind(field_type);
+      if field_size <= 0 {
+        return null, false, make_diag("buffer layout struct '%' field '%' type '%' has unsupported layout.", struct_name, it.name, field_type_name);
+      }
+      field_align = host_blit_align_for_kind(field_type);
+    }
+
+    offset = align_up(offset, field_align);
+    if field_align > max_align max_align = field_align;
+
+    cpu_field_align := ifx field_type == .STRUCT then field_align else host_blit_align_for_kind(field_type);
+    cpu_offset = align_up(cpu_offset, cpu_field_align);
+    if cpu_field_align > cpu_max_align cpu_max_align = cpu_field_align;
+
+    if cpu_offset != offset {
+      return null, false, make_diag("buffer layout struct '%' field '%' is not CPU-blittable (cpu offset %, gpu offset %).", struct_name, it.name, cpu_offset, offset);
+    }
+
+    field_index := layout.fields.count;
+    array_add(*layout.fields, .{
+      name = it.name,
+      index = field_index,
+      type = field_type,
+      struct_name = field_struct_name,
+      type_id = field_type_id,
+      ptr_storage_type_id = field_ptr_storage_type_id,
+      is_array = is_array,
+      array_count = array_count,
+      array_stride = array_stride,
+      array_type_id = array_type_id,
+      array_length_const_id = array_length_const_id,
+      array_element_struct_name = array_element_struct_name,
+      array_element_type_id = array_element_type_id,
+      offset = offset,
+    });
+    add_debug_member_name(s, layout.type_id, field_index, it.name);
+    offset += field_size;
+    cpu_offset += field_size;
+  }
+
+  layout.max_align = max_align;
+  layout.stride = align_up(offset, max_align);
+  cpu_stride := align_up(cpu_offset, cpu_max_align);
+  if cpu_stride != layout.stride {
+    return null, false, make_diag("buffer layout struct '%' is not CPU-blittable (cpu stride %, gpu stride %).", struct_name, cpu_stride, layout.stride);
+  }
+
+  return layout, true, {};
 }
 
 make_unique_local_struct_name :: (s: *IR_SPV_Gen_State, requested: string) -> string {
@@ -1797,22 +2059,19 @@ emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, fiel
 
   buffer_name: string;
   field_path := field_name;
-  base_name, base_ok := resolve_buffer_name_from_expr(subscript.left);
-  if !base_ok return_err("subscript base must resolve to a buffer identifier/member.");
-  buffer_name = base_name;
-
-  // Prefer direct member-buffer resolution first (e.g. params.vertex_data),
-  // then fall back to flattened nested-field path lookup (e.g. params.core.tint).
-  direct_buffer := find_buffer(s, buffer_name);
-  if !direct_buffer && subscript.left && subscript.left.kind == .MEMBER {
-    root_name, base_path, path_ok := resolve_buffer_root_and_field_path(subscript.left);
-    if path_ok {
-      root_buffer := find_buffer(s, root_name);
-      if root_buffer {
-        buffer_name = root_name;
-        field_path = tprint("%.%", base_path, field_name);
+  if subscript.left && subscript.left.kind == .MEMBER {
+    resolved_buffer_name, resolved_field_path, resolved_ok := resolve_buffer_prefix_and_field_path(s, subscript.left);
+    if resolved_ok {
+      buffer_name = resolved_buffer_name;
+      if resolved_field_path.count > 0 {
+        field_path = tprint("%.%", resolved_field_path, field_name);
       }
     }
+  }
+  if buffer_name.count == 0 {
+    base_name, base_ok := resolve_buffer_name_from_expr(subscript.left);
+    if !base_ok return_err("subscript base must resolve to a buffer identifier/member.");
+    buffer_name = base_name;
   }
 
   buffer := find_buffer(s, buffer_name);
@@ -1853,11 +2112,12 @@ emit_buffer_struct_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, member_e
   diag: IR_Diagnostic;
   if !member_expr || member_expr.kind != .MEMBER return_err("expected member expression for struct-buffer field access.");
 
-  buffer_name, field_path, path_ok := resolve_buffer_root_and_field_path(member_expr);
+  buffer_name, field_path, path_ok := resolve_buffer_prefix_and_field_path(s, member_expr);
   if !path_ok return_err("member root must resolve to a buffer identifier.");
   buffer := find_buffer(s, buffer_name);
   if !buffer return_err("unknown buffer '%'.", buffer_name);
   if buffer.element_kind != .STRUCT return_err("buffer '%' is not a struct buffer.", buffer.name);
+  if field_path.count == 0 return_err("buffer '%' must be accessed through a field.", buffer.name);
   field := find_buffer_field(buffer, field_path);
   if !field return_err("unknown field '%.%'.", buffer.name, field_path);
   if field.is_array return_err("buffer struct field '%.%' is an array; index it first.", buffer.name, field_path);
@@ -1884,28 +2144,13 @@ emit_buffer_struct_array_element_ptr :: (s: *IR_SPV_Gen_State, member_expr: *IR_
   diag: IR_Diagnostic;
   if !member_expr || member_expr.kind != .MEMBER return_err("expected member expression for struct-buffer array element access.");
 
-  base_name, base_ok := resolve_buffer_name_from_expr(member_expr);
-  if !base_ok return_err("struct-buffer array base must resolve to a buffer identifier/member.");
-
-  buffer_name := base_name;
-  field_path := "";
+  buffer_name, field_path, path_ok := resolve_buffer_prefix_and_field_path(s, member_expr);
+  if !path_ok return_err("struct-buffer array base must resolve to a buffer identifier/member.");
   buffer := find_buffer(s, buffer_name);
-  if !buffer {
-    root_name, nested_path, path_ok := resolve_buffer_root_and_field_path(member_expr);
-    if !path_ok return_err("struct-buffer array base must resolve to a buffer identifier/member.");
-    root_buffer := find_buffer(s, root_name);
-    if !root_buffer return_err("unknown struct-buffer array base '%'.", base_name);
-    buffer_name = root_name;
-    field_path = nested_path;
-    buffer = root_buffer;
-  } else {
-    _, nested_path, path_ok := resolve_buffer_root_and_field_path(member_expr);
-    if !path_ok return_err("struct-buffer array base must resolve to a buffer identifier/member.");
-    field_path = nested_path;
-  }
 
   if !buffer return_err("unknown struct-buffer array base '%'.", buffer_name);
   if buffer.element_kind != .STRUCT return_err("buffer '%' is not a struct buffer.", buffer.name);
+  if field_path.count == 0 return_err("buffer '%' array access requires a field path.", buffer.name);
 
   field := find_buffer_field(buffer, field_path);
   if !field return_err("unknown field '%.%'.", buffer.name, field_path);
@@ -1930,6 +2175,184 @@ emit_buffer_struct_array_element_ptr :: (s: *IR_SPV_Gen_State, member_expr: *IR_
     field_index_id,
     elem_idx);
   return ptr, field.type, true, diag;
+}
+
+emit_buffer_struct_array_element_field_ptr :: (s: *IR_SPV_Gen_State, subscript_expr: *IR_Expr, field_name: string) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
+
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if !subscript_expr || subscript_expr.kind != .SUBSCRIPT return_err("expected subscript expression for struct-buffer array field access.");
+  if !subscript_expr.left || subscript_expr.left.kind != .MEMBER return_err("struct-buffer array field access requires a member array base.");
+
+  buffer_name, field_path, path_ok := resolve_buffer_prefix_and_field_path(s, subscript_expr.left);
+  if !path_ok return_err("struct-buffer array field access requires a resolvable buffer member base.");
+
+  buffer := find_buffer(s, buffer_name);
+  if field_path.count == 0 {
+    direct_ptr, direct_type, direct_ok, direct_diag := emit_buffer_struct_field_ptr(s, subscript_expr, field_name);
+    return direct_ptr, direct_type, direct_ok, direct_diag;
+  }
+
+  if !buffer return_err("unknown buffer '%'.", buffer_name);
+  if buffer.element_kind != .STRUCT return_err("buffer '%' is not a struct buffer.", buffer.name);
+
+  field := find_buffer_field(buffer, field_path);
+  if !field return_err("unknown field '%.%'.", buffer.name, field_path);
+  if !field.is_array return_err("buffer struct field '%.%' is not an array.", buffer.name, field.name);
+  if field.array_element_struct_name.count == 0 return_err("buffer struct field '%.%' does not contain struct elements.", buffer.name, field.name);
+
+  layout := find_buffer_layout_struct(s, field.array_element_struct_name);
+  if !layout return_err("buffer struct field '%.%' references unknown element struct '%'.", buffer.name, field.name, field.array_element_struct_name);
+  nested_field := find_buffer_layout_field(layout, field_name);
+  if !nested_field return_err("unknown struct-buffer array element field '%.%[%].%'.", buffer.name, field.name, "*", field_name);
+  if nested_field.is_array return_err("struct-buffer array element field '%.%[%].%' is an array; index it first.", buffer.name, field.name, "*", field_name);
+  if nested_field.ptr_storage_type_id == 0 return_err("unsupported struct-buffer array element field type for '%.%[%].%'.", buffer.name, field.name, "*", field_name);
+
+  struct_idx := ifx buffer.has_base_index then buffer.base_index_id else s.id_uint_0;
+  elem_idx, elem_type, elem_ok, elem_diag := emit_expr(s, subscript_expr.right);
+  _ = elem_type;
+  if !elem_ok return 0, .UNKNOWN, false, elem_diag;
+  elem_idx, elem_ok, elem_diag = coerce_to_kind(s, elem_idx, elem_type, .UINT);
+  if !elem_ok return 0, .UNKNOWN, false, elem_diag;
+
+  field_index_id := get_i32_const(s, cast(s32) field.index);
+  nested_field_index_id := get_i32_const(s, cast(s32) nested_field.index);
+  ptr := new_id(s);
+  add_op(s, ptr, "OpAccessChain",
+    nested_field.ptr_storage_type_id,
+    buffer.var_id,
+    s.id_int_0,
+    struct_idx,
+    field_index_id,
+    elem_idx,
+    nested_field_index_id);
+  return ptr, nested_field.type, true, diag;
+}
+
+emit_physical_root_pod_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, member_expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
+
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if !s.use_physical_storage || s.physical_root_name.count == 0 || s.physical_root_struct_name.count == 0 || s.physical_root_var_id == 0 {
+    return_err("physical-root POD field access is unavailable.");
+  }
+  if !member_expr || member_expr.kind != .MEMBER return_err("expected member expression for physical-root POD access.");
+
+  full_path, path_ok := resolve_member_path(member_expr);
+  if !path_ok return_err("physical-root POD access requires a resolvable member path.");
+  segments: [..] string;
+  split_dotted_path(full_path, *segments);
+  if segments.count < 2 || segments[0] != s.physical_root_name return_err("member expression '%' is not rooted at '%'.", full_path, s.physical_root_name);
+
+  current_ptr := s.physical_root_var_id;
+  current_struct_name := s.physical_root_struct_name;
+  for i: 1..segments.count-1 {
+    current_struct := find_struct(s, current_struct_name);
+    if !current_struct return_err("missing physical-root struct '%' while resolving '%'.", current_struct_name, full_path);
+    field_index := find_field_index_by_name(current_struct, segments[i]);
+    if field_index < 0 return_err("field '%' not found in '%' while resolving '%'.", segments[i], current_struct_name, full_path);
+    field := current_struct.fields[field_index];
+    is_last := i == segments.count-1;
+    field_index_id := get_i32_const(s, cast(s32) field_index);
+
+    if !is_last {
+      if field.type.kind != .STRUCT || field.type.struct_name.count == 0 {
+        return_err("physical-root POD access reached unsupported intermediate field '%.%'.", current_struct_name, field.name);
+      }
+      next_ptr_type_id := ps_get_storage_struct_ptr_type(s, *s.physical_ps_infos, *s.physical_storage_struct_ptr_types, field.type.struct_name);
+      next_ptr_access := new_id(s);
+      add_op(s, tprint("         % = OpAccessChain % % %",
+                        id_text(next_ptr_access),
+                        id_text(next_ptr_type_id),
+                        id_text(current_ptr),
+                        id_text(field_index_id)));
+      current_ptr = next_ptr_access;
+      current_struct_name = field.type.struct_name;
+      continue;
+    }
+
+    if field.type.kind == .STRUCT return_err("physical-root POD field '%.%' must be accessed through a member.", current_struct_name, field.name);
+    if field.type.kind == .POINTER return_err("physical-root POD access does not apply to resource pointer field '%.%'.", current_struct_name, field.name);
+    if field.type.kind == .FIXED_ARRAY return_err("physical-root POD array field '%.%' must be indexed first.", current_struct_name, field.name);
+
+    field_type := spv_kind_from_ir_type(field.type);
+    field_ptr_type_id := storage_ptr_type_id_from_kind(s, field_type);
+    if field_ptr_type_id == 0 return_err("unsupported physical-root POD field type for '%.%'.", current_struct_name, field.name);
+    ptr := new_id(s);
+    add_op(s, tprint("         % = OpAccessChain % % %",
+                      id_text(ptr),
+                      id_text(field_ptr_type_id),
+                      id_text(current_ptr),
+                      id_text(field_index_id)));
+    return ptr, field_type, true, diag;
+  }
+
+  return_err("physical-root POD field access path '%' is incomplete.", full_path);
+}
+
+emit_physical_root_pod_field_value_from_member_expr :: (s: *IR_SPV_Gen_State, member_expr: *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
+
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if !s.use_physical_storage || s.physical_root_name.count == 0 || s.physical_root_struct_name.count == 0 || s.physical_root_var_id == 0 {
+    return_err("physical-root POD field access is unavailable.");
+  }
+  if !member_expr || member_expr.kind != .MEMBER return_err("expected member expression for physical-root POD access.");
+
+  full_path, path_ok := resolve_member_path(member_expr);
+  if !path_ok return_err("physical-root POD access requires a resolvable member path.");
+  segments: [..] string;
+  split_dotted_path(full_path, *segments);
+  if segments.count < 2 || segments[0] != s.physical_root_name return_err("member expression '%' is not rooted at '%'.", full_path, s.physical_root_name);
+
+  current_ptr := s.physical_root_var_id;
+  current_struct_name := s.physical_root_struct_name;
+  for i: 1..segments.count-1 {
+    current_struct := find_struct(s, current_struct_name);
+    if !current_struct return_err("missing physical-root struct '%' while resolving '%'.", current_struct_name, full_path);
+    field_index := find_field_index_by_name(current_struct, segments[i]);
+    if field_index < 0 return_err("field '%' not found in '%' while resolving '%'.", segments[i], current_struct_name, full_path);
+    field := current_struct.fields[field_index];
+    is_last := i == segments.count-1;
+    field_index_id := get_i32_const(s, cast(s32) field_index);
+
+    if !is_last {
+      if field.type.kind != .STRUCT || field.type.struct_name.count == 0 {
+        return_err("physical-root POD access reached unsupported intermediate field '%.%'.", current_struct_name, field.name);
+      }
+      next_ptr_type_id := ps_get_storage_struct_ptr_type(s, *s.physical_ps_infos, *s.physical_storage_struct_ptr_types, field.type.struct_name);
+      next_ptr_access := new_id(s);
+      add_op(s, tprint("         % = OpAccessChain % % %",
+                        id_text(next_ptr_access),
+                        id_text(next_ptr_type_id),
+                        id_text(current_ptr),
+                        id_text(field_index_id)));
+      current_ptr = next_ptr_access;
+      current_struct_name = field.type.struct_name;
+      continue;
+    }
+
+    if field.type.kind == .STRUCT return_err("physical-root POD field '%.%' must be accessed through a member.", current_struct_name, field.name);
+    if field.type.kind == .POINTER return_err("physical-root POD access does not apply to resource pointer field '%.%'.", current_struct_name, field.name);
+    if field.type.kind == .FIXED_ARRAY return_err("physical-root POD array field '%.%' must be indexed first.", current_struct_name, field.name);
+
+    ps_info := find_ps_struct_info(*s.physical_ps_infos, current_struct_name);
+    if !ps_info return_err("missing pointer-struct type info for '%'.", current_struct_name);
+    current_value_id := new_id(s);
+    add_op(s, tprint("         % = OpLoad % %", id_text(current_value_id), id_text(ps_info.type_id), id_text(current_ptr)));
+
+    field_type := spv_kind_from_ir_type(field.type);
+    field_type_id := type_id_from_kind(s, field_type);
+    if field_type_id == 0 return_err("unsupported physical-root POD field type for '%.%'.", current_struct_name, field.name);
+    value_id := new_id(s);
+    add_op(s, tprint("         % = OpCompositeExtract % % %", id_text(value_id), id_text(field_type_id), id_text(current_value_id), field_index));
+    return value_id, field_type, true, diag;
+  }
+
+  return_err("physical-root POD field access path '%' is incomplete.", full_path);
 }
 
 emit_buffer_struct_reinterpret_const_subscript_ptr :: (s: *IR_SPV_Gen_State, buffer: *IR_SPV_Gen_Buffer, subscript_expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
@@ -3580,6 +4003,25 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         // continue through the generic member-expression path below.
       }
       if expr.left {
+        if expr.left.kind == .SUBSCRIPT {
+          field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_array_element_field_ptr(s, expr.left, expr.text);
+          if field_ok {
+            value_type_id := type_id_from_kind(s, field_type);
+            if value_type_id == 0 return_err("unsupported loaded field type for '%'.", path);
+            field_value := new_id(s);
+            emit_load(s, field_value, value_type_id, field_ptr, field_type, needs_physical_align=true);
+            if expr.member_access != .NONE {
+              member_id, member_type, member_ok, member_diag := spv_extract_vector_member(s, field_value, field_type, expr.member_access, expr.text);
+              if member_ok return member_id, member_type, true, diag;
+              return 0, .UNKNOWN, false, member_diag;
+            }
+            out_id, out_type, out_ok, out_diag := coerce_to_expr_result_kind(s, expr, field_value, field_type);
+            if !out_ok return 0, .UNKNOWN, false, out_diag;
+            return out_id, out_type, true, diag;
+          }
+          _ = field_diag;
+        }
+
         skip_direct_left_eval := false;
         if expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .IDENT {
           parent_struct := find_local_struct(s, expr.left.left.text);
@@ -3623,6 +4065,13 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           return out_id, out_type, true, diag;
         }
 
+        physical_value_id, physical_value_type, physical_value_ok, _ := emit_physical_root_pod_field_value_from_member_expr(s, expr);
+        if physical_value_ok {
+          out_id, out_type, out_ok, out_diag := coerce_to_expr_result_kind(s, expr, physical_value_id, physical_value_type);
+          if !out_ok return 0, .UNKNOWN, false, out_diag;
+          return out_id, out_type, true, diag;
+        }
+
         local := find_local(s, expr.left.text);
         if local && (local.type == .FLOAT2 || local.type == .FLOAT3 || local.type == .FLOAT4) {
           vec_value := new_id(s);
@@ -3637,7 +4086,10 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       }
       if expr.left && expr.left.kind == .MEMBER &&
          expr.left.left && expr.left.left.kind == .SUBSCRIPT {
-        field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
+        field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_array_element_field_ptr(s, expr.left.left, expr.left.text);
+        if !field_ok {
+          field_ptr, field_type, field_ok, field_diag = emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
+        }
         if field_ok {
           if field_type != .FLOAT2 && field_type != .FLOAT3 && field_type != .FLOAT4 {
             return_err("unsupported member expression '%'.", path);
@@ -5591,6 +6043,16 @@ spv_append_base_buffer_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_State
 }
 
 spv_append_buffer_layout_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  for s.buffer_layout_structs {
+    layout := it;
+    for layout.fields {
+      if it.is_array {
+        a(sb, "               OpDecorate % ArrayStride %", id_text(it.array_type_id), it.array_stride);
+      }
+      a(sb, "               OpMemberDecorate % % Offset %", id_text(layout.type_id), it.index, it.offset);
+    }
+  }
+
   for s.buffers {
     buffer := it;
     if buffer.element_kind == .UINT && buffer.wrapper_struct_type_id == s.id_buffer_struct continue;
@@ -5617,19 +6079,36 @@ spv_append_buffer_binding_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_St
 }
 
 spv_append_buffer_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State, storage_class: string) {
+  for s.buffer_layout_structs {
+    layout := it;
+    for layout.fields {
+      if !it.is_array continue;
+      elem_type_id := ifx it.array_element_type_id != 0 then it.array_element_type_id else it.type_id;
+      a(sb, "% = OpTypeArray % %", id_text(it.array_type_id), id_text(elem_type_id), id_text(it.array_length_const_id));
+    }
+    struct_type_line_sb: String_Builder;
+    append(*struct_type_line_sb, tprint("% = OpTypeStruct", id_text(layout.type_id)));
+    for layout.fields {
+      field_type_id := ifx it.is_array then it.array_type_id else it.type_id;
+      append(*struct_type_line_sb, " ", id_text(field_type_id));
+    }
+    append(*struct_type_line_sb, "\n");
+    append(sb, builder_to_string(*struct_type_line_sb));
+  }
+
   for s.buffers {
     buffer := it;
     if buffer.element_kind == .UINT && buffer.wrapper_struct_type_id == s.id_buffer_struct continue;
     if buffer.element_kind == .STRUCT {
       for buffer.fields {
         if !it.is_array continue;
-        elem_type_id := type_id_from_kind(s, it.type);
+        elem_type_id := ifx it.array_element_type_id != 0 then it.array_element_type_id else it.type_id;
         a(sb, "% = OpTypeArray % %", id_text(it.array_type_id), id_text(elem_type_id), id_text(it.array_length_const_id));
       }
       struct_type_line_sb: String_Builder;
       append(*struct_type_line_sb, tprint("% = OpTypeStruct", id_text(buffer.element_type_id)));
       for buffer.fields {
-        field_type_id := ifx it.is_array then it.array_type_id else type_id_from_kind(s, it.type);
+        field_type_id := ifx it.is_array then it.array_type_id else it.type_id;
         append(*struct_type_line_sb, " ", id_text(field_type_id));
       }
       append(*struct_type_line_sb, "\n");
@@ -5694,12 +6173,19 @@ ps_assign_struct_info :: (s: *IR_SPV_Gen_State, infos: *[..] IR_SPV_PS_Struct_In
   });
   for st.fields {
     using it;
-    if type.kind != .POINTER continue;
-    if type.pointee_kind != .STRUCT continue;
-    if type.pointee_struct_name.count == 0 continue;
-    if !struct_has_pointer_fields_recursive(s.extra_structs, type.pointee_struct_name, depth + 1) continue;
-    next_prefix := tprint("%.%", prefix, name);
-    if !ps_assign_struct_info(s, infos, type.pointee_struct_name, next_prefix, depth + 1) return false;
+    if type.kind == .POINTER {
+      if type.pointee_kind != .STRUCT continue;
+      if type.pointee_struct_name.count == 0 continue;
+      if !struct_has_pointer_fields_recursive(s.extra_structs, type.pointee_struct_name, depth + 1) continue;
+      next_prefix := tprint("%.%", prefix, name);
+      if !ps_assign_struct_info(s, infos, type.pointee_struct_name, next_prefix, depth + 1) return false;
+      continue;
+    }
+    if type.kind == .STRUCT && type.struct_name.count != 0 &&
+       struct_has_pointer_fields_recursive(s.extra_structs, type.struct_name, depth + 1) {
+      next_prefix := tprint("%.%", prefix, name);
+      if !ps_assign_struct_info(s, infos, type.struct_name, next_prefix, depth + 1) return false;
+    }
   }
   return true;
 }
