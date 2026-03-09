@@ -296,6 +296,9 @@ call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee == "radians" return .RADIANS;
   if callee == "degrees" return .DEGREES;
   if callee == "atomic_add_u32" return .ATOMIC_ADD_U32;
+  if callee == "atomic_sub_u32" return .ATOMIC_SUB_U32;
+  if callee == "atomic_exchange_u32" return .ATOMIC_EXCHANGE_U32;
+  if callee == "atomic_compare_exchange_u32" return .ATOMIC_COMPARE_EXCHANGE_U32;
   if callee == "atomic_min_u32" return .ATOMIC_MIN_U32;
   if callee == "atomic_max_u32" return .ATOMIC_MAX_U32;
   return .NONE;
@@ -331,6 +334,9 @@ call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
   if kind == .WRITE_2D return "write_2d";
   if kind == .WRITE_3D return "write_3d";
   if kind == .ATOMIC_ADD_U32 return "atomic_add_u32";
+  if kind == .ATOMIC_SUB_U32 return "atomic_sub_u32";
+  if kind == .ATOMIC_EXCHANGE_U32 return "atomic_exchange_u32";
+  if kind == .ATOMIC_COMPARE_EXCHANGE_U32 return "atomic_compare_exchange_u32";
   if kind == .ATOMIC_MIN_U32 return "atomic_min_u32";
   if kind == .ATOMIC_MAX_U32 return "atomic_max_u32";
   if kind == .FLOOR return "floor";
@@ -3037,6 +3043,125 @@ emit_atomic_u32_call :: (s: *IR_SPV_Gen_State, op_name: string, args: [] *IR_Exp
   return out, .UINT, true, diag;
 }
 
+emit_atomic_sub_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if s.stage != .COMPUTE return 0, .UNKNOWN, false, make_diag("atomic_sub_u32 is currently compute-stage only.");
+  if args.count != 2 return 0, .UNKNOWN, false, make_diag("atomic_sub_u32 expects 2 args (*dst, value).");
+
+  dst_ptr, dst_type, dst_ok, dst_diag := emit_lvalue_ptr(s, args[0]);
+  if !dst_ok return 0, .UNKNOWN, false, dst_diag;
+  if dst_type != .UINT return 0, .UNKNOWN, false, make_diag("atomic_sub_u32 first arg must point to u32.");
+
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[1]);
+  if !value_ok return 0, .UNKNOWN, false, value_diag;
+  value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, .UINT);
+  if !value_ok return 0, .UNKNOWN, false, value_diag;
+
+  zero := get_u32_const(s, 0);
+  neg_value := new_id(s);
+  add_op(s, neg_value, "OpISub", s.id_uint, zero, value_id);
+
+  scope_device := get_u32_const(s, 1);
+  semantics_relaxed := get_u32_const(s, 0);
+  out := new_id(s);
+  add_op(s, out, "OpAtomicIAdd", s.id_uint, dst_ptr, scope_device, semantics_relaxed, neg_value);
+  return out, .UINT, true, diag;
+}
+
+emit_atomic_compare_exchange_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if s.stage != .COMPUTE return 0, .UNKNOWN, false, make_diag("OpAtomicCompareExchange is currently compute-stage only.");
+  if args.count != 3 return 0, .UNKNOWN, false, make_diag("atomic_compare_exchange_u32 expects 3 args (*dst, compare, value).");
+
+  dst_ptr, dst_type, dst_ok, dst_diag := emit_lvalue_ptr(s, args[0]);
+  if !dst_ok return 0, .UNKNOWN, false, dst_diag;
+  if dst_type != .UINT return 0, .UNKNOWN, false, make_diag("atomic_compare_exchange_u32 first arg must point to u32.");
+
+  compare_id, compare_type, compare_ok, compare_diag := emit_expr(s, args[1]);
+  if !compare_ok return 0, .UNKNOWN, false, compare_diag;
+  compare_id, compare_ok, compare_diag = coerce_to_kind(s, compare_id, compare_type, .UINT);
+  if !compare_ok return 0, .UNKNOWN, false, compare_diag;
+
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[2]);
+  if !value_ok return 0, .UNKNOWN, false, value_diag;
+  value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, .UINT);
+  if !value_ok return 0, .UNKNOWN, false, value_diag;
+
+  scope_device := get_u32_const(s, 1);
+  semantics_relaxed := get_u32_const(s, 0);
+  out := new_id(s);
+  add_op(s, out, "OpAtomicCompareExchange", s.id_uint, dst_ptr, scope_device, semantics_relaxed, semantics_relaxed, value_id, compare_id);
+  return out, .UINT, true, diag;
+}
+
+emit_atomic_reduce_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr, reduce_kind: string) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  assert(s != null);
+  diag: IR_Diagnostic;
+  if s.stage != .COMPUTE return 0, .UNKNOWN, false, make_diag("atomic_%_u32 is currently compute-stage only.", reduce_kind);
+  if args.count != 2 return 0, .UNKNOWN, false, make_diag("atomic_%_u32 expects 2 args (*dst, value).", reduce_kind);
+
+  dst_ptr, dst_type, dst_ok, dst_diag := emit_lvalue_ptr(s, args[0]);
+  if !dst_ok return 0, .UNKNOWN, false, dst_diag;
+  if dst_type != .UINT return 0, .UNKNOWN, false, make_diag("atomic_%_u32 first arg must point to u32.", reduce_kind);
+
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[1]);
+  if !value_ok return 0, .UNKNOWN, false, value_diag;
+  value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, .UINT);
+  if !value_ok return 0, .UNKNOWN, false, value_diag;
+
+  prev_ptr := new_id(s);
+  prev_zero := get_null_const(s, s.id_uint);
+  add_local_decl(s, tprint("         % = OpVariable % Function %",
+                           id_text(prev_ptr),
+                           id_text(s.id_ptr_func_uint),
+                           id_text(prev_zero)));
+  add_debug_name(s, prev_ptr, tprint("__atomic_%_prev", reduce_kind));
+
+  header_label := new_id(s);
+  body_label := new_id(s);
+  continue_label := new_id(s);
+  merge_label := new_id(s);
+
+  add_op(s, "OpBranch", header_label);
+  add_op(s, header_label, "OpLabel");
+  add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
+  add_op(s, "OpBranch", body_label);
+
+  add_op(s, body_label, "OpLabel");
+  old_value := new_id(s);
+  add_op(s, old_value, "OpLoad", s.id_uint, dst_ptr);
+
+  use_new_value := new_id(s);
+  if reduce_kind == "min" {
+    add_op(s, use_new_value, "OpULessThan", s.id_bool, value_id, old_value);
+  } else {
+    add_op(s, use_new_value, "OpUGreaterThan", s.id_bool, value_id, old_value);
+  }
+
+  desired_value := new_id(s);
+  add_op(s, desired_value, "OpSelect", s.id_uint, use_new_value, value_id, old_value);
+
+  scope_device := get_u32_const(s, 1);
+  semantics_relaxed := get_u32_const(s, 0);
+  prev_value := new_id(s);
+  add_op(s, prev_value, "OpAtomicCompareExchange", s.id_uint, dst_ptr, scope_device, semantics_relaxed, semantics_relaxed, desired_value, old_value);
+  add_op(s, "OpStore", prev_ptr, prev_value);
+
+  success := new_id(s);
+  add_op(s, success, "OpIEqual", s.id_bool, prev_value, old_value);
+  add_op(s, "OpBranchConditional", success, merge_label, continue_label);
+
+  add_op(s, continue_label, "OpLabel");
+  add_op(s, "OpBranch", header_label);
+
+  add_op(s, merge_label, "OpLabel");
+  out := new_id(s);
+  add_op(s, out, "OpLoad", s.id_uint, prev_ptr);
+  return out, .UINT, true, diag;
+}
+
 spv_kind_from_ir_type_kind :: (kind: IR_Type_Kind) -> IR_SPV_Gen_Type {
   if kind == .BOOL return .BOOL;
   if kind == .I32 return .INT;
@@ -4565,12 +4690,24 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicIAdd", expr.args);
         return atomic_id, atomic_type, atomic_ok, atomic_diag;
       }
+      if builtin_kind == .ATOMIC_SUB_U32 {
+        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_sub_u32_call(s, expr.args);
+        return atomic_id, atomic_type, atomic_ok, atomic_diag;
+      }
+      if builtin_kind == .ATOMIC_EXCHANGE_U32 {
+        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicExchange", expr.args);
+        return atomic_id, atomic_type, atomic_ok, atomic_diag;
+      }
+      if builtin_kind == .ATOMIC_COMPARE_EXCHANGE_U32 {
+        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_compare_exchange_u32_call(s, expr.args);
+        return atomic_id, atomic_type, atomic_ok, atomic_diag;
+      }
       if builtin_kind == .ATOMIC_MIN_U32 {
-        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicUMin", expr.args);
+        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_reduce_u32_call(s, expr.args, "min");
         return atomic_id, atomic_type, atomic_ok, atomic_diag;
       }
       if builtin_kind == .ATOMIC_MAX_U32 {
-        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicUMax", expr.args);
+        atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_reduce_u32_call(s, expr.args, "max");
         return atomic_id, atomic_type, atomic_ok, atomic_diag;
       }
       if builtin_kind == .RADIANS {

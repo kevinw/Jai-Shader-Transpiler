@@ -306,3 +306,45 @@ Status: In large part fixed (March 1, 2026) across backend hot paths; remaining 
   - Make cache keys content-addressed by effective inputs (shader source, backend, transpiler codegen-relevant version/feature fingerprint).
   - Ensure transpiler/backend changes invalidate prior cached outputs automatically without manual version bumps.
   - Add a regression check that recompiles after source mutation and asserts emitted backend text changes.
+
+## 42) Compute atomics now include subtract / exchange / compare-exchange for `u32`
+Status: Fixed (March 8, 2026) for SPIR-V backend lowering and smoke coverage.
+- Implemented:
+  - Added shader builtins:
+    - `atomic_sub_u32`
+    - `atomic_exchange_u32`
+    - `atomic_compare_exchange_u32`
+  - Wired builtin recognition through:
+    - `modules/ShaderFuncs/module.jai`
+    - `ir_pipeline/public_structs.jai`
+    - `ir_pipeline/ir_shared.jai`
+    - `ir_pipeline/ir_lowering.jai`
+    - `ir_pipeline/spirv_text_backend.jai`
+  - Lowered `atomic_sub_u32` as atomic add of a two's-complement-negated `u32` value (`OpISub` + `OpAtomicIAdd`), since direct `OpAtomicISub` is not a valid SPIR-V instruction.
+  - Added headless regression coverage in:
+    - `headless_ir/ir_headless_runner.jai`
+    - coverage asserts `OpAtomicIAdd`, `OpISub`, `OpAtomicExchange`, and `OpAtomicCompareExchange`
+- Verification:
+  - `jai -quiet modules/Jai-Shader-Transpiler/headless_ir/build_ir_headless.jai -`
+  - `jai -quiet modules/Jai-Shader-Transpiler/build.jai - -run_tests`
+
+## 43) `atomic_min_u32` / `atomic_max_u32` now lower reliably in the SPIR-V target path
+Status: Fixed (March 8, 2026) via generated compare-exchange retry loops.
+- Symptom before:
+  - Transpilation could fail to produce target source for simple compute shaders that used `atomic_min_u32` or `atomic_max_u32`, even though the other `u32` atomic helpers succeeded.
+- Implemented:
+  - Replaced the fragile direct SPIR-V min/max lowering path with backend-generated CAS loops in `ir_pipeline/spirv_text_backend.jai`.
+  - Preserved the shader-facing builtin API, so shader code still uses:
+    - `atomic_min_u32`
+    - `atomic_max_u32`
+  - Expanded the focused headless atomics regression in `headless_ir/ir_headless_runner.jai` to cover:
+    - `atomic_add_u32`
+    - `atomic_sub_u32`
+    - `atomic_exchange_u32`
+    - `atomic_compare_exchange_u32`
+    - `atomic_min_u32`
+    - `atomic_max_u32`
+  - Added regression assertions for the loop/CAS shape in generated SPIR-V and Vulkan GLSL output.
+- Verification:
+  - `jai -quiet modules/Jai-Shader-Transpiler/headless_ir/build_ir_headless.jai -`
+  - `jai -quiet modules/Jai-Shader-Transpiler/build.jai - -run_tests`

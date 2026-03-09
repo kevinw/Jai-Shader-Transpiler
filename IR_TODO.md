@@ -200,6 +200,23 @@ Direction note:
 - Desired fix:
   - Allow helper lowering to resolve and propagate root storage identifiers through nested pointer/resource container expressions reliably.
 
+## 37) Compute helper calls with storage-buffer pointer args plus atomic retry loops are still fragile
+- Symptom:
+  - Backend can reject otherwise-valid compute helper calls with:
+    - `SPIR-V backend: unsupported call target '<helper_name>'`
+- Where hit:
+  - `brickmap` GPU atlas reuse path when classify tried to call:
+    - `brickmap_pop_free_atlas_slot(queues)`
+  - The helper body performed a compare-exchange retry loop against a storage-buffer counter and then indexed the storage buffer to fetch the popped slot.
+- Current workaround:
+  - Inline the CAS/pop logic directly in the compute entry point instead of routing it through a helper.
+- Desired fix:
+  - Make compute helper lowering robust for pointer-arg helpers that:
+    - mutate storage buffers
+    - contain loops / retry logic
+    - use atomic compare-exchange and storage-buffer indexing in the same helper body
+  - Add a focused compute regression for a helper-shaped GPU free-list pop path.
+
 ## 38) Builtin call-result member access can mis-route through helper path
 - Symptom:
   - Backend can fail with helper-resolution diagnostics for builtin call results used with member access, e.g. `sample_3d(...).x`:

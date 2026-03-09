@@ -243,6 +243,9 @@ discard :: () { }
 // Atomic helpers for storage-buffer uint fields.
 // Returns the previous value at *dst.
 atomic_add_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
+atomic_sub_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
+atomic_exchange_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
+atomic_compare_exchange_u32 :: (dst: *u32, compare: u32, value: u32) -> u32 { return 0; }
 atomic_min_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
 atomic_max_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
 

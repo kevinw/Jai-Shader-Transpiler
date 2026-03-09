@@ -1616,6 +1616,9 @@ ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   if name == "radians" return .RADIANS;
   if name == "degrees" return .DEGREES;
   if name == "atomic_add_u32" return .ATOMIC_ADD_U32;
+  if name == "atomic_sub_u32" return .ATOMIC_SUB_U32;
+  if name == "atomic_exchange_u32" return .ATOMIC_EXCHANGE_U32;
+  if name == "atomic_compare_exchange_u32" return .ATOMIC_COMPARE_EXCHANGE_U32;
   if name == "atomic_min_u32" return .ATOMIC_MIN_U32;
   if name == "atomic_max_u32" return .ATOMIC_MAX_U32;
   return .NONE;

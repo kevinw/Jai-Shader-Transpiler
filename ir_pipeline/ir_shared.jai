@@ -904,6 +904,9 @@ ir_shared_is_builtin_function_name :: (name: string) -> bool {
   if name == "write_2d" return true;
   if name == "write_3d" return true;
   if name == "atomic_add_u32" return true;
+  if name == "atomic_sub_u32" return true;
+  if name == "atomic_exchange_u32" return true;
+  if name == "atomic_compare_exchange_u32" return true;
   if name == "atomic_min_u32" return true;
   if name == "atomic_max_u32" return true;
   has_sample_2d, _ := contains(name, "sample_2d");

@@ -64,6 +64,13 @@ write_3d :: (texture_index: u32, x: u32, y: u32, z: u32, value: Vector4) {
   _ = value;
 }
 
+atomic_add_u32 :: (dst: *u32, value: u32) -> u32 { _ = dst; _ = value; return 0; }
+atomic_sub_u32 :: (dst: *u32, value: u32) -> u32 { _ = dst; _ = value; return 0; }
+atomic_exchange_u32 :: (dst: *u32, value: u32) -> u32 { _ = dst; _ = value; return 0; }
+atomic_compare_exchange_u32 :: (dst: *u32, compare: u32, value: u32) -> u32 { _ = dst; _ = compare; _ = value; return 0; }
+atomic_min_u32 :: (dst: *u32, value: u32) -> u32 { _ = dst; _ = value; return 0; }
+atomic_max_u32 :: (dst: *u32, value: u32) -> u32 { _ = dst; _ = value; return 0; }
+
 IR_Headless_Vertex_In :: struct {
   a_pos: Vector2; @semantic_ATTRIBUTE0
   vertex_id: u32; @semantic_SV_VertexID
@@ -527,6 +534,25 @@ ir_headless_compute_write_3d_main :: (using input: IR_Headless_Compute_In, data:
   }
 } @compute_shader
 
+ir_headless_compute_atomics_main :: (using input: IR_Headless_Compute_In, values: *u32) {
+  if thread_id.x != 0 return;
+
+  prev_add := atomic_add_u32(*values[0], 5);
+  prev_sub := atomic_sub_u32(*values[0], 2);
+  prev_exchange := atomic_exchange_u32(*values[0], prev_add + prev_sub + 11);
+  prev_cas := atomic_compare_exchange_u32(*values[0], prev_exchange, prev_exchange - 3);
+  prev_min := atomic_min_u32(*values[0], prev_cas - 7);
+  prev_max := atomic_max_u32(*values[0], prev_min + 13);
+
+  values[1] = prev_add;
+  values[2] = prev_sub;
+  values[3] = prev_exchange;
+  values[4] = prev_cas;
+  values[5] = prev_min;
+  values[6] = prev_max;
+  values[7] = values[0];
+} @compute_shader
+
 // Intentionally declared after the entry points above to validate order-independence.
 ir_headless_chain_leaf :: (x: float) -> float {
   return x * 2.0;
@@ -724,6 +750,27 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   check_generated_file_contains(tprint("%/ir_headless_compute_write_3d_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
                                "OpImageWrite",
                                "compute write_3d SPIR-V text output");
+
+  vulkan_compute_atomics := get_transpiled(.VULKAN_GLSL, ir_headless_compute_atomics_main);
+  check_contains(vulkan_compute_atomics, "#version", "compute atomics Vulkan GLSL output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_atomics_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpAtomicIAdd",
+                               "compute atomics SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_atomics_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpISub",
+                               "compute atomics SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_atomics_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpAtomicExchange",
+                               "compute atomics SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_atomics_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpAtomicCompareExchange",
+                               "compute atomics SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_atomics_main_comp.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpLoopMerge",
+                               "compute atomics SPIR-V text output");
+  check_generated_file_contains(tprint("%/ir_headless_compute_atomics_main_comp.glsl", HEADLESS_IR_INTERMEDIATE_DIR),
+                               "atomicCompSwap",
+                               "compute atomics Vulkan GLSL output");
 
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
   check_contains(metal_pair, "vertex", "pair metal output");
