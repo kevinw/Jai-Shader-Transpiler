@@ -898,7 +898,18 @@ register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Fu
 }
 
 spv_append_function_constant_names :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
-  for s.function_constants append(sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
+  for s.function_constants {
+    append(sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
+    if it.component_count <= 1 continue;
+
+    suffixes := string.["x", "y", "z", "w"];
+    for i: 0..it.component_count-1 {
+      append(sb, tprint("               OpName % \"%_%\"\n",
+                        id_text(it.component_ids[i]),
+                        it.name,
+                        suffixes[i]));
+    }
+  }
 }
 
 spv_append_function_constant_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {

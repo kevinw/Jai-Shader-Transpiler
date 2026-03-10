@@ -355,6 +355,7 @@ get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) 
   ensure_get_transpiled_request_registered(key, request_source);
   
   get_bytes_code_string := tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, shader_name, fragment_name);
+  constants_code_string := tprint("%_graphics_function_constants.{};", request_name);
   shader_meta_str := tprint(#string END
 {request_name="%"}
 END, request_name);
@@ -362,17 +363,28 @@ END, request_name);
   return get_bytes_code_string, shader_meta_str;
 }
 
+make_constants_code_string :: (using shader_meta: Shader_Meta) -> string {
+    return sprint("%_graphics_function_constants.{};", request_name);
+}
+
+
 Shader_Meta :: struct {
     request_name: string;
 }
 
-get_transpiled :: (target: Transpiled_Target, args: ..Any, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
+get_transpiled :: (
+    target: Transpiled_Target, 
+    args: ..Any, 
+    call: Code = #caller_code, 
+    loc: Source_Code_Location = #caller_location
+) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
+    
     #insert #run -> string {
         workspace := get_current_workspace();
         get_bytes_code_string, shader_meta_str := get_transpiled_result_expr_from_call(call, loc);
         return tprint(#string END
 G :: #import,file "%";
-_shader_source := %;
+_shader_source :: #run %;
 assert(_shader_source.count > 0, "Transpiled shader bytes had zero count.");
 return _shader_source, %;
 END, compute_path_to_shader_bucket_module(workspace), get_bytes_code_string, shader_meta_str);
@@ -655,8 +667,6 @@ ir_symbol_name_from_context :: (ctx: *Shader_Write_Context) -> string {
   return tprint("%_string", ctx.name);
 }
 
-
-
 ir_target_from_context :: (ctx: *Shader_Write_Context) -> (Toolchain_Target, bool) {
   if ctx.language == .METAL return .METAL, true;
   if ctx.language == .GLSL && ctx.glsl_target == .VULKAN return .VULKAN_GLSL, true;
@@ -734,7 +744,7 @@ assign_pair_function_constant_spec_ids :: (vertex: *IR_Vertex_Shader, fragment: 
 generated_function_constant_base_name :: (request_name: string, kind_suffix: string) -> string {
   base := sanitize_identifier_component(request_name);
   to_lower_in_place(base);
-  while contains(base, "__") base = replace(base, "__", "_");
+  //while contains(base, "__") base = replace(base, "__", "_");
   if ends_with(base, "_main") {
     base.count -= 5;
   }
@@ -760,7 +770,7 @@ emit_generated_function_constant_decl :: (plugin: *Jai_To_Shader_Plugin,
   append(*sb, tprint("% :: struct {\n", struct_name));
   for constants {
     type_name := "bool";
-    if it.type == {
+    if #complete it.type == {
       case .BOOL;   type_name = "bool";
       case .U32;    type_name = "u32";
       case .S32;    type_name = "s32";
