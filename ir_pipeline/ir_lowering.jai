@@ -31,6 +31,14 @@ ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
 
 #scope_module
 
+PP :: #import "Program_Print";
+
+ir_lowering_expression_to_source_string :: (node: *Code_Node) -> string {
+  sb: String_Builder;
+  PP.print_expression(*sb, node);
+  return builder_to_string(*sb);
+}
+
 ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
   if !type return "", false;
 
@@ -405,6 +413,80 @@ ir_decl_is_compile_constant :: (decl: *Code_Declaration) -> bool {
   // Do not inline procedure declarations through identifier lowering.
   if decl.expression.kind == .PROCEDURE_BODY || decl.expression.kind == .PROCEDURE_HEADER return false;
   return true;
+}
+
+ir_decl_has_note :: (decl: *Code_Declaration, note_name: string) -> bool {
+  if !decl || note_name.count == 0 return false;
+  for decl.notes if it.text == note_name return true;
+  return false;
+}
+
+ir_decl_is_function_constant :: (decl: *Code_Declaration) -> bool {
+  return ir_decl_has_note(decl, "function_constant");
+}
+
+ir_function_constant_type_from_type_info :: (type: *Type_Info) -> (IR_Function_Constant_Type, bool) {
+    if !type {
+        log_error("ir_function_constant_type_from_type_info: passed a null type");
+        return .BOOL, false;
+    }
+    
+  if type.type == {
+    case .BOOL; return .BOOL, true;
+    case .INTEGER;
+      integer := cast(*Type_Info_Integer) type;
+      if integer.runtime_size != 4 return .BOOL, false;
+      return (ifx integer.signed then .S32 else .U32), true;
+    case .FLOAT;
+      fp := cast(*Type_Info_Float) type;
+      if fp.runtime_size == 4 return .FLOAT, true;
+    case .STRUCT;
+        if type.(*Type_Info_Struct).name == {
+        // TODO: this sucks. let's find or make a more robust "Vector" type matcher
+        case "Vector2"; return .FLOAT2, true;
+        case "Vector3"; return .FLOAT3, true;
+        case "Vector4"; return .FLOAT4, true;
+        }
+  }
+  return .BOOL, false;
+}
+
+ir_validate_function_constant_declaration :: (decl: *Code_Declaration, state: *IR_Lowering_State) -> (IR_Function_Constant, bool) {
+  out: IR_Function_Constant;
+  if !decl return out, false;
+  if !ir_decl_is_function_constant(decl) return out, false;
+
+  if !decl.expression {
+    ir_set_diagnostic(state, "IR lowering: @function_constant requires an initializer.", decl);
+    return out, false;
+  }
+
+  type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
+  function_constant_type, type_ok := ir_function_constant_type_from_type_info(type);
+  if !type_ok {
+    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has unsupported type. Supported types are bool, u32, s32, float, Vector2, Vector3, and Vector4.", decl.name), decl);
+    return out, false;
+  }
+
+  if decl.expression.kind != .LITERAL {
+    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a literal default value.", decl.name), decl.expression);
+    return out, false;
+  }
+
+  default_value_text := compact_text(ir_lowering_expression_to_source_string(decl.expression));
+  if default_value_text.count == 0 {
+    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has an unsupported literal default value.", decl.name), decl.expression);
+    return out, false;
+  }
+
+  out = .{
+    name = decl.name,
+    type = function_constant_type,
+    default_value_text = default_value_text,
+    declaration = decl,
+    location = make_location(decl),
+  };
+  return out, true;
 }
 
 ir_struct_has_pointer_members :: (type: *Type_Info) -> bool {
@@ -797,7 +879,7 @@ ir_lower_expr :: (node: *Code_Node,
           return out, true;
         }
 
-        if ir_decl_is_compile_constant(ident.resolved_declaration) {
+        if ir_decl_is_compile_constant(ident.resolved_declaration) && !ir_decl_is_function_constant(ident.resolved_declaration) {
           inlined, inlined_ok := ir_lower_expr(ident.resolved_declaration.expression, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
           if inlined_ok return inlined, true;
         }
@@ -805,7 +887,7 @@ ir_lower_expr :: (node: *Code_Node,
       }
 
       if ident.name == "input" || ident.name == "o" || ident.name == "un" {
-        out := ir_expr_new(.IDENT);
+        out := ir_expr_new(.IDENT, node);
         out.text = ident.name;
         return out, true;
       }
@@ -1771,6 +1853,177 @@ ir_collect_compute_declared_structs_in_block :: (block: *Code_Block, out_extra_s
   return true;
 }
 
+ir_function_constant_already_collected :: (constants: [] IR_Function_Constant, decl: *Code_Declaration) -> bool {
+  if !decl return false;
+  for constants if it.declaration == decl return true;
+  return false;
+}
+
+ir_try_collect_function_constant_decl :: (decl: *Code_Declaration, out_constants: *[..] IR_Function_Constant, state: *IR_Lowering_State) -> bool {
+  if !decl || !ir_decl_is_function_constant(decl) return true;
+  if ir_function_constant_already_collected(out_constants.*, decl) return true;
+  lowered, ok := ir_validate_function_constant_declaration(decl, state);
+  if !ok return false;
+  array_add(out_constants, lowered);
+  return true;
+}
+
+ir_collect_function_constants_in_node :: (node: *Code_Node, out_constants: *[..] IR_Function_Constant, state: *IR_Lowering_State) -> bool {
+  if !node return true;
+
+  if node.kind == {
+    case .IDENT; {
+      ident := cast(*Code_Ident) node;
+      if ident.resolved_declaration return ir_try_collect_function_constant_decl(ident.resolved_declaration, out_constants, state);
+      return true;
+    }
+    case .DECLARATION; {
+      decl := cast(*Code_Declaration) node;
+      if !ir_try_collect_function_constant_decl(decl, out_constants, state) return false;
+      if decl.expression return ir_collect_function_constants_in_node(decl.expression, out_constants, state);
+      return true;
+    }
+    case .PROCEDURE_CALL; {
+      pc := cast(*Code_Procedure_Call) node;
+      if !ir_collect_function_constants_in_node(pc.procedure_expression, out_constants, state) return false;
+      if !ir_collect_function_constants_in_node(pc.resolved_procedure_expression, out_constants, state) return false;
+      for pc.arguments_sorted if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      for pc.arguments_unsorted if it.expression && !ir_collect_function_constants_in_node(it.expression, out_constants, state) return false;
+      return true;
+    }
+    case .BINARY_OPERATOR; {
+      bn := cast(*Code_Binary_Operator) node;
+      if !ir_collect_function_constants_in_node(bn.left, out_constants, state) return false;
+      if !ir_collect_function_constants_in_node(bn.right, out_constants, state) return false;
+      return true;
+    }
+    case .UNARY_OPERATOR; {
+      un := cast(*Code_Unary_Operator) node;
+      return ir_collect_function_constants_in_node(un.subexpression, out_constants, state);
+    }
+    case .IF; {
+      op := cast(*Code_If) node;
+      if !ir_collect_function_constants_in_node(op.condition, out_constants, state) return false;
+      if op.then_block for op.then_block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      if op.else_block for op.else_block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      return true;
+    }
+    case .CASE; {
+      op := cast(*Code_Case) node;
+      if !ir_collect_function_constants_in_node(op.condition, out_constants, state) return false;
+      if op.then_block for op.then_block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      return true;
+    }
+    case .FOR; {
+      op := cast(*Code_For) node;
+      if !ir_collect_function_constants_in_node(op.iteration_expression, out_constants, state) return false;
+      if !ir_collect_function_constants_in_node(op.iteration_expression_right, out_constants, state) return false;
+      if op.block for op.block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      return true;
+    }
+    case .WHILE; {
+      op := cast(*Code_While) node;
+      if !ir_collect_function_constants_in_node(op.condition, out_constants, state) return false;
+      if op.block for op.block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      return true;
+    }
+    case .RETURN; {
+      op := cast(*Code_Return) node;
+      for op.arguments_sorted if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      return true;
+    }
+    case .BLOCK; {
+      block := cast(*Code_Block) node;
+      for block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      return true;
+    }
+    case .COMPOUND_DECLARATION; {
+      op := cast(*Code_Compound_Declaration) node;
+      if op.comma_separated_assignment {
+        for op.comma_separated_assignment.arguments {
+          if it.node && !ir_collect_function_constants_in_node(it.node, out_constants, state) return false;
+        }
+      }
+      return true;
+    }
+    case .COMMA_SEPARATED_ARGUMENTS; {
+      op := cast(*Code_Comma_Separated_Arguments) node;
+      for op.arguments if it.node && !ir_collect_function_constants_in_node(it.node, out_constants, state) return false;
+      return true;
+    }
+    case .LITERAL; {
+      lit := cast(*Code_Literal) node;
+      if lit.value_type == .STRUCT {
+        for lit.struct_literal_info.arguments if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      } else if lit.value_type == .ARRAY {
+        for lit.array_literal_info.array_members if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+      }
+      return true;
+    }
+    case .EXTRACT; {
+      op := cast(*Code_Extract) node;
+      if op.from return ir_collect_function_constants_in_node(op.from, out_constants, state);
+      return true;
+    }
+  }
+
+  return true;
+}
+
+ir_collect_function_constants_recursive :: (header: *Code_Procedure_Header,
+                                           seen_headers: *[..] *Code_Procedure_Header,
+                                           out_constants: *[..] IR_Function_Constant,
+                                           main_header: *Code_Procedure_Header,
+                                           state: *IR_Lowering_State) -> bool {
+  assert(state != null);
+  if !header || !header.body_or_null || !header.body_or_null.block return false;
+  if ir_shared_header_in_list(seen_headers, header) return true;
+  array_add(seen_headers, header);
+
+  for header.body_or_null.block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
+
+  called: [..] *Code_Procedure_Header;
+  for header.body_or_null.block.statements ir_shared_collect_calls_in_node(it, *called);
+  for called {
+    if it == main_header continue;
+    if !ir_collect_function_constants_recursive(it, seen_headers, out_constants, main_header, state) return false;
+  }
+
+  return true;
+}
+
+ir_sort_function_constants_deterministic :: (constants: *[..] IR_Function_Constant) {
+  if constants.count <= 1 return;
+  string_less :: (a: string, b: string) -> bool {
+    limit := ifx a.count < b.count then a.count else b.count;
+    for i: 0..limit-1 {
+      if a[i] < b[i] return true;
+      if a[i] > b[i] return false;
+    }
+    return a.count < b.count;
+  }
+  function_constant_less :: (a: IR_Function_Constant, b: IR_Function_Constant) -> bool {
+    a_file := a.location.fully_pathed_filename;
+    b_file := b.location.fully_pathed_filename;
+    if a_file != b_file return string_less(a_file, b_file);
+    if a.location.line_number != b.location.line_number return a.location.line_number < b.location.line_number;
+    if a.location.character_number != b.location.character_number return a.location.character_number < b.location.character_number;
+    return string_less(a.name, b.name);
+  }
+
+  i: s64 = 1;
+  while i < constants.count {
+    current := constants.*[i];
+    j := i;
+    while j > 0 && function_constant_less(current, constants.*[j - 1]) {
+      constants.*[j] = constants.*[j - 1];
+      j -= 1;
+    }
+    constants.*[j] = current;
+    i += 1;
+  }
+}
+
 
 // Shared lowering functions moved to ir_pipeline/ir_shared.jai.
 
@@ -1838,6 +2091,11 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
   if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
       return_err("failed while lowering function body");
   }
+  function_constant_seen_headers: [..] *Code_Procedure_Header;
+  if !ir_collect_function_constants_recursive(ctx.header, *function_constant_seen_headers, *out.function_constants, ctx.header, *state) {
+      return_err("failed while collecting function constants");
+  }
+  ir_sort_function_constants_deterministic(*out.function_constants);
   return {out, true, ir_get_diagnostic(*state)};
 } @jdll_export
 
@@ -1954,6 +2212,11 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
       return_err("failed while lowering function body", node=ctx.header.body_or_null.block);
   }
+  function_constant_seen_headers: [..] *Code_Procedure_Header;
+  if !ir_collect_function_constants_recursive(ctx.header, *function_constant_seen_headers, *out.function_constants, ctx.header, *state) {
+      return_err("failed while collecting function constants");
+  }
+  ir_sort_function_constants_deterministic(*out.function_constants);
 
   return { out, true, ir_get_diagnostic(*state) };
 } @jdll_export
@@ -2076,6 +2339,11 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
   if !ir_shared_lower_block(header.body_or_null.block, *out.body, input_field_names, .[], false, *state, parameter_usings, .[]) {
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
+  function_constant_seen_headers: [..] *Code_Procedure_Header;
+  if !ir_collect_function_constants_recursive(header, *function_constant_seen_headers, *out.function_constants, header, *state) {
+      return_err("failed while collecting function constants");
+  }
+  ir_sort_function_constants_deterministic(*out.function_constants);
   return {out, true, ir_get_diagnostic(*state)};
 } @jdll_export
 
@@ -2125,3 +2393,6 @@ jai_to_hlsl_type_name :: (in: string) -> string {
   success, val := table_find(*jai_to_hlsl_type_map, in);
   return ifx success then val else in;
 }
+
+#scope_file
+Math :: #import "Math";

@@ -84,6 +84,9 @@ IR_Headless_Vertex_Out :: struct {
   color: Vector4; @semantic_COLOR0
 }
 
+ir_headless_use_alt_color: bool = false; @function_constant
+ir_headless_constant_color: Vector3 = .{1, 0, 0}; @function_constant
+
 ir_headless_vertex_main :: (using input: IR_Headless_Vertex_In, using un: IR_Headless_Vertex_Uniforms) -> IR_Headless_Vertex_Out {
   using out: IR_Headless_Vertex_Out;
   position = Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
@@ -115,6 +118,15 @@ ir_headless_vertex_uint_div_main :: (using input: IR_Headless_Vertex_In, using u
   color = Vector4.{t, 0.0, 1.0, 1.0};
   return out;
 } @vertex_shader
+
+ir_headless_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
+  if ir_headless_use_alt_color return Vector4.{0.0, 1.0, 0.0, 1.0};
+  return Vector4.{1.0, 0.0, 0.0, 1.0};
+} @fragment_shader
+
+ir_headless_vector_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
+  return Vector4.{ir_headless_constant_color.x, ir_headless_constant_color.y, ir_headless_constant_color.z, 1.0};
+} @fragment_shader
 
 ir_headless_project_camera_like :: (x: float, y: float, using params: *IR_Headless_Project_Params) -> Vector4 {
   sx := camera_pos_proj_x.w;
@@ -847,6 +859,25 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
                                "bool-field fragment-params pair SPIR-V output");
   bool_params_pair_path := tprint("%/ir_pair_fragment_bool_params.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(bool_params_pair_path, bool_params_pair);
+
+  function_constant_fragment := get_transpiled(.METAL, ir_headless_function_constant_fragment_main);
+  check_contains(function_constant_fragment, "function_constant(0)", "function-constant fragment metal output");
+  function_constant_fragment_path := tprint("%/ir_fragment_function_constant.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(function_constant_fragment_path, function_constant_fragment);
+  check_generated_file_contains(tprint("%/ir_headless_function_constant_fragment_main_frag.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "SpecId 0",
+                               "function-constant fragment SPIR-V output");
+
+  vector_function_constant_fragment := get_transpiled(.METAL, ir_headless_vector_function_constant_fragment_main);
+  check_contains(vector_function_constant_fragment, "function_constant(0)", "vector function-constant fragment metal output");
+  check_contains(vector_function_constant_fragment, "float3", "vector function-constant fragment metal type");
+  vector_function_constant_fragment_path := tprint("%/ir_fragment_vector_function_constant.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(vector_function_constant_fragment_path, vector_function_constant_fragment);
+  check_generated_file_contains(tprint("%/ir_headless_vector_function_constant_fragment_main_frag.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpSpecConstantComposite",
+                               "vector function-constant fragment SPIR-V output");
 
   nested_params_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_nested_params_main);
   check_contains(nested_params_pair, "fragment", "nested fragment-params pair metal output");

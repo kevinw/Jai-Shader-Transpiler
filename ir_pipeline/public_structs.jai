@@ -61,10 +61,30 @@ IR_Struct :: struct {
   fields: [..] IR_Field;
 }
 
+IR_Function_Constant_Type :: enum {
+  BOOL;
+  U32;
+  S32;
+  FLOAT;
+  FLOAT2;
+  FLOAT3;
+  FLOAT4;
+}
+
+IR_Function_Constant :: struct {
+  name: string;
+  type: IR_Function_Constant_Type;
+  default_value_text: string;
+  declaration: *Code_Declaration;
+  location: Source_Code_Location;
+  spec_id: u32;
+}
+
 IR_Shader :: struct {
   source_name: string;
   entry_name: string;
   kind: IR_Shader_Kind;
+  function_constants: [..] IR_Function_Constant;
   extra_structs: [..] IR_Struct;
   functions: [..] IR_Function;
   body: IR_Block;

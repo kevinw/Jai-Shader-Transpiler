@@ -7,11 +7,11 @@ to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) {
     if #complete shader.kind == {
     case .Vertex;
         using cast(*IR_Vertex_Shader)shader;
-        spvasm, ok, diag := emit_graphics_generic(.VERTEX, source_name, input, output, args, *body, functions, extra_structs);
+        spvasm, ok, diag := emit_graphics_generic(.VERTEX, source_name, input, output, args, *body, functions, function_constants, extra_structs);
         return {spvasm, ok, diag};
     case .Fragment;
         using cast(*IR_Fragment_Shader)shader;
-        spvasm, ok, diag := emit_graphics_generic(.FRAGMENT, source_name, input, output, args, *body, functions, extra_structs);
+        spvasm, ok, diag := emit_graphics_generic(.FRAGMENT, source_name, input, output, args, *body, functions, function_constants, extra_structs);
         return {spvasm, ok, diag};
     case .Compute;
         generic_out, generic_ok, generic_diag := emit_compute_generic_uint_buffer(cast(*IR_Compute_Shader)shader);
@@ -526,6 +526,17 @@ IR_SPV_Gen_Const_F16 :: struct {
   id: s64;
 }
 
+IR_SPV_Gen_Function_Constant :: struct {
+  name: string;
+  declaration: *Code_Declaration;
+  type: IR_Function_Constant_Type;
+  default_value_text: string;
+  spec_id: u32;
+  id: s64;
+  component_count: s64;
+  component_ids: [4] s64;
+}
+
 IR_SPV_Gen_Const_Null :: struct {
   type_id: s64;
   id: s64;
@@ -602,6 +613,7 @@ IR_SPV_Gen_State :: struct {
   const_u64: [..] IR_SPV_Gen_Const_U64;
   const_f32: [..] IR_SPV_Gen_Const_F32;
   const_f16: [..] IR_SPV_Gen_Const_F16;
+  function_constants: [..] IR_SPV_Gen_Function_Constant;
   const_null: [..] IR_SPV_Gen_Const_Null;
   buffers: [..] IR_SPV_Gen_Buffer;
   buffer_layout_structs: [..] IR_SPV_Gen_Buffer_Layout_Struct;
@@ -756,6 +768,190 @@ new_id :: (s: *IR_SPV_Gen_State) -> s64 {
   id := s.next_id;
   s.next_id += 1;
   return id;
+}
+
+spv_function_constant_kind_from_ir_type :: (type: IR_Type) -> (IR_Function_Constant_Type, bool) {
+  if type.kind == {
+    case .BOOL; return .BOOL, true;
+    case .U32;  return .U32, true;
+    case .I32;  return .S32, true;
+    case .F32;  return .FLOAT, true;
+    case .F32x2; return .FLOAT2, true;
+    case .F32x3; return .FLOAT3, true;
+    case .F32x4; return .FLOAT4, true;
+  }
+  return .BOOL, false;
+}
+
+spv_slice_text :: (text: string, start: s64, end_exclusive: s64) -> string {
+  if start < 0 start = 0;
+  if end_exclusive < start end_exclusive = start;
+  if end_exclusive > text.count end_exclusive = text.count;
+  return string.{count = end_exclusive - start, data = text.data + start};
+}
+
+spv_parse_function_constant_float_vector_literal :: (text: string, expected_count: s64) -> ([4] string, bool) {
+  values: [4] string;
+  if expected_count < 2 || expected_count > 4 return values, false;
+
+  inner := trim(text);
+  if starts_with(inner, ".{") && ends_with(inner, "}") {
+    inner = spv_slice_text(inner, 2, inner.count - 1);
+  } else if starts_with(inner, "{") && ends_with(inner, "}") {
+    inner = spv_slice_text(inner, 1, inner.count - 1);
+  } else {
+    return values, false;
+  }
+
+  index: s64 = 0;
+  start: s64 = 0;
+  for i: 0..inner.count-1 {
+    if inner[i] != #char "," continue;
+    if index >= expected_count return values, false;
+    values[index] = trim(spv_slice_text(inner, start, i));
+    index += 1;
+    start = i + 1;
+  }
+
+  if index != expected_count - 1 return values, false;
+  values[index] = trim(spv_slice_text(inner, start, inner.count));
+
+  for i: 0..expected_count-1 if values[i].count == 0 return values, false;
+  return values, true;
+}
+
+emit_vector_function_constant_def :: (sb: *String_Builder, s: *IR_SPV_Gen_State, fc: IR_SPV_Gen_Function_Constant, expected_count: s64, vector_type_id: s64) -> bool {
+  component_texts, components_ok := spv_parse_function_constant_float_vector_literal(fc.default_value_text, expected_count);
+  if !components_ok return false;
+
+  for i: 0..expected_count-1 {
+    value_text, value_ok := parse_f32_literal_text(component_texts[i]);
+    if !value_ok return false;
+    append(sb, tprint("% = OpSpecConstant % %\n", id_text(fc.component_ids[i]), id_text(s.id_float), value_text));
+  }
+
+  append(sb, tprint("% = OpSpecConstantComposite %", id_text(fc.id), id_text(vector_type_id)));
+  for i: 0..expected_count-1 append(sb, tprint(" %", id_text(fc.component_ids[i])));
+  append(sb, "\n");
+  return true;
+}
+
+spv_function_constant_declaration_from_expr :: (expr: *IR_Expr) -> *Code_Declaration {
+  if !expr || !expr.origin_node return null;
+  node := expr.origin_node;
+  if node.kind != .IDENT return null;
+  ident := cast(*Code_Ident) node;
+  return ident.resolved_declaration;
+}
+
+find_function_constant_by_decl :: (s: *IR_SPV_Gen_State, decl: *Code_Declaration) -> *IR_SPV_Gen_Function_Constant {
+  if !decl return null;
+  for *s.function_constants if it.declaration == decl return it;
+  return null;
+}
+
+find_function_constant_by_name :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Function_Constant {
+  if name.count == 0 return null;
+  for *s.function_constants if it.name == name return it;
+  return null;
+}
+
+register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Function_Constant) -> (ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return false, make_diag(msg, ..args); }
+
+  for shader_constants {
+    if find_function_constant_by_decl(s, it.declaration) != null continue;
+    source_kind: IR_Type_Kind;
+    if it.type == {
+      case .BOOL;   source_kind = .BOOL;
+      case .U32;    source_kind = .U32;
+      case .S32;    source_kind = .I32;
+      case .FLOAT;  source_kind = .F32;
+      case .FLOAT2; source_kind = .F32x2;
+      case .FLOAT3; source_kind = .F32x3;
+      case .FLOAT4; source_kind = .F32x4;
+    }
+    type_kind, type_ok := spv_function_constant_kind_from_ir_type(.{kind = source_kind});
+    if !type_ok return_err("unsupported function constant type for '%'.", it.name);
+    component_count: s64 = 1;
+    if type_kind == {
+      case .FLOAT2; component_count = 2;
+      case .FLOAT3; component_count = 3;
+      case .FLOAT4; component_count = 4;
+    }
+    component_ids: [4] s64;
+    if component_count > 1 {
+      for i: 0..component_count-1 component_ids[i] = new_id(s);
+    }
+    array_add(*s.function_constants, .{
+      name = it.name,
+      declaration = it.declaration,
+      type = type_kind,
+      default_value_text = it.default_value_text,
+      spec_id = it.spec_id,
+      id = new_id(s),
+      component_count = component_count,
+      component_ids = component_ids,
+    });
+  }
+  return true, {};
+}
+
+spv_append_function_constant_names :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  for s.function_constants append(sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
+}
+
+spv_append_function_constant_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  for s.function_constants {
+    if it.component_count <= 1 {
+      append(sb, tprint("               OpDecorate % SpecId %\n", id_text(it.id), it.spec_id));
+      continue;
+    }
+    for i: 0..it.component_count-1 append(sb, tprint("               OpDecorate % SpecId %\n", id_text(it.component_ids[i]), it.spec_id + cast(u32) i));
+  }
+}
+
+spv_append_function_constant_defs :: (sb: *String_Builder, s: *IR_SPV_Gen_State) -> (ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return false, make_diag(msg, ..args); }
+
+  for s.function_constants {
+    if it.type == {
+      case .BOOL;
+        if it.default_value_text == "true" {
+          append(sb, tprint("% = OpSpecConstantTrue %\n", id_text(it.id), id_text(s.id_bool)));
+        } else if it.default_value_text == "false" {
+          append(sb, tprint("% = OpSpecConstantFalse %\n", id_text(it.id), id_text(s.id_bool)));
+        } else {
+          return_err("function constant '%' expected bool literal, got '%'.", it.name, it.default_value_text);
+        }
+      case .U32;
+        value, value_ok := parse_u32_literal_text(it.default_value_text);
+        if !value_ok return_err("function constant '%' expected u32 literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_uint), value));
+      case .S32;
+        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        if !value_ok return_err("function constant '%' expected s32 literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int), cast(s32) value64));
+      case .FLOAT;
+        value_text, value_ok := parse_f32_literal_text(it.default_value_text);
+        if !value_ok return_err("function constant '%' expected float literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_float), value_text));
+      case .FLOAT2;
+        if !emit_vector_function_constant_def(sb, s, it, 2, s.id_float2) {
+          return_err("function constant '%' expected float2 literal, got '%'.", it.name, it.default_value_text);
+        }
+      case .FLOAT3;
+        if !emit_vector_function_constant_def(sb, s, it, 3, s.id_float3) {
+          return_err("function constant '%' expected float3 literal, got '%'.", it.name, it.default_value_text);
+        }
+      case .FLOAT4;
+        if !emit_vector_function_constant_def(sb, s, it, 4, s.id_float4) {
+          return_err("function constant '%' expected float4 literal, got '%'.", it.name, it.default_value_text);
+        }
+    }
+  }
+
+  return true, {};
 }
 
 // Emits forms like "OpStore id_1 id2"
@@ -1124,7 +1320,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 
   diag: IR_Diagnostic;
   assert(s != null);
-  s.next_id = 1;
+  if s.next_id < 1 s.next_id = 1;
   s.bound_value = bound_value;
   s.use_physical_storage = use_physical_storage;
   
@@ -4012,7 +4208,14 @@ ensure_select_result_storage :: (s: *IR_SPV_Gen_State, result_type: IR_SPV_Gen_T
 // -----------------------------------------------------------------------------
 
 emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  return_err :: (msg: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(msg, ..args); }
+  return_err :: (msg: string, args: ..Any, code_node: *Code_Node = null) #expand { 
+      diag := make_diag(msg, ..args);
+      if code_node {
+          diag.location = make_location(code_node);
+          diag.has_location = true;
+      }
+      `return 0, .UNKNOWN, false, diag; 
+  }
 
   assert(s != null);
   diag: IR_Diagnostic;
@@ -4038,7 +4241,22 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
 
     case .IDENT; {
       local := find_local(s, expr.text);
-      if !local return_err("unknown identifier '%'.", expr.text);
+      if !local {
+        function_constant_decl := spv_function_constant_declaration_from_expr(expr);
+        function_constant := ifx function_constant_decl then find_function_constant_by_decl(s, function_constant_decl) else find_function_constant_by_name(s, expr.text);
+        if function_constant {
+          if function_constant.type == {
+            case .BOOL;  return function_constant.id, .BOOL, true, diag;
+            case .U32;   return function_constant.id, .UINT, true, diag;
+            case .S32;   return function_constant.id, .INT, true, diag;
+            case .FLOAT; return function_constant.id, .FLOAT, true, diag;
+            case .FLOAT2; return function_constant.id, .FLOAT2, true, diag;
+            case .FLOAT3; return function_constant.id, .FLOAT3, true, diag;
+            case .FLOAT4; return function_constant.id, .FLOAT4, true, diag;
+          }
+        }
+        return_err("unknown identifier '%'.", expr.text);
+      }
       value_id := new_id(s);
       result_type_id := type_id_from_kind(s, local.type);
       assert(result_type_id != 0);
@@ -4217,7 +4435,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
         if field_ok {
           if field_type != .FLOAT2 && field_type != .FLOAT3 && field_type != .FLOAT4 {
-            return_err("unsupported member expression '%'.", path);
+            return_err("unsupported member expression(1) '%'.", path);
           }
           field_type_id := type_id_from_kind(s, field_type);
           if field_type_id == 0 return_err("unsupported loaded field type for '%'.", path);
@@ -4259,7 +4477,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if local_struct {
           parent_field := find_local_struct_field(local_struct, expr.left.text);
           if !parent_field return_err("unknown struct field '%.%'.", expr.left.left.text, expr.left.text);
-          if parent_field.type != .STRUCT return_err("unsupported member expression '%'.", path);
+          if parent_field.type != .STRUCT return_err("unsupported member expression(2) '%'.", path);
           nested_struct := find_local_struct(s, parent_field.nested_struct_name);
           if !nested_struct return_err("nested struct '%.%' is missing.", expr.left.left.text, expr.left.text);
           nested_field := find_local_struct_field(nested_struct, expr.text);
@@ -4275,10 +4493,10 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if expr.left && expr.left.kind == .MEMBER {
         _, _, debug_field_ok, debug_field_diag := emit_buffer_struct_field_ptr_from_member_expr(s, expr.left);
         if !debug_field_ok && debug_field_diag.message.count != 0 {
-          return_err("unsupported member expression '%': %", path, debug_field_diag.message);
+          return_err("unsupported member expression(3) '%': %", path, debug_field_diag.message);
         }
       }
-      return_err("unsupported member expression '%'.", path);
+      return_err("unsupported member expression(4) '%'.", path, code_node=expr.origin_node);
     }
 
     case .SUBSCRIPT; {

@@ -6,10 +6,19 @@
 // metal_bytes := get_transpiled(.METAL, pbr_vertex_main, pbr_fragment_main);
 // 
 
+offset_of :: ($T: Type, $member: string) -> int { // nocommit
+    for type_info(T).members {
+        if it.name == member return it.offset_in_bytes;
+    }
+
+    assert(false, "Type '%' does not have member '%'", T, member);
+    return -1;
+}
+
 VERBOSE      :: false;
 USE_SPIRV_OPT :: true;
-IR_INTERMEDIATE_DIR :: ".build/ir_intermediate";
-DEBUG_OUTDIR :: ".generated_shaders";
+IR_INTERMEDIATE_DIR :: ".build/ir_intermediate"; // TODO: use get_build_options to determine a build-specific directory for this
+DEBUG_OUTDIR :: ".generated_shaders"; // TODO: use get_build_options to determine a build-specific directory for this
 MY_MODULE_NAME :: "Jai-Shader-Transpiler";
 
 jst_pipeline_fingerprint_ready: bool;
@@ -39,6 +48,7 @@ Jai_To_Shader_Plugin :: struct {
       pending_request_declarations: [..] *Code_Declaration;
       known_procedure_bodies: [..] *Code_Procedure_Body;
       lookup_entries: [..] Transpiled_Lookup_Entry;
+      function_constant_lookup_entries: [..] Function_Constant_Lookup_Entry;
       manifest_entries: [..] Shader_Reload_Manifest_Entry;
       did_emit_lookup_overloads: bool;
       did_log_ir_pipeline: bool;
@@ -48,6 +58,12 @@ Jai_To_Shader_Plugin :: struct {
 }
 Transpiled_Lookup_Entry :: struct {
   target_name: string;
+  primary_name: string;
+  secondary_name: string;
+  symbol_name: string;
+}
+
+Function_Constant_Lookup_Entry :: struct {
   primary_name: string;
   secondary_name: string;
   symbol_name: string;
@@ -278,17 +294,20 @@ ensure_get_transpiled_request_registered :: (key: string, source: string) #compi
   add_build_string(source, get_current_workspace());
 }
 
-get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) -> string #compile_time {
+get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) -> (code: string, shader_meta_str: string) #compile_time {
+  return_fail :: (msg: string) #expand {
+      compiler_report(tprint("Jai Shader Transpiler: %", msg), loc=loc);
+      `return "", "{}";
+  }
+  
   root := compiler_get_nodes(call);
   if root.kind != .PROCEDURE_CALL {
-    compiler_report("Jai Shader Transpiler: get_transpiled must be called directly (e.g. get_transpiled(.METAL, vertex_fn, fragment_fn)).", loc=loc);
-    return "";
+      return_fail("get_transpiled must be called directly (e.g. get_transpiled(.METAL, vertex_fn, fragment_fn)).");
   }
 
   pc := cast(*Code_Procedure_Call) root;
   if pc.arguments_unsorted.count != 2 && pc.arguments_unsorted.count != 3 {
-    compiler_report("Jai Shader Transpiler: get_transpiled expects 2 args (target, stage_fn) or 3 args (target, vertex_fn, fragment_fn).", loc=loc);
-    return "";
+      return_fail("get_transpiled expects 2 args (target, stage_fn) or 3 args (target, vertex_fn, fragment_fn).");
   }
 
   target_expr := trim_ascii_whitespace(expression_to_source_string(pc.arguments_unsorted[0].expression));
@@ -298,14 +317,12 @@ get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) 
   target_ident := sanitize_identifier_component(canonical_target_expr);
   single_note, pair_note, supports_pair, _, target_ok := transpiled_target_from_expr_string(canonical_target_expr);
   if !target_ok || !canonical_target_ok {
-    compiler_report("Jai Shader Transpiler: First argument to get_transpiled must resolve to .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.", loc=loc);
-    return "";
+    return_fail("First argument to get_transpiled must resolve to .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.");
   }
 
   shader_name := shader_name_from_call_arg(pc.arguments_unsorted[1].expression);
   if !shader_name {
-    compiler_report("Jai Shader Transpiler: get_transpiled shader arguments must be procedure identifiers.", loc=loc);
-    return "";
+    return_fail("get_transpiled shader arguments must be procedure identifiers.");
   }
 
   if pc.arguments_unsorted.count == 2 {
@@ -314,37 +331,51 @@ get_transpiled_result_expr_from_call :: (call: Code, loc: Source_Code_Location) 
     key := tprint("single|%|%", single_note, shader_name);
     request_source := tprint("% :: %; @%\n", request_name, shader_name, single_note);
     ensure_get_transpiled_request_registered(key, request_source);
-    return tprint("G.lookup_transpiled(\"%\", \"%\", \"\")", canonical_target_expr, shader_name);
+    return tprint("G.lookup_transpiled(\"%\", \"%\", \"\")", canonical_target_expr, shader_name), request_name;
   }
 
-  if !supports_pair {
-    compiler_report("Jai Shader Transpiler: get_transpiled target does not support paired graphics shaders for this backend.", loc=loc);
-    return "";
-  }
+  if !supports_pair return_fail("get_transpiled target does not support paired graphics shaders for this backend.");
 
   fragment_name := shader_name_from_call_arg(pc.arguments_unsorted[2].expression);
-  if !fragment_name {
-    compiler_report("Jai Shader Transpiler: get_transpiled fragment argument must be a procedure identifier.", loc=loc);
-    return "";
-  }
+  if !fragment_name return_fail("get_transpiled fragment argument must be a procedure identifier.");
 
   request_name := tprint("transpiled_pair_%_%_%", target_ident, shader_name, fragment_name);
   to_lower_in_place(request_name);
   key := tprint("pair|%|%|%", pair_note, shader_name, fragment_name);
   request_source := tprint("% :: %; @%(%)\n", request_name, shader_name, pair_note, fragment_name);
+  
+  #if 0 {
+    log("-----");
+    log("request_name:  %", request_name);
+    log("pair_note:     %", pair_note);
+    log("shader_name:   %", shader_name);
+    log("fragment_name: %", fragment_name);
+  }
+  
   ensure_get_transpiled_request_registered(key, request_source);
-  return tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, shader_name, fragment_name);
+  
+  get_bytes_code_string := tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, shader_name, fragment_name);
+  shader_meta_str := tprint(#string END
+{request_name="%"}
+END, request_name);
+  
+  return get_bytes_code_string, shader_meta_str;
 }
 
-get_transpiled :: (target: Transpiled_Target, args: ..Any, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> string #expand {
+Shader_Meta :: struct {
+    request_name: string;
+}
+
+get_transpiled :: (target: Transpiled_Target, args: ..Any, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
     #insert #run -> string {
         workspace := get_current_workspace();
+        get_bytes_code_string, shader_meta_str := get_transpiled_result_expr_from_call(call, loc);
         return tprint(#string END
 G :: #import,file "%";
 _shader_source := %;
 assert(_shader_source.count > 0, "Transpiled shader bytes had zero count.");
-return _shader_source;
-END, compute_path_to_shader_bucket_module(workspace), get_transpiled_result_expr_from_call(call, loc));
+return _shader_source, %;
+END, compute_path_to_shader_bucket_module(workspace), get_bytes_code_string, shader_meta_str);
     };
 }
 
@@ -411,6 +442,11 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 
           assert(s != "");
           add_code(plugin, s, "waiting_pairs");
+          emit_generated_function_constant_decl(plugin,
+                                               generated_function_constant_base_name(pair_ctx.name, "graphics"),
+                                               pair_ctx.vertex_fn.header.name,
+                                               pair_ctx.fragment_fn.header.name,
+                                               pair_ctx.function_constants);
 
           if plugin.output_shaders {
             ext := tprint("%", pair_ctx.language);
@@ -488,6 +524,12 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
 
             s := tprint("% :: #string END\n%\nEND", ir_symbol_name_from_context(ctx), source);
             add_code(plugin, s, "jobs");
+            stage_suffix := ifx ctx.type == .Vertex then "vertex" else ifx ctx.type == .Fragment then "fragment" else "compute";
+            emit_generated_function_constant_decl(plugin,
+                                                 generated_function_constant_base_name(ctx.name, stage_suffix),
+                                                 ctx.name,
+                                                 "",
+                                                 ctx.function_constants);
             if plugin.output_shaders {
               ext := tprint("%", ctx.language);
               to_lower_in_place(ext);
@@ -560,10 +602,32 @@ _add_source :: (p: *Metaprogram_Plugin) {
 // Auto-generated from Jai_To_Shader's _add_source
 #scope_export
 
+shader_function_constant_type :: enum {
+    BOOL;
+    U32;
+    S32;
+    FLOAT;
+    FLOAT2;
+    FLOAT3;
+    FLOAT4;
+}
+
+shader_function_constant_info :: struct {
+    name: string;
+    index: u32;
+    type: shader_function_constant_type;
+    offset: s64;
+}
+
 #placeholder lookup_transpiled_impl;
+#placeholder lookup_function_constant_infos_impl;
 
 lookup_transpiled :: (target_name: string, primary_name: string, secondary_name: string) -> string {
     return lookup_transpiled_impl(target_name, primary_name, secondary_name);
+}
+
+lookup_function_constant_infos :: (primary_name: string, secondary_name: string) -> [] shader_function_constant_info {
+    return lookup_function_constant_infos_impl(primary_name, secondary_name);
 }
 END);
     assert(ok);
@@ -608,6 +672,119 @@ ir_stage_short_from_context :: (ctx: *Shader_Write_Context) -> string {
 ir_output_ext_from_context :: (ctx: *Shader_Write_Context) -> string {
   if ctx.language == .METAL return "metal";
   return "glsl";
+}
+
+function_constant_decl_already_present :: (constants: [] IR_Function_Constant, decl: *Code_Declaration) -> bool {
+  if !decl return false;
+  for constants if it.declaration == decl return true;
+  return false;
+}
+
+function_constant_spec_slot_count :: (type: IR_Function_Constant_Type) -> u32 {
+  if type == {
+    case .FLOAT2; return 2;
+    case .FLOAT3; return 3;
+    case .FLOAT4; return 4;
+  }
+  return 1;
+}
+
+assign_single_function_constant_spec_ids :: (shader: *IR_Shader) {
+  if !shader return;
+  next_spec_id: u32 = 0;
+  for *shader.function_constants {
+    it.spec_id = next_spec_id;
+    next_spec_id += function_constant_spec_slot_count(it.type);
+  }
+}
+
+assign_pair_function_constant_spec_ids :: (vertex: *IR_Vertex_Shader, fragment: *IR_Fragment_Shader, out_pair_constants: *[..] IR_Function_Constant) {
+  array_reset(out_pair_constants);
+  if vertex for vertex.function_constants if !function_constant_decl_already_present(out_pair_constants.*, it.declaration) array_add(out_pair_constants, it);
+  if fragment for fragment.function_constants if !function_constant_decl_already_present(out_pair_constants.*, it.declaration) array_add(out_pair_constants, it);
+
+  next_spec_id: u32 = 0;
+  for i: 0..out_pair_constants.count-1 {
+    out_pair_constants.*[i].spec_id = next_spec_id;
+    next_spec_id += function_constant_spec_slot_count(out_pair_constants.*[i].type);
+  }
+
+  if vertex {
+    for i: 0..vertex.function_constants.count-1 {
+      fc := *vertex.function_constants[i];
+      for pair_fc: out_pair_constants.* {
+        if fc.declaration != pair_fc.declaration continue;
+        fc.spec_id = pair_fc.spec_id;
+        break;
+      }
+    }
+  }
+  if fragment {
+    for i: 0..fragment.function_constants.count-1 {
+      fc := *fragment.function_constants[i];
+      for pair_fc: out_pair_constants.* {
+        if fc.declaration != pair_fc.declaration continue;
+        fc.spec_id = pair_fc.spec_id;
+        break;
+      }
+    }
+  }
+}
+
+generated_function_constant_base_name :: (request_name: string, kind_suffix: string) -> string {
+  base := sanitize_identifier_component(request_name);
+  to_lower_in_place(base);
+  while contains(base, "__") base = replace(base, "__", "_");
+  if ends_with(base, "_main") {
+    base.count -= 5;
+  }
+  if kind_suffix.count != 0 {
+    suffix_text := tprint("_%", kind_suffix);
+    if ends_with(base, suffix_text) return base;
+    return tprint("%_%", base, kind_suffix);
+  }
+  return base;
+}
+
+emit_generated_function_constant_decl :: (plugin: *Jai_To_Shader_Plugin,
+                                          base_name: string,
+                                          primary_name: string,
+                                          secondary_name: string,
+                                          constants: [] IR_Function_Constant) {
+  if constants.count == 0 return;
+
+  struct_name := tprint("%_function_constants", base_name);
+  info_name := tprint("%_function_constant_info", base_name);
+
+  sb: String_Builder;
+  append(*sb, tprint("% :: struct {\n", struct_name));
+  for constants {
+    type_name := "bool";
+    if it.type == {
+      case .BOOL;   type_name = "bool";
+      case .U32;    type_name = "u32";
+      case .S32;    type_name = "s32";
+      case .FLOAT;  type_name = "float";
+      case .FLOAT2; type_name = "Vector2";
+      case .FLOAT3; type_name = "Vector3";
+      case .FLOAT4; type_name = "Vector4";
+    }
+    append(*sb, tprint("  %: % = %;\n", it.name, type_name, it.default_value_text));
+  }
+  append(*sb, "}\n\n");
+  append(*sb, tprint("% :: shader_function_constant_info.[\n", info_name));
+  for constants {
+    type_enum_str := tprint(".%", it.type);
+    append(*sb, tprint("  .{name = \"%\", index = %, type = %, offset = #run offset_of(%, \"%\")},\n",
+                       it.name, it.spec_id, type_enum_str, struct_name, it.name));
+  }
+  append(*sb, "];\n");
+  
+  code := builder_to_string(*sb);
+  log("----\n%\n----", code);
+
+  add_code(plugin, code, tprint("function_constants_%", base_name));
+  queue_function_constant_lookup_entry(plugin, primary_name, secondary_name, info_name);
 }
 
 ir_output_path_from_context :: (ctx: *Shader_Write_Context) -> string {
@@ -1173,24 +1350,30 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
   if ctx.type == .Vertex {
     ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    assign_single_function_constant_spec_ids(*ir_vertex);
     normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
     if !normalized return "", "", false, normalize_diag;
+    ctx.function_constants = ir_vertex.function_constants;
     entry_name = ir_vertex.entry_name;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
   } else if ctx.type == .Fragment {
     ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    assign_single_function_constant_spec_ids(*ir_fragment);
     normalized, normalize_diag := normalize_shader(*ir_fragment);
     if !normalized return "", "", false, normalize_diag;
+    ctx.function_constants = ir_fragment.function_constants;
     entry_name = ir_fragment.entry_name;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
   } else {
     ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
     if !lowered return "", "", false, lowered_diag;
+    assign_single_function_constant_spec_ids(*ir_compute);
     normalized, normalize_diag := normalize_compute_ir(*ir_compute);
     if !normalized return "", "", false, normalize_diag;
+    ctx.function_constants = ir_compute.function_constants;
     entry_name = ir_compute.entry_name;
     spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
   }
@@ -1427,6 +1610,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     }
     return "", false, vertex_diag;
   }
+  assign_single_function_constant_spec_ids(*ir_vertex);
   normalize_shader(*ir_vertex);
 
   frag_result := ir_lower_fragment_from_shader_context(.{name=fragment_ctx.name, header=fragment_ctx.main_fn.header});
@@ -1439,7 +1623,9 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     }
     return "", false, fragment_diag;
   }
+  assign_single_function_constant_spec_ids(*ir_fragment);
   normalize_shader(*ir_fragment);
+  assign_pair_function_constant_spec_ids(*ir_vertex, *ir_fragment, *pair_ctx.function_constants);
 
   vertex_uses_pointer_abi   := ir_uses_pointer_abi_local(ir_vertex.args, ir_vertex.extra_structs);
   fragment_uses_pointer_abi := ir_uses_pointer_abi_local(ir_fragment.args, ir_fragment.extra_structs);
@@ -1661,6 +1847,25 @@ queue_lookup_entry :: (plugin: *Jai_To_Shader_Plugin, target_name: string, prima
   });
 }
 
+function_constant_lookup_entry_already_queued :: (plugin: *Jai_To_Shader_Plugin, primary_name: string, secondary_name: string, symbol_name: string) -> bool {
+  for plugin.function_constant_lookup_entries {
+    if it.primary_name != primary_name continue;
+    if it.secondary_name != secondary_name continue;
+    if it.symbol_name != symbol_name continue;
+    return true;
+  }
+  return false;
+}
+
+queue_function_constant_lookup_entry :: (plugin: *Jai_To_Shader_Plugin, primary_name: string, secondary_name: string, symbol_name: string) {
+  if function_constant_lookup_entry_already_queued(plugin, primary_name, secondary_name, symbol_name) return;
+  array_add(*plugin.function_constant_lookup_entries, .{
+    primary_name = primary_name,
+    secondary_name = secondary_name,
+    symbol_name = symbol_name,
+  });
+}
+
 emit_lookup_overloads :: (plugin: *Jai_To_Shader_Plugin, workspace: Workspace) {
   if plugin.did_emit_lookup_overloads return;
   plugin.did_emit_lookup_overloads = true;
@@ -1676,6 +1881,15 @@ emit_lookup_overloads :: (plugin: *Jai_To_Shader_Plugin, workspace: Workspace) {
                        it.target_name, it.primary_name, it.secondary_name, it.symbol_name);
   }
   a(*sb, "  return \"\";\n}");
+  append_lines(*sb,
+    "#poke_name G lookup_function_constant_infos_impl;",
+    "lookup_function_constant_infos_impl :: (primary_name: string, secondary_name: string) -> [] shader_function_constant_info {",
+  );
+  for plugin.function_constant_lookup_entries {
+    a(*sb, "  if primary_name == \"%\" && secondary_name == \"%\" return %;",
+                 it.primary_name, it.secondary_name, it.symbol_name);
+  }
+  a(*sb, "  return .[];\n}");
 
   add_code(plugin, builder_to_string(*sb), "lookup_overloads");
 }
@@ -1938,6 +2152,7 @@ Shader_Write_Context :: struct {
   metal_fragment_entry_name: string;
   metal_compute_entry_name: string;
   metal_compute_binding_mode: string;
+  function_constants: [..] IR_Function_Constant;
 }
 
 Shader_Write_Pair_Context :: struct {
@@ -1951,6 +2166,7 @@ Shader_Write_Pair_Context :: struct {
   metal_output_metallib_path: string;
   metal_vertex_entry_name: string;
   metal_fragment_entry_name: string;
+  function_constants: [..] IR_Function_Constant;
 }
 
 member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {

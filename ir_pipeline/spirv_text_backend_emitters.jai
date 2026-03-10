@@ -149,6 +149,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
                                        args: [] IR_Function_Arg,
                                        body: *IR_Block,
                                        functions: [] IR_Function,
+                                       function_constants: [] IR_Function_Constant,
                                        extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return "", false, make_diag(msg, ..args); }
 
@@ -166,6 +167,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   stage_prefix := ifx stage == .VERTEX then "vert" else ifx stage == .FRAGMENT then "frag" else "compute";
   state.debug_type_prefix = tprint("%_%", stage_prefix, source_name);
   state.functions = functions;
+  function_constants_ok, function_constants_diag := register_function_constants(*state, function_constants);
+  if !function_constants_ok return "", false, function_constants_diag;
   for extra_structs array_add(*state.extra_structs, it);
   array_add(*state.extra_structs, input);
   array_add(*state.extra_structs, output);
@@ -393,6 +396,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   if state.uses_write_3d {
     append(*sb, tprint("               OpName % \"write_3d_textures\"\n", id_text(state.id_write_3d_textures_var)));
   }
+  spv_append_function_constant_names(*sb, *state);
   for ps_infos {
     ps_info := it;
     append(*sb, tprint("               OpName % \"%\"\n", id_text(ps_info.type_id), debug_type_name(*state, ps_info.name)));
@@ -408,6 +412,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
   append_interface_var_decorations(*sb, state.input_vars);
   append_interface_var_decorations(*sb, state.output_vars);
+  spv_append_function_constant_decorations(*sb, *state);
   append(*sb, tprint("               OpDecorate % Binding 0\n", id_text(root_var_id)));
   append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(root_var_id)));
   if state.uses_sample_2d {
@@ -456,6 +461,8 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
 
   spv_append_common_type_decls(*sb, *state, storage_class);
   spv_append_numeric_constants(*sb, *state);
+  function_constant_defs_ok, function_constant_defs_diag := spv_append_function_constant_defs(*sb, *state);
+  if !function_constant_defs_ok return "", false, function_constant_defs_diag;
   spv_append_sample_2d_type_decls(*sb, *state);
   spv_append_sample_3d_type_decls(*sb, *state);
   spv_append_write_2d_type_decls(*sb, *state);
@@ -490,13 +497,13 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   return builder_to_string(*sb), true, diag;
 }
 
-emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: IR_Struct, output: IR_Struct, args: [] IR_Function_Arg, body: *IR_Block, functions: [] IR_Function, extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
+emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: IR_Struct, output: IR_Struct, args: [] IR_Function_Arg, body: *IR_Block, functions: [] IR_Function, function_constants: [] IR_Function_Constant, extra_structs: [] IR_Struct) -> (spvasm: string, ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return "", false, make_diag(msg, ..args); }
   diag: IR_Diagnostic;
   analysis, analysis_ok, analysis_diag := spv_analyze_graphics_shader(stage, input, output, args, body, functions, extra_structs);
   if !analysis_ok return "", false, analysis_diag;
   if analysis.uses_pointer_abi {
-    spvasm, ok, pointer_diag := emit_graphics_physical_pointer_abi(stage, source_name, input, output, args, body, functions, extra_structs);
+    spvasm, ok, pointer_diag := emit_graphics_physical_pointer_abi(stage, source_name, input, output, args, body, functions, function_constants, extra_structs);
     return spvasm, ok, pointer_diag;
   }
 
@@ -505,6 +512,8 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   stage_prefix := ifx stage == .VERTEX then "vert" else ifx stage == .FRAGMENT then "frag" else "compute";
   state.debug_type_prefix = tprint("%_%", stage_prefix, source_name);
   state.functions = functions;
+  function_constants_ok, function_constants_diag := register_function_constants(*state, function_constants);
+  if !function_constants_ok return "", false, function_constants_diag;
   for extra_structs array_add(*state.extra_structs, it);
   array_add(*state.extra_structs, input);
   array_add(*state.extra_structs, output);
@@ -733,10 +742,12 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   if state.uses_write_3d {
     append(*sb, tprint("               OpName % \"write_3d_textures\"\n", id_text(state.id_write_3d_textures_var)));
   }
+  spv_append_function_constant_names(*sb, *state);
   for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
   for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
   append_interface_var_decorations(*sb, state.input_vars);
   append_interface_var_decorations(*sb, state.output_vars);
+  spv_append_function_constant_decorations(*sb, *state);
   spv_append_base_buffer_decorations(*sb, *state);
   spv_append_buffer_layout_decorations(*sb, *state);
   spv_append_buffer_binding_decorations(*sb, *state);
@@ -773,6 +784,8 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
 
   spv_append_common_type_decls(*sb, *state, "StorageBuffer");
   spv_append_numeric_constants(*sb, *state);
+  function_constant_defs_ok, function_constant_defs_diag := spv_append_function_constant_defs(*sb, *state);
+  if !function_constant_defs_ok return "", false, function_constant_defs_diag;
   spv_append_sample_2d_type_decls(*sb, *state);
   spv_append_sample_3d_type_decls(*sb, *state);
   spv_append_write_2d_type_decls(*sb, *state);
@@ -1027,6 +1040,8 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   state.stage = .COMPUTE;
   state.debug_type_prefix = tprint("compute_%", shader.source_name);
   state.functions = shader.functions;
+  function_constants_ok, function_constants_diag := register_function_constants(*state, shader.function_constants);
+  if !function_constants_ok return "", false, function_constants_diag;
   for shader.extra_structs array_add(*state.extra_structs, it);
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
@@ -1065,12 +1080,14 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   if state.uses_write_2d append(*sb, tprint("               OpName % \"write_2d_textures\"\n", id_text(state.id_write_2d_textures_var)));
   if state.uses_write_3d append(*sb, tprint("               OpName % \"write_3d_textures\"\n", id_text(state.id_write_3d_textures_var)));
+  spv_append_function_constant_names(*sb, *state);
   for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
   for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
   append(*sb, tprint("               OpDecorate % BuiltIn GlobalInvocationId\n", id_text(state.id_gl_global_invocation_id)));
   append(*sb, tprint("               OpDecorate % BuiltIn LocalInvocationId\n", id_text(state.id_gl_local_invocation_id)));
   append(*sb, tprint("               OpDecorate % BuiltIn WorkgroupId\n", id_text(state.id_gl_workgroup_id)));
   append(*sb, tprint("               OpDecorate % BuiltIn LocalInvocationIndex\n", id_text(state.id_gl_local_invocation_index)));
+  spv_append_function_constant_decorations(*sb, *state);
   spv_append_base_buffer_decorations(*sb, *state);
   spv_append_buffer_layout_decorations(*sb, *state);
   spv_append_buffer_binding_decorations(*sb, *state);
@@ -1086,6 +1103,8 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   spv_append_common_type_decls(*sb, *state, "StorageBuffer");
   // OpTypeArray length operands must be declared constants beforehand.
   spv_append_numeric_constants(*sb, *state);
+  function_constant_defs_ok, function_constant_defs_diag := spv_append_function_constant_defs(*sb, *state);
+  if !function_constant_defs_ok return "", false, function_constant_defs_diag;
   spv_append_write_2d_type_decls(*sb, *state);
   spv_append_write_3d_type_decls(*sb, *state);
   append(*sb, tprint("% = OpVariable % Input\n", id_text(state.id_gl_global_invocation_id), id_text(state.id_ptr_input_v3uint)));
