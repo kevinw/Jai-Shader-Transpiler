@@ -320,3 +320,121 @@ spv_append_numeric_constants :: (sb: *String_Builder, state: *IR_SPV_Gen_State) 
 spv_append_null_constants :: (sb: *String_Builder, state: *IR_SPV_Gen_State) {
   for state.const_null print_to_builder(sb, "% = OpConstantNull %\n", id_text(it.id), id_text(it.type_id));
 }
+
+spv_module_append_capabilities_binary :: (m: *SPV_Module, state: *IR_SPV_Gen_State, use_physical_storage := false) {
+  assert(m != null);
+  assert(state != null);
+  spv_module_append_words(m, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_SHADER);
+  if state_uses_int64(state) spv_module_append_words(m, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT64);
+  spv_module_append_words(m, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_FLOAT16);
+  if state.uses_write_2d || state.uses_write_3d {
+    spv_module_append_words(m, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT);
+  }
+  if use_physical_storage {
+    spv_module_append_words(m, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_PHYSICAL_STORAGE_BUFFER_ADDRESSES);
+  }
+}
+
+spv_module_append_common_type_decls_binary :: (m: *SPV_Module, state: *IR_SPV_Gen_State, storage_class: u32) {
+  assert(m != null);
+  assert(state != null);
+  section: SPV_Section = .TYPES_CONSTANTS_GLOBALS;
+  spv_module_append_words(m, section, SPV_OP_TYPE_VOID, cast(u32) state.id_void);
+  spv_module_append_words(m, section, SPV_OP_TYPE_FUNCTION, cast(u32) state.id_fn_void, cast(u32) state.id_void);
+  spv_module_append_words(m, section, SPV_OP_TYPE_INT, cast(u32) state.id_uint, 32, 0);
+  spv_module_append_words(m, section, SPV_OP_TYPE_INT, cast(u32) state.id_int, 32, 1);
+  spv_module_append_words(m, section, SPV_OP_TYPE_INT, cast(u32) state.id_int64, 64, 1);
+  spv_module_append_words(m, section, SPV_OP_TYPE_INT, cast(u32) state.id_uint64, 64, 0);
+  spv_module_append_words(m, section, SPV_OP_TYPE_FLOAT, cast(u32) state.id_half, 16);
+  spv_module_append_words(m, section, SPV_OP_TYPE_FLOAT, cast(u32) state.id_float, 32);
+  spv_module_append_words(m, section, SPV_OP_TYPE_VECTOR, cast(u32) state.id_float2, cast(u32) state.id_float, 2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_VECTOR, cast(u32) state.id_float3, cast(u32) state.id_float, 3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_VECTOR, cast(u32) state.id_float4, cast(u32) state.id_float, 4);
+  spv_module_append_words(m, section, SPV_OP_TYPE_MATRIX, cast(u32) state.id_float2x2, cast(u32) state.id_float2, 2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_BOOL, cast(u32) state.id_bool);
+  spv_module_append_words(m, section, SPV_OP_CONSTANT_TRUE, cast(u32) state.id_bool, cast(u32) state.id_bool_true);
+  spv_module_append_words(m, section, SPV_OP_CONSTANT_FALSE, cast(u32) state.id_bool, cast(u32) state.id_bool_false);
+  spv_module_append_words(m, section, SPV_OP_TYPE_VECTOR, cast(u32) state.id_v3uint, cast(u32) state.id_uint, 3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_VECTOR, cast(u32) state.id_v2uint, cast(u32) state.id_uint, 2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_input_v3uint, SPV_STORAGE_CLASS_INPUT, cast(u32) state.id_v3uint);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_input_uint, SPV_STORAGE_CLASS_INPUT, cast(u32) state.id_uint);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_input_half, SPV_STORAGE_CLASS_INPUT, cast(u32) state.id_half);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_input_float, SPV_STORAGE_CLASS_INPUT, cast(u32) state.id_float);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_input_float2, SPV_STORAGE_CLASS_INPUT, cast(u32) state.id_float2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_input_float3, SPV_STORAGE_CLASS_INPUT, cast(u32) state.id_float3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_input_float4, SPV_STORAGE_CLASS_INPUT, cast(u32) state.id_float4);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_float, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_float);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_float2, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_float2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_float3, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_float3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_float4, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_float4);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_int, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_int);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_uint, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_uint);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_int64, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_int64);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_uint64, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_uint64);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_half, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_half);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float2, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float3, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float4, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float4);
+  spv_module_append_words(m, section, SPV_OP_TYPE_RUNTIME_ARRAY, cast(u32) state.id_runtimearr_uint, cast(u32) state.id_uint);
+  spv_module_append_words(m, section, SPV_OP_TYPE_STRUCT, cast(u32) state.id_buffer_struct, cast(u32) state.id_runtimearr_uint);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_buffer_struct, storage_class, cast(u32) state.id_buffer_struct);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_int, storage_class, cast(u32) state.id_int);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_uint, storage_class, cast(u32) state.id_uint);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_int64, storage_class, cast(u32) state.id_int64);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_uint64, storage_class, cast(u32) state.id_uint64);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_half, storage_class, cast(u32) state.id_half);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float, storage_class, cast(u32) state.id_float);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float2, storage_class, cast(u32) state.id_float2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float3, storage_class, cast(u32) state.id_float3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float4, storage_class, cast(u32) state.id_float4);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_int, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_int);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_uint, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_uint);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_int64, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_int64);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_uint64, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_uint64);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_half, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_half);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float2, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float3, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float4, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float4);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float2x2, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float2x2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_bool, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_bool);
+}
+
+spv_module_append_null_constants_binary :: (m: *SPV_Module, state: *IR_SPV_Gen_State) {
+  assert(m != null);
+  assert(state != null);
+  for state.const_null {
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT_NULL, cast(u32) it.type_id, cast(u32) it.id);
+  }
+}
+
+spv_module_append_numeric_constants_binary :: (m: *SPV_Module, state: *IR_SPV_Gen_State) {
+  assert(m != null);
+  assert(state != null);
+  for state.const_u32 {
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_uint, cast(u32) it.id, it.value);
+  }
+  for state.const_i32 {
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_int, cast(u32) it.id, cast(u32) it.value);
+  }
+  for state.const_i64 {
+    bits := cast(u64) it.value;
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_int64, cast(u32) it.id, cast(u32) bits, cast(u32) (bits >> 32));
+  }
+  for state.const_u64 {
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_uint64, cast(u32) it.id, cast(u32) it.value, cast(u32) (it.value >> 32));
+  }
+  for state.const_f16 {
+    value, value_ok, remainder := string_to_float(it.text);
+    assert(value_ok && remainder.count == 0);
+    half := F16.float32_to_float16(value);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_half, cast(u32) it.id, cast(u32) cast(u16) half);
+  }
+  for state.const_f32 {
+    value, value_ok, remainder := string_to_float(it.text);
+    assert(value_ok && remainder.count == 0);
+    bits := (.*) cast(*u32) *value;
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_float, cast(u32) it.id, bits);
+  }
+}

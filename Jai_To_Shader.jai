@@ -1003,9 +1003,9 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
   if !target_ok
       return_err("SPIR-V backend: unsupported target for context.");
 
-  spvasm_source: string;
-  spvasm_ok := false;
-  spvasm_diag: IR_Diagnostic;
+  spv_binary: [] u8;
+  spv_ok := false;
+  spv_diag: IR_Diagnostic;
   entry_name: string;
   use_metal_argument_buffers := false;
 
@@ -1015,8 +1015,8 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
     if !lowered return false, lowered_diag;
     normalize_shader(*ir_vertex);
     entry_name = ir_vertex.entry_name;
-    vert_spvasm_res := to_spvasm(*ir_vertex);
-    spvasm_source, spvasm_ok, spvasm_diag = unpack_result(vert_spvasm_res);
+    vert_spv_res := to_spv_binary(*ir_vertex);
+    spv_binary, spv_ok, spv_diag = unpack_result(vert_spv_res);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
   } else if ctx.type == .Fragment {
     frag_lower_res := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
@@ -1024,9 +1024,8 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
     if !lowered return false, lowered_diag;
     normalize_shader(*ir_fragment);
     entry_name = ir_fragment.entry_name;
-    
-    frag_spvasm_res := to_spvasm(*ir_fragment);
-    spvasm_source, spvasm_ok, spvasm_diag = unpack_result(frag_spvasm_res);
+    frag_spv_res := to_spv_binary(*ir_fragment);
+    spv_binary, spv_ok, spv_diag = unpack_result(frag_spv_res);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
   } else {
     lower_compute_res := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
@@ -1034,8 +1033,8 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
     if !lowered return false, lowered_diag;
     normalize_shader(*ir_compute);
     entry_name = ir_compute.entry_name;
-    compute_spvasm_res := to_spvasm(*ir_compute);
-    spvasm_source, spvasm_ok, spvasm_diag = unpack_result(compute_spvasm_res);
+    compute_spv_res := to_spv_binary(*ir_compute);
+    spv_binary, spv_ok, spv_diag = unpack_result(compute_spv_res);
   }
 
   if entry_name.count == 0
@@ -1043,15 +1042,6 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
   source_entry_name := entry_name;
   if ctx.language == .METAL {
     if ctx.type == .Compute entry_name = tprint("%_ComputeMain", ctx.name);
-  }
-
-  if !spvasm_ok {
-    if spvasm_diag.message.count == 0 spvasm_diag.message = tprint("SPIR-V text backend: failed to emit SPIR-V assembly for '%'.", ctx.name);
-    if !spvasm_diag.has_location && ctx.main_fn && ctx.main_fn.header {
-      spvasm_diag.location = make_location(ctx.main_fn.header);
-      spvasm_diag.has_location = true;
-    }
-    return false, spvasm_diag;
   }
 
   build_dir := jst_ir_intermediate_dir();
@@ -1073,23 +1063,28 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
   job.ok = false;
   job.error_message = "";
 
-  if !write_entire_file(job.spvasm_path, spvasm_source) {
-    diag.message = tprint("SPIR-V backend: failed writing SPIR-V text file '%'.", job.spvasm_path);
+  if !spv_ok {
+    if spv_diag.message.count == 0 spv_diag.message = tprint("SPIR-V binary backend: failed to emit SPIR-V for '%'.", ctx.name);
+    if !spv_diag.has_location && ctx.main_fn && ctx.main_fn.header {
+      spv_diag.location = make_location(ctx.main_fn.header);
+      spv_diag.has_location = true;
+    }
+    return false, spv_diag;
+  }
+
+  if !write_entire_file(job.spv_path, spv_binary.data, spv_binary.count) {
+    diag.message = tprint("SPIR-V backend: failed writing SPIR-V binary '%'.", job.spv_path);
+    if spv_binary.data free(spv_binary.data);
     return false, diag;
   }
-  jst_mirror_to_legacy_intermediate_if_needed(job.spvasm_path);
+  if spv_binary.data free(spv_binary.data);
+  jst_mirror_to_legacy_intermediate_if_needed(job.spv_path);
 
   return true, diag;
 }
 
 run_spirv_external_single_job :: (job: *SPV_External_Single_Job) -> bool {
   assert(job != null);
-  if !assemble_spirv_text(job.spvasm_path, job.spv_path) {
-    job.error_message = copy_string(tprint("SPIR-V backend: failed assembling SPIR-V text for '%'. Source: %", job.ctx.name, job.spvasm_path));
-    return false;
-  }
-  jst_mirror_to_legacy_intermediate_if_needed(job.spv_path);
-
   if job.validate_before_opt {
     if !validate_spirv_binary(job.spv_path) {
       job.error_message = copy_string(tprint("SPIR-V backend: spirv-val failed for '%'. SPIR-V: %", job.ctx.name, job.spv_path));
@@ -1111,6 +1106,12 @@ run_spirv_external_single_job :: (job: *SPV_External_Single_Job) -> bool {
     job.error_message = copy_string(tprint("SPIR-V backend: spirv-val failed for '%'. SPIR-V: %", job.ctx.name, job.spv_opt_path));
     return false;
   }
+
+  if !disassemble_spirv_binary(job.spv_path, job.spvasm_path) {
+    job.error_message = copy_string(tprint("SPIR-V backend: spirv-dis failed for '%'. SPIR-V: %", job.ctx.name, job.spv_path));
+    return false;
+  }
+  jst_mirror_to_legacy_intermediate_if_needed(job.spvasm_path);
 
   if !emit_spirv_cross_target_source(job.spv_opt_path, job.entry_name, job.stage, job.target, job.output_path, job.use_metal_argument_buffers, source_entry_name=job.source_entry_name) {
     job.error_message = copy_string(tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", job.ctx.name, job.spv_opt_path));
@@ -1435,9 +1436,9 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  spvasm_source: string;
-  spvasm_ok := false;
-  spvasm_diag: IR_Diagnostic;
+  spv_binary: [] u8;
+  spv_ok := false;
+  spv_diag: IR_Diagnostic;
   entry_name: string;
   use_metal_argument_buffers := false;
   if ctx.type == .Vertex {
@@ -1448,7 +1449,8 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     if !normalized return "", "", false, normalize_diag;
     ctx.function_constants = ir_vertex.function_constants;
     entry_name = ir_vertex.entry_name;
-    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_vertex_to_spirv_text_branch(ir_vertex);
+    spv_res := to_spv_binary(*ir_vertex);
+    spv_binary, spv_ok, spv_diag = unpack_result(spv_res);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
   } else if ctx.type == .Fragment {
     ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
@@ -1458,7 +1460,8 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     if !normalized return "", "", false, normalize_diag;
     ctx.function_constants = ir_fragment.function_constants;
     entry_name = ir_fragment.entry_name;
-    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_fragment_to_spirv_text_branch(ir_fragment);
+    spv_res := to_spv_binary(*ir_fragment);
+    spv_binary, spv_ok, spv_diag = unpack_result(spv_res);
     use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
   } else {
     ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
@@ -1468,7 +1471,8 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     if !normalized return "", "", false, normalize_diag;
     ctx.function_constants = ir_compute.function_constants;
     entry_name = ir_compute.entry_name;
-    spvasm_source, spvasm_ok, spvasm_diag = emit_ir_compute_to_spirv_text_branch(ir_compute);
+    spv_res := to_spv_binary(*ir_compute);
+    spv_binary, spv_ok, spv_diag = unpack_result(spv_res);
   }
 
   target, target_ok := ir_target_from_context(ctx);
@@ -1499,28 +1503,29 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     return "", "", false, diag;
   }
 
-  if !spvasm_ok {
-    if spvasm_diag.message.count == 0 spvasm_diag.message = tprint("SPIR-V text backend: failed to emit SPIR-V assembly for '%'.", ctx.name);
-    if !spvasm_diag.has_location && ctx.main_fn && ctx.main_fn.header {
-      spvasm_diag.location = make_location(ctx.main_fn.header);
-      spvasm_diag.has_location = true;
-    }
-    return "", "", false, spvasm_diag;
-  }
   spvasm_path := tprint("%/%_%.spvasm", build_dir, ctx.name, stage_short);
-  if !write_entire_file(spvasm_path, spvasm_source) {
-    diag.message = tprint("SPIR-V backend: failed writing SPIR-V text file '%'.", spvasm_path);
-    return "", "", false, diag;
+  if !spv_ok {
+    if ctx.type == .Compute {
+      if spv_diag.message.count == 0 spv_diag.message = tprint("SPIR-V binary backend: failed to emit SPIR-V for '%'.", ctx.name);
+    } else {
+      if spv_diag.message.count == 0 spv_diag.message = tprint("SPIR-V binary backend: failed to translate SPIR-V assembly for '%'.", ctx.name);
+    }
+    if !spv_diag.has_location && ctx.main_fn && ctx.main_fn.header {
+      spv_diag.location = make_location(ctx.main_fn.header);
+      spv_diag.has_location = true;
+    }
+    return "", "", false, spv_diag;
   }
-  jst_mirror_to_legacy_intermediate_if_needed(spvasm_path);
-  if !assemble_spirv_text(spvasm_path, spv_path) {
-    diag.message = tprint("SPIR-V backend: failed assembling SPIR-V text for '%'. Source: %", ctx.name, spvasm_path);
+  if !write_entire_file(spv_path, spv_binary.data, spv_binary.count) {
+    diag.message = tprint("SPIR-V backend: failed writing SPIR-V binary '%'.", spv_path);
+    if spv_binary.data free(spv_binary.data);
     if ctx.main_fn && ctx.main_fn.header {
       diag.location = make_location(ctx.main_fn.header);
       diag.has_location = true;
     }
     return "", "", false, diag;
   }
+  if spv_binary.data free(spv_binary.data);
   jst_mirror_to_legacy_intermediate_if_needed(spv_path);
 
   spv_for_target := spv_path;
@@ -1543,6 +1548,15 @@ ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated
     }
     return "", "", false, diag;
   }
+  if !disassemble_spirv_binary(spv_path, spvasm_path) {
+    diag.message = tprint("SPIR-V backend: spirv-dis failed for '%'. SPIR-V: %", ctx.name, spv_path);
+    if ctx.main_fn && ctx.main_fn.header {
+      diag.location = make_location(ctx.main_fn.header);
+      diag.has_location = true;
+    }
+    return "", "", false, diag;
+  }
+  jst_mirror_to_legacy_intermediate_if_needed(spvasm_path);
 
   if !emit_spirv_cross_target_source(spv_for_target, entry_name, ctx.type, target, output_path, use_metal_argument_buffers, source_entry_name=entry_name) {
     diag.message = tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", ctx.name, spv_for_target);
@@ -1748,23 +1762,23 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
   
   
   // TODO: remove this
-  emit_ir_graphics_pair_to_spirv_text_branch :: (vertex: IR_Vertex_Shader, fragment: IR_Fragment_Shader) -> (vertex_spvasm: string, fragment_spvasm: string, ok: bool, diag: IR_Diagnostic) {
+  emit_ir_graphics_pair_to_spirv_binary_branch :: (vertex: IR_Vertex_Shader, fragment: IR_Fragment_Shader) -> (vertex_spv: []u8, fragment_spv: []u8, ok: bool, diag: IR_Diagnostic) {
     diag: IR_Diagnostic;
     assert(vertex.entry_name.count != 0);
     assert(fragment.entry_name.count != 0);
     
-    vert_spvasm_res := to_spvasm(*vertex);
-    vertex_spv, vertex_ok, vertex_diag := unpack_result(vert_spvasm_res);
-    if !vertex_ok return "", "", false, vertex_diag;
+    vert_spv_res := to_spv_binary(*vertex);
+    vertex_spv, vertex_ok, vertex_diag := unpack_result(vert_spv_res);
+    if !vertex_ok return .[], .[], false, vertex_diag;
     
-    frag_spvasm_res := to_spvasm(*fragment);
-    fragment_spv, fragment_ok, fragment_diag := unpack_result(frag_spvasm_res);
-    if !fragment_ok return "", "", false, fragment_diag;
+    frag_spv_res := to_spv_binary(*fragment);
+    fragment_spv, fragment_ok, fragment_diag := unpack_result(frag_spv_res);
+    if !fragment_ok return .[], .[], false, fragment_diag;
     
     return vertex_spv, fragment_spv, true, diag;
   }
 
-  vertex_spvasm, fragment_spvasm, pair_spvasm_ok, pair_spvasm_diag := emit_ir_graphics_pair_to_spirv_text_branch(ir_vertex, ir_fragment);
+  vertex_spv_binary, fragment_spv_binary, pair_spvasm_ok, pair_spvasm_diag := emit_ir_graphics_pair_to_spirv_binary_branch(ir_vertex, ir_fragment);
   if !pair_spvasm_ok {
     if !pair_spvasm_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
       pair_spvasm_diag.location = make_location(pair_ctx.vertex_fn.header);
@@ -1785,26 +1799,18 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
   fragment_output_path := tprint("%/%_frag.metal", build_dir, pair_ctx.name);
   metal_vertex_entry_name := tprint("%_VertexMain", pair_ctx.name);
   metal_fragment_entry_name := tprint("%_FragmentMain", pair_ctx.name);
-  if !write_entire_file(vertex_spvasm_path, vertex_spvasm) || !write_entire_file(fragment_spvasm_path, fragment_spvasm) {
-    diag.message = "SPIR-V backend: failed writing pair SPIR-V text files.";
+  if !write_entire_file(vertex_spv_path, vertex_spv_binary.data, vertex_spv_binary.count) || !write_entire_file(fragment_spv_path, fragment_spv_binary.data, fragment_spv_binary.count) {
+    diag.message = "SPIR-V backend: failed writing pair SPIR-V binaries.";
+    if vertex_spv_binary.data free(vertex_spv_binary.data);
+    if fragment_spv_binary.data free(fragment_spv_binary.data);
     return "", false, diag;
   }
-  jst_mirror_to_legacy_intermediate_if_needed(vertex_spvasm_path);
-  jst_mirror_to_legacy_intermediate_if_needed(fragment_spvasm_path);
-  if !assemble_spirv_text(vertex_spvasm_path, vertex_spv_path) || !assemble_spirv_text(fragment_spvasm_path, fragment_spv_path) {
-    diag.message = "SPIR-V backend: failed assembling pair SPIR-V text.";
-    return "", false, diag;
-  }
+  if vertex_spv_binary.data free(vertex_spv_binary.data);
+  if fragment_spv_binary.data free(fragment_spv_binary.data);
   jst_mirror_to_legacy_intermediate_if_needed(vertex_spv_path);
   jst_mirror_to_legacy_intermediate_if_needed(fragment_spv_path);
   if !link_spirv_binaries(.[vertex_spv_path, fragment_spv_path], pair_spv_path) {
-    vertex_model := spv_memory_model_from_text(vertex_spvasm);
-    fragment_model := spv_memory_model_from_text(fragment_spvasm);
-    if vertex_model.count != 0 || fragment_model.count != 0 {
-      diag.message = tprint("SPIR-V backend: spirv-link failed for pair module (vertex model='%'; fragment model='%').", vertex_model, fragment_model);
-    } else {
-      diag.message = "SPIR-V backend: spirv-link failed for pair module.";
-    }
+    diag.message = "SPIR-V backend: spirv-link failed for pair module.";
     return "", false, diag;
   }
   jst_mirror_to_legacy_intermediate_if_needed(pair_spv_path);

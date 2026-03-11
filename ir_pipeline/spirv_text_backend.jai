@@ -23,6 +23,24 @@ to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) {
     }
 } @jdll_export
 
+to_spv_binary :: (shader: *IR_Shader) -> IR_Result([] u8) {
+    validate_ok, validate_diag := ir_validate_shader_invariants(shader);
+    if !validate_ok return {.[0], false, validate_diag};
+    if #complete shader.kind == {
+    case .Vertex;
+        using cast(*IR_Vertex_Shader)shader;
+        spv, ok, diag := emit_graphics_generic_binary(.VERTEX, source_name, input, output, args, *body, functions, function_constants, extra_structs);
+        return {spv, ok, diag};
+    case .Fragment;
+        using cast(*IR_Fragment_Shader)shader;
+        spv, ok, diag := emit_graphics_generic_binary(.FRAGMENT, source_name, input, output, args, *body, functions, function_constants, extra_structs);
+        return {spv, ok, diag};
+    case .Compute;
+        spv, ok, diag := emit_compute_generic_uint_buffer_binary(cast(*IR_Compute_Shader)shader);
+        return {spv, ok, diag};
+    }
+} @jdll_export
+
 
 // -----------------------------------------------------------------------------
 // Parsing / Text Helpers
@@ -635,6 +653,8 @@ IR_SPV_Gen_State :: struct {
   extra_structs: [..] IR_Struct;
   local_var_lines: String_Builder;
   op_lines: String_Builder;
+  local_var_insts: [..] SPV_Inst;
+  op_insts: [..] SPV_Inst;
   last_op_is_terminator: bool;
   debug_names: [..] IR_SPV_Gen_Debug_Name;
   debug_member_names: [..] IR_SPV_Gen_Debug_Member_Name;
@@ -762,6 +782,8 @@ IR_SPV_Gen_State :: struct {
   };
 
   bound_value: u32;
+  emit_text: bool;
+  record_binary: bool;
 }
 
 // -----------------------------------------------------------------------------
@@ -794,6 +816,7 @@ id_text :: (id: s64) -> string {
 }
 
 new_id :: (s: *IR_SPV_Gen_State) -> s64 {
+  if s.next_id < 1 s.next_id = 1;
   id := s.next_id;
   s.next_id += 1;
   return id;
@@ -908,6 +931,7 @@ register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Fu
       case .FLOAT3; component_count = 3;
       case .FLOAT4; component_count = 4;
     }
+    id := new_id(s);
     component_ids: [4] s64;
     if component_count > 1 {
       for i: 0..component_count-1 component_ids[i] = new_id(s);
@@ -918,7 +942,7 @@ register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Fu
       type = type_kind,
       default_value_text = it.default_value_text,
       spec_id = it.spec_id,
-      id = new_id(s),
+      id = id,
       component_count = component_count,
       component_ids = component_ids,
     });
@@ -994,40 +1018,316 @@ spv_append_function_constant_defs :: (sb: *String_Builder, s: *IR_SPV_Gen_State)
   return true, {};
 }
 
+spv_module_append_function_constant_defs_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_State) -> (ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return false, make_diag(msg, ..args); }
+
+  for s.function_constants {
+    if it.type == {
+    case .BOOL;
+      if it.default_value_text == "true" {
+        spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_TRUE, cast(u32) s.id_bool, cast(u32) it.id);
+      } else if it.default_value_text == "false" {
+        spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_FALSE, cast(u32) s.id_bool, cast(u32) it.id);
+      } else {
+        return_err("function constant '%' expected bool literal, got '%'.", it.name, it.default_value_text);
+      }
+    case .U32;
+      value, value_ok := parse_u32_literal_text(it.default_value_text);
+      if !value_ok return_err("function constant '%' expected u32 literal, got '%'.", it.name, it.default_value_text);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_uint, cast(u32) it.id, value);
+    case .S32;
+      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      if !value_ok return_err("function constant '%' expected s32 literal, got '%'.", it.name, it.default_value_text);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int, cast(u32) it.id, cast(u32) cast(s32) value64);
+    case .FLOAT;
+      value_text, value_ok := parse_f32_literal_text(it.default_value_text);
+      if !value_ok return_err("function constant '%' expected float literal, got '%'.", it.name, it.default_value_text);
+      value, parsed_ok, remainder := string_to_float(value_text);
+      if !parsed_ok || remainder.count != 0 return_err("function constant '%' expected float literal, got '%'.", it.name, it.default_value_text);
+      bits := (.*) cast(*u32)*value;
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_float, cast(u32) it.id, bits);
+    case .FLOAT2;
+      component_texts, components_ok := spv_parse_function_constant_float_vector_literal(it.default_value_text, 2);
+      if !components_ok return_err("function constant '%' expected float2 literal, got '%'.", it.name, it.default_value_text);
+      for i: 0..1 {
+        value, parsed_ok, remainder := string_to_float(component_texts[i]);
+        if !parsed_ok || remainder.count != 0 return_err("function constant '%' expected float2 literal, got '%'.", it.name, it.default_value_text);
+        bits := (.*) cast(*u32)*value;
+        spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_float, cast(u32) it.component_ids[i], bits);
+      }
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_COMPOSITE, cast(u32) s.id_float2, cast(u32) it.id, cast(u32) it.component_ids[0], cast(u32) it.component_ids[1]);
+    case .FLOAT3;
+      component_texts, components_ok := spv_parse_function_constant_float_vector_literal(it.default_value_text, 3);
+      if !components_ok return_err("function constant '%' expected float3 literal, got '%'.", it.name, it.default_value_text);
+      for i: 0..2 {
+        value, parsed_ok, remainder := string_to_float(component_texts[i]);
+        if !parsed_ok || remainder.count != 0 return_err("function constant '%' expected float3 literal, got '%'.", it.name, it.default_value_text);
+        bits := (.*) cast(*u32)*value;
+        spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_float, cast(u32) it.component_ids[i], bits);
+      }
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_COMPOSITE, cast(u32) s.id_float3, cast(u32) it.id, cast(u32) it.component_ids[0], cast(u32) it.component_ids[1], cast(u32) it.component_ids[2]);
+    case .FLOAT4;
+      component_texts, components_ok := spv_parse_function_constant_float_vector_literal(it.default_value_text, 4);
+      if !components_ok return_err("function constant '%' expected float4 literal, got '%'.", it.name, it.default_value_text);
+      for i: 0..3 {
+        value, parsed_ok, remainder := string_to_float(component_texts[i]);
+        if !parsed_ok || remainder.count != 0 return_err("function constant '%' expected float4 literal, got '%'.", it.name, it.default_value_text);
+        bits := (.*) cast(*u32)*value;
+        spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_float, cast(u32) it.component_ids[i], bits);
+      }
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_COMPOSITE, cast(u32) s.id_float4, cast(u32) it.id, cast(u32) it.component_ids[0], cast(u32) it.component_ids[1], cast(u32) it.component_ids[2], cast(u32) it.component_ids[3]);
+    }
+  }
+
+  return true, {};
+}
+
 // Emits forms like "OpStore id_1 id2"
 add_op :: (using s: *IR_SPV_Gen_State, name: string, args: ..s64, is_terminator := false) {
-  append(*op_lines, name);
-  if args.count > 0 append(*op_lines, " ");
-  for args {
-    append(*op_lines, id_text(it));
-    if it_index != args.count - 1 append(*op_lines, " ");
+  if record_binary {
+    opcode, opcode_ok := spv_lookup_opcode(name);
+    if opcode_ok {
+      words: [..] u32;
+      for args array_add(*words, cast(u32) it);
+      array_add(*op_insts, .{opcode = opcode, words = words});
+    } else {
+      assert(false, "SPIR-V binary backend: unsupported op form '%'. Add a typed emitter for this opcode.", name);
+    }
   }
-  append(*s.op_lines, "\n");
+  if emit_text {
+    append(*op_lines, name);
+    if args.count > 0 append(*op_lines, " ");
+    for args {
+      append(*op_lines, id_text(it));
+      if it_index != args.count - 1 append(*op_lines, " ");
+    }
+    append(*s.op_lines, "\n");
+  }
   s.last_op_is_terminator = is_terminator;
 }
 
 // Emits forms like "dest = OpLoad id_1"
 add_op :: (using s: *IR_SPV_Gen_State, dest: s64, name: string, args: ..s64, is_terminator := false) -> s64 {
-  append_many(*op_lines, id_text(dest), " = ", name);
-  if args.count > 0 append(*op_lines, " ");
-  for args {
-    append(*op_lines, id_text(it));
-    if it_index != args.count - 1 append(*op_lines, " ");
+  if record_binary {
+    opcode, opcode_ok := spv_lookup_opcode(name);
+    if opcode_ok {
+      words: [..] u32;
+      if args.count == 0 {
+        array_add(*words, cast(u32) dest);
+      } else {
+        array_add(*words, cast(u32) args[0], cast(u32) dest);
+        if args.count > 1 {
+          for i: 1..args.count-1 array_add(*words, cast(u32) args[i]);
+        }
+      }
+      array_add(*op_insts, .{opcode = opcode, words = words});
+    } else {
+      assert(false, "SPIR-V binary backend: unsupported result op form '%'. Add a typed emitter for this opcode.", name);
+    }
   }
-  append(*op_lines, "\n");
+  if emit_text {
+    append_many(*op_lines, id_text(dest), " = ", name);
+    if args.count > 0 append(*op_lines, " ");
+    for args {
+      append(*op_lines, id_text(it));
+      if it_index != args.count - 1 append(*op_lines, " ");
+    }
+    append(*op_lines, "\n");
+  }
   s.last_op_is_terminator = is_terminator;
   return dest;
 }
 
 add_op :: (s: *IR_SPV_Gen_State, line: string, is_terminator := false) {
-  append(*s.op_lines, line);
-  append(*s.op_lines, "\n");
+  if s.record_binary {
+    assert(false, "SPIR-V binary backend: text op emission is no longer supported. Offending line: %", line);
+  }
+  if s.emit_text {
+    append(*s.op_lines, line);
+    append(*s.op_lines, "\n");
+  }
   s.last_op_is_terminator = is_terminator;
 }
 
 add_local_decl :: (s: *IR_SPV_Gen_State, line: string, args: ..Any) {
-  print_to_builder(*s.local_var_lines, line, ..args);
-  append(*s.local_var_lines, "\n");
+  built: string;
+  if s.emit_text || s.record_binary {
+    built = tprint(line, ..args);
+  }
+  if s.record_binary {
+    assert(false, "SPIR-V binary backend: text local declaration emission is no longer supported. Offending line: %", built);
+  }
+  if s.emit_text {
+    append(*s.local_var_lines, built);
+    append(*s.local_var_lines, "\n");
+  }
+}
+
+spv_emit_variable_decl :: (s: *IR_SPV_Gen_State, var_id: s64, ptr_type_id: s64, storage_class: u32, initializer_id: s64 = 0) {
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) ptr_type_id, cast(u32) var_id, storage_class);
+    if initializer_id != 0 array_add(*words, cast(u32) initializer_id);
+    array_add(*s.local_var_insts, .{opcode = SPV_OP_VARIABLE, words = words});
+  }
+  if s.emit_text {
+    storage_name := ifx storage_class == SPV_STORAGE_CLASS_FUNCTION then "Function"
+                    else ifx storage_class == SPV_STORAGE_CLASS_INPUT then "Input"
+                    else ifx storage_class == SPV_STORAGE_CLASS_OUTPUT then "Output"
+                    else ifx storage_class == SPV_STORAGE_CLASS_UNIFORM then "Uniform"
+                    else ifx storage_class == SPV_STORAGE_CLASS_STORAGE_BUFFER then "StorageBuffer"
+                    else ifx storage_class == SPV_STORAGE_CLASS_UNIFORM_CONSTANT then "UniformConstant"
+                    else ifx storage_class == SPV_STORAGE_CLASS_PHYSICAL_STORAGE_BUFFER then "PhysicalStorageBuffer"
+                    else "Function";
+    if initializer_id != 0 {
+      append(*s.local_var_lines, tprint("% = OpVariable % % %\n", id_text(var_id), id_text(ptr_type_id), storage_name, id_text(initializer_id)));
+    } else {
+      append(*s.local_var_lines, tprint("% = OpVariable % %\n", id_text(var_id), id_text(ptr_type_id), storage_name));
+    }
+  }
+}
+
+spv_emit_load :: (s: *IR_SPV_Gen_State, result_id: s64, type_id: s64, ptr_id: s64, alignment: u32 = 0) {
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) type_id, cast(u32) result_id, cast(u32) ptr_id);
+    if alignment != 0 array_add(*words, SPV_MEMORY_ACCESS_ALIGNED_MASK, alignment);
+    array_add(*s.op_insts, .{opcode = SPV_OP_LOAD, words = words});
+  }
+  if s.emit_text {
+    if alignment != 0 append(*s.op_lines, tprint("         % = OpLoad % % Aligned %\n", id_text(result_id), id_text(type_id), id_text(ptr_id), alignment));
+    else append(*s.op_lines, tprint("         % = OpLoad % %\n", id_text(result_id), id_text(type_id), id_text(ptr_id)));
+  }
+  s.last_op_is_terminator = false;
+}
+
+spv_emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, alignment: u32 = 0) {
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) ptr_id, cast(u32) value_id);
+    if alignment != 0 array_add(*words, SPV_MEMORY_ACCESS_ALIGNED_MASK, alignment);
+    array_add(*s.op_insts, .{opcode = SPV_OP_STORE, words = words});
+  }
+  if s.emit_text {
+    if alignment != 0 append(*s.op_lines, tprint("               OpStore % % Aligned %\n", id_text(ptr_id), id_text(value_id), alignment));
+    else append(*s.op_lines, tprint("               OpStore % %\n", id_text(ptr_id), id_text(value_id)));
+  }
+  s.last_op_is_terminator = false;
+}
+
+spv_emit_access_chain :: (s: *IR_SPV_Gen_State, result_id: s64, result_type_id: s64, base_id: s64, indices: []s64) {
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) result_type_id, cast(u32) result_id, cast(u32) base_id);
+    for indices array_add(*words, cast(u32) it);
+    array_add(*s.op_insts, .{opcode = SPV_OP_ACCESS_CHAIN, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("         % = OpAccessChain % %", id_text(result_id), id_text(result_type_id), id_text(base_id)));
+    for indices append(*s.op_lines, " ", id_text(it));
+    append(*s.op_lines, "\n");
+  }
+  s.last_op_is_terminator = false;
+}
+
+spv_emit_selection_merge :: (s: *IR_SPV_Gen_State, merge_label: s64) {
+  add_op(s, "OpSelectionMerge", merge_label, 0);
+}
+
+spv_emit_loop_merge :: (s: *IR_SPV_Gen_State, merge_label: s64, continue_label: s64) {
+  add_op(s, "OpLoopMerge", merge_label, continue_label, 0);
+}
+
+spv_emit_terminator0 :: (s: *IR_SPV_Gen_State, opcode_name: string) {
+  if s.record_binary {
+    opcode, opcode_ok := spv_lookup_opcode(opcode_name);
+    assert(opcode_ok, "unsupported zero-operand terminator '%'", opcode_name);
+    array_add(*s.op_insts, .{opcode = opcode});
+  }
+  if s.emit_text {
+    append(*s.op_lines, opcode_name, "\n");
+  }
+  s.last_op_is_terminator = true;
+}
+
+spv_emit_switch :: (s: *IR_SPV_Gen_State, selector_id: s64, default_label: s64, case_literals: []u32, case_labels: []s64) {
+  assert(case_literals.count == case_labels.count);
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) selector_id, cast(u32) default_label);
+    for case_literals {
+      array_add(*words, it, cast(u32) case_labels[it_index]);
+    }
+    array_add(*s.op_insts, .{opcode = SPV_OP_SWITCH, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("               OpSwitch % %", id_text(selector_id), id_text(default_label)));
+    for case_literals append(*s.op_lines, tprint(" % %", it, id_text(case_labels[it_index])));
+    append(*s.op_lines, "\n");
+  }
+  s.last_op_is_terminator = true;
+}
+
+spv_emit_composite_extract :: (s: *IR_SPV_Gen_State, result_id: s64, result_type_id: s64, composite_id: s64, indexes: []u32) {
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) result_type_id, cast(u32) result_id, cast(u32) composite_id);
+    for indexes array_add(*words, it);
+    array_add(*s.op_insts, .{opcode = SPV_OP_COMPOSITE_EXTRACT, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("         % = OpCompositeExtract % %", id_text(result_id), id_text(result_type_id), id_text(composite_id)));
+    for indexes append(*s.op_lines, " ", it);
+    append(*s.op_lines, "\n");
+  }
+  s.last_op_is_terminator = false;
+}
+
+spv_emit_composite_construct :: (s: *IR_SPV_Gen_State, result_id: s64, result_type_id: s64, constituents: []s64) {
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) result_type_id, cast(u32) result_id);
+    for constituents array_add(*words, cast(u32) it);
+    array_add(*s.op_insts, .{opcode = SPV_OP_COMPOSITE_CONSTRUCT, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("         % = OpCompositeConstruct %", id_text(result_id), id_text(result_type_id)));
+    for constituents append(*s.op_lines, " ", id_text(it));
+    append(*s.op_lines, "\n");
+  }
+  s.last_op_is_terminator = false;
+}
+
+spv_emit_vector_shuffle :: (s: *IR_SPV_Gen_State, result_id: s64, result_type_id: s64, a_id: s64, b_id: s64, components: []u32) {
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) result_type_id, cast(u32) result_id, cast(u32) a_id, cast(u32) b_id);
+    for components array_add(*words, it);
+    array_add(*s.op_insts, .{opcode = SPV_OP_VECTOR_SHUFFLE, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("         % = OpVectorShuffle % % %", id_text(result_id), id_text(result_type_id), id_text(a_id), id_text(b_id)));
+    for components append(*s.op_lines, " ", it);
+    append(*s.op_lines, "\n");
+  }
+  s.last_op_is_terminator = false;
+}
+
+spv_emit_extinst :: (s: *IR_SPV_Gen_State, result_id: s64, result_type_id: s64, op_name: string, operands: []s64) {
+  extinst, extinst_ok := spv_lookup_glsl_extinst(op_name);
+  assert(extinst_ok);
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) result_type_id, cast(u32) result_id, cast(u32) s.id_extinst, extinst);
+    for operands array_add(*words, cast(u32) it);
+    array_add(*s.op_insts, .{opcode = SPV_OP_EXT_INST, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("         % = OpExtInst % % %", id_text(result_id), id_text(result_type_id), id_text(s.id_extinst), op_name));
+    for operands append(*s.op_lines, " ", id_text(it));
+    append(*s.op_lines, "\n");
+  }
+  s.last_op_is_terminator = false;
 }
 
 sanitize_debug_name :: (name: string) -> string {
@@ -1176,11 +1476,7 @@ spv_extract_vector_member :: (s: *IR_SPV_Gen_State, vec_id: s64, vec_type: IR_SP
   if access == .SWIZZLE_XY {
     if vec_type == .FLOAT2 return vec_id, .FLOAT2, true, {};
     swz := new_id(s);
-    add_op(s, tprint("         % = OpVectorShuffle % % % 0 1",
-                     id_text(swz),
-                     id_text(s.id_float2),
-                     id_text(vec_id),
-                     id_text(vec_id)));
+    spv_emit_vector_shuffle(s, swz, s.id_float2, vec_id, vec_id, .[0, 1]);
     return swz, .FLOAT2, true, {};
   }
 
@@ -1188,11 +1484,7 @@ spv_extract_vector_member :: (s: *IR_SPV_Gen_State, vec_id: s64, vec_type: IR_SP
     if vec_type == .FLOAT3 return vec_id, .FLOAT3, true, {};
     if vec_type != .FLOAT4 return_err("swizzle '%': expected float3/float4, got %.", field_text, vec_type);
     swz := new_id(s);
-    add_op(s, tprint("         % = OpVectorShuffle % % % 0 1 2",
-                     id_text(swz),
-                     id_text(s.id_float3),
-                     id_text(vec_id),
-                     id_text(vec_id)));
+    spv_emit_vector_shuffle(s, swz, s.id_float3, vec_id, vec_id, .[0, 1, 2]);
     return swz, .FLOAT3, true, {};
   }
 
@@ -1200,11 +1492,7 @@ spv_extract_vector_member :: (s: *IR_SPV_Gen_State, vec_id: s64, vec_type: IR_SP
   if !comp_ok return_err("unsupported vector member access '%'.", field_text);
   if !spv_vector_component_in_range(vec_type, comp_index) return_err("component '%' out of range for type %.", field_text, vec_type);
   scalar_value := new_id(s);
-  add_op(s, tprint("         % = OpCompositeExtract % % %",
-                   id_text(scalar_value),
-                   id_text(s.id_float),
-                   id_text(vec_id),
-                   comp_index));
+  spv_emit_composite_extract(s, scalar_value, s.id_float, vec_id, .[cast(u32) comp_index]);
   return scalar_value, .FLOAT, true, {};
 }
 
@@ -1723,23 +2011,21 @@ physical_aligned_suffix :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> stri
 }
 
 emit_load :: (s: *IR_SPV_Gen_State, result_id: s64, type_id: s64, ptr_id: s64, kind: IR_SPV_Gen_Type, needs_physical_align := false) {
-  suffix := "";
-  if needs_physical_align suffix = physical_aligned_suffix(s, kind);
-  if suffix.count == 0 {
-    add_op(s, result_id, "OpLoad", type_id, ptr_id);
-  } else {
-    add_op(s, tprint("         % = OpLoad % %%", id_text(result_id), id_text(type_id), id_text(ptr_id), suffix));
+  align: u32 = 0;
+  if needs_physical_align {
+    align = cast(u32) host_blit_align_for_kind(kind);
+    if align == 0 align = 4;
   }
+  spv_emit_load(s, result_id, type_id, ptr_id, align);
 }
 
 emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, kind: IR_SPV_Gen_Type, needs_physical_align := false) {
-  suffix := "";
-  if needs_physical_align suffix = physical_aligned_suffix(s, kind);
-  if suffix.count == 0 {
-    add_op(s, "OpStore", ptr_id, value_id);
-  } else {
-    add_op(s, tprint("               OpStore % %%", id_text(ptr_id), id_text(value_id), suffix));
+  align: u32 = 0;
+  if needs_physical_align {
+    align = cast(u32) host_blit_align_for_kind(kind);
+    if align == 0 align = 4;
   }
+  spv_emit_store(s, ptr_id, value_id, align);
 }
 
 spv_access_chain1 :: inline (s: *IR_SPV_Gen_State, ptr_type_id: s64, base_id: s64, index0_id: s64) -> s64 {
@@ -1756,15 +2042,33 @@ spv_load :: inline (s: *IR_SPV_Gen_State, type_id: s64, ptr_id: s64) -> s64 {
 
 spv_extinst1 :: inline (s: *IR_SPV_Gen_State, type_id: s64, op_name: string, a_id: s64) -> s64 {
   out := new_id(s);
-  add_op(s, tprint("         % = OpExtInst % % % %",
-                   id_text(out), id_text(type_id), id_text(s.id_extinst), op_name, id_text(a_id)));
+  if s.record_binary {
+    extinst, extinst_ok := spv_lookup_glsl_extinst(op_name);
+    assert(extinst_ok);
+    words: [..] u32;
+    array_add(*words, cast(u32) type_id, cast(u32) out, cast(u32) s.id_extinst, extinst, cast(u32) a_id);
+    array_add(*s.op_insts, .{opcode = SPV_OP_EXT_INST, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("         % = OpExtInst % % % %\n",
+                               id_text(out), id_text(type_id), id_text(s.id_extinst), op_name, id_text(a_id)));
+  }
   return out;
 }
 
 spv_extinst2 :: inline (s: *IR_SPV_Gen_State, type_id: s64, op_name: string, a_id: s64, b_id: s64) -> s64 {
   out := new_id(s);
-  add_op(s, tprint("         % = OpExtInst % % % % %",
-                   id_text(out), id_text(type_id), id_text(s.id_extinst), op_name, id_text(a_id), id_text(b_id)));
+  if s.record_binary {
+    extinst, extinst_ok := spv_lookup_glsl_extinst(op_name);
+    assert(extinst_ok);
+    words: [..] u32;
+    array_add(*words, cast(u32) type_id, cast(u32) out, cast(u32) s.id_extinst, extinst, cast(u32) a_id, cast(u32) b_id);
+    array_add(*s.op_insts, .{opcode = SPV_OP_EXT_INST, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("         % = OpExtInst % % % % %\n",
+                               id_text(out), id_text(type_id), id_text(s.id_extinst), op_name, id_text(a_id), id_text(b_id)));
+  }
   return out;
 }
 
@@ -1989,7 +2293,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
     }
     field_ptr := new_id(s);
     field_zero := get_null_const(s, type_id_from_kind(s, field_type));
-    add_local_decl(s, "% = OpVariable % Function %", id_text(field_ptr), id_text(field_ptr_type), id_text(field_zero));
+    spv_emit_variable_decl(s, field_ptr, field_ptr_type, SPV_STORAGE_CLASS_FUNCTION, field_zero);
     add_debug_name(s, field_ptr, tprint("%.%", name, it.name));
     array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=field_type});
   }
@@ -2061,11 +2365,7 @@ store_value_in_local_struct_alias :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Loc
       return false, make_diag("struct '%' is not a flat float alias.", dst.type_name);
     }
     component_value := new_id(s);
-    add_op(s, tprint("         % = OpCompositeExtract % % %",
-                     id_text(component_value),
-                     id_text(s.id_float),
-                     id_text(value_id),
-                     it_index));
+    spv_emit_composite_extract(s, component_value, s.id_float, value_id, .[cast(u32) it_index]);
     add_op(s, "OpStore", it.ptr_id, component_value);
   }
   _ = vector_type_id;
@@ -2106,30 +2406,15 @@ pack_local_struct_alias_to_value :: (s: *IR_SPV_Gen_State, src: *IR_SPV_Gen_Loca
 
   out := new_id(s);
   if dst_type == .FLOAT2 {
-    add_op(s, tprint("         % = OpCompositeConstruct % % %",
-                     id_text(out),
-                     id_text(vector_type_id),
-                     id_text(component_values[0]),
-                     id_text(component_values[1])));
+    spv_emit_composite_construct(s, out, vector_type_id, .[component_values[0], component_values[1]]);
     return out, dst_type, true, {};
   }
   if dst_type == .FLOAT3 {
-    add_op(s, tprint("         % = OpCompositeConstruct % % % %",
-                     id_text(out),
-                     id_text(vector_type_id),
-                     id_text(component_values[0]),
-                     id_text(component_values[1]),
-                     id_text(component_values[2])));
+    spv_emit_composite_construct(s, out, vector_type_id, .[component_values[0], component_values[1], component_values[2]]);
     return out, dst_type, true, {};
   }
   if dst_type == .FLOAT4 {
-    add_op(s, tprint("         % = OpCompositeConstruct % % % % %",
-                     id_text(out),
-                     id_text(vector_type_id),
-                     id_text(component_values[0]),
-                     id_text(component_values[1]),
-                     id_text(component_values[2]),
-                     id_text(component_values[3])));
+    spv_emit_composite_construct(s, out, vector_type_id, .[component_values[0], component_values[1], component_values[2], component_values[3]]);
     return out, dst_type, true, {};
   }
 
@@ -2443,11 +2728,7 @@ emit_physical_root_pod_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, memb
       }
       next_ptr_type_id := ps_get_storage_struct_ptr_type(s, *s.physical_ps_infos, *s.physical_storage_struct_ptr_types, field.type.struct_name);
       next_ptr_access := new_id(s);
-      add_op(s, tprint("         % = OpAccessChain % % %",
-                        id_text(next_ptr_access),
-                        id_text(next_ptr_type_id),
-                        id_text(current_ptr),
-                        id_text(field_index_id)));
+      spv_emit_access_chain(s, next_ptr_access, next_ptr_type_id, current_ptr, .[field_index_id]);
       current_ptr = next_ptr_access;
       current_struct_name = field.type.struct_name;
       continue;
@@ -2461,11 +2742,7 @@ emit_physical_root_pod_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, memb
     field_ptr_type_id := storage_ptr_type_id_from_kind(s, field_type);
     if field_ptr_type_id == 0 return_err("unsupported physical-root POD field type for '%.%'.", current_struct_name, field.name);
     ptr := new_id(s);
-    add_op(s, tprint("         % = OpAccessChain % % %",
-                      id_text(ptr),
-                      id_text(field_ptr_type_id),
-                      id_text(current_ptr),
-                      id_text(field_index_id)));
+    spv_emit_access_chain(s, ptr, field_ptr_type_id, current_ptr, .[field_index_id]);
     return ptr, field_type, true, diag;
   }
 
@@ -2504,11 +2781,7 @@ emit_physical_root_pod_field_value_from_member_expr :: (s: *IR_SPV_Gen_State, me
       }
       next_ptr_type_id := ps_get_storage_struct_ptr_type(s, *s.physical_ps_infos, *s.physical_storage_struct_ptr_types, field.type.struct_name);
       next_ptr_access := new_id(s);
-      add_op(s, tprint("         % = OpAccessChain % % %",
-                        id_text(next_ptr_access),
-                        id_text(next_ptr_type_id),
-                        id_text(current_ptr),
-                        id_text(field_index_id)));
+      spv_emit_access_chain(s, next_ptr_access, next_ptr_type_id, current_ptr, .[field_index_id]);
       current_ptr = next_ptr_access;
       current_struct_name = field.type.struct_name;
       continue;
@@ -2521,13 +2794,13 @@ emit_physical_root_pod_field_value_from_member_expr :: (s: *IR_SPV_Gen_State, me
     ps_info := find_ps_struct_info(*s.physical_ps_infos, current_struct_name);
     if !ps_info return_err("missing pointer-struct type info for '%'.", current_struct_name);
     current_value_id := new_id(s);
-    add_op(s, tprint("         % = OpLoad % %", id_text(current_value_id), id_text(ps_info.type_id), id_text(current_ptr)));
+    spv_emit_load(s, current_value_id, ps_info.type_id, current_ptr);
 
     field_type := spv_kind_from_ir_type(field.type);
     field_type_id := type_id_from_kind(s, field_type);
     if field_type_id == 0 return_err("unsupported physical-root POD field type for '%.%'.", current_struct_name, field.name);
     value_id := new_id(s);
-    add_op(s, tprint("         % = OpCompositeExtract % % %", id_text(value_id), id_text(field_type_id), id_text(current_value_id), field_index));
+    spv_emit_composite_extract(s, value_id, field_type_id, current_value_id, .[cast(u32) field_index]);
     return value_id, field_type, true, diag;
   }
 
@@ -3261,7 +3534,7 @@ emit_atomic_reduce_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr, reduce_
 
   prev_ptr := new_id(s);
   prev_zero := get_null_const(s, s.id_uint);
-  add_local_decl(s, "% = OpVariable % Function %", id_text(prev_ptr), id_text(s.id_ptr_func_uint), id_text(prev_zero));
+  spv_emit_variable_decl(s, prev_ptr, s.id_ptr_func_uint, SPV_STORAGE_CLASS_FUNCTION, prev_zero);
   add_debug_name(s, prev_ptr, tprint("__atomic_%_prev", reduce_kind));
 
   header_label := new_id(s);
@@ -3271,7 +3544,7 @@ emit_atomic_reduce_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr, reduce_
 
   add_op(s, "OpBranch", header_label, is_terminator=true);
   add_op(s, header_label, "OpLabel");
-  add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
+  spv_emit_loop_merge(s, merge_label, continue_label);
   add_op(s, "OpBranch", body_label, is_terminator=true);
 
   add_op(s, body_label, "OpLabel");
@@ -3505,7 +3778,7 @@ bind_inline_function_scalar_arg_with_value :: (s: *IR_SPV_Gen_State, function_na
   }
   arg_ptr := new_id(s);
   arg_zero := get_null_const(s, type_id_from_kind(s, arg_type));
-  add_local_decl(s, "% = OpVariable % Function %", id_text(arg_ptr), id_text(arg_ptr_type), id_text(arg_zero));
+    spv_emit_variable_decl(s, arg_ptr, arg_ptr_type, SPV_STORAGE_CLASS_FUNCTION, arg_zero);
   add_debug_name(s, arg_ptr, arg.name);
   add_op(s, "OpStore", arg_ptr, final_value);
   array_add(*s.locals, .{name=arg.name, ptr_id=arg_ptr, type=arg_type});
@@ -3610,7 +3883,7 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
   add_debug_name(s, array_type_id, tprint("%_array", arg.name));
   add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", arg.name));
   array_zero := get_null_const(s, array_type_id);
-  add_local_decl(s, "% = OpVariable % Function %", id_text(ptr_id), id_text(ptr_func_array_type_id), id_text(array_zero));
+  spv_emit_variable_decl(s, ptr_id, ptr_func_array_type_id, SPV_STORAGE_CLASS_FUNCTION, array_zero);
   add_debug_name(s, ptr_id, arg.name);
   array_add(*s.local_arrays, .{
     name = arg.name,
@@ -3815,13 +4088,13 @@ eval_inline_function_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_
   helper_exit_label := new_id(s);
   helper_return_flag_ptr := new_id(s);
   helper_return_flag_zero := get_null_const(s, s.id_bool);
-  add_local_decl(s, "% = OpVariable % Function %", id_text(helper_return_flag_ptr), id_text(s.id_ptr_func_bool), id_text(helper_return_flag_zero));
+  spv_emit_variable_decl(s, helper_return_flag_ptr, s.id_ptr_func_bool, SPV_STORAGE_CLASS_FUNCTION, helper_return_flag_zero);
   add_debug_name(s, helper_return_flag_ptr, tprint("__helper_returned_%", helper.name));
   add_op(s, "OpStore", helper_return_flag_ptr, s.id_bool_false);
 
   helper_return_value_ptr := new_id(s);
   helper_return_value_zero := get_null_const(s, result_type_id);
-  add_local_decl(s, "% = OpVariable % Function %", id_text(helper_return_value_ptr), id_text(result_ptr_type_id), id_text(helper_return_value_zero));
+  spv_emit_variable_decl(s, helper_return_value_ptr, result_ptr_type_id, SPV_STORAGE_CLASS_FUNCTION, helper_return_value_zero);
   add_debug_name(s, helper_return_value_ptr, tprint("__helper_return_value_%", helper.name));
 
   array_add(*s.inline_return_targets, helper_exit_label);
@@ -3840,7 +4113,7 @@ eval_inline_function_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_
     guard_merge_label := new_id(s);
     guard_flag_id := new_id(s);
     add_op(s, guard_flag_id, "OpLoad", s.id_bool, helper_return_flag_ptr);
-    add_op(s, tprint("OpSelectionMerge % None", id_text(guard_merge_label)));
+    spv_emit_selection_merge(s, guard_merge_label);
     add_op(s, "OpBranchConditional", guard_flag_id, guard_merge_label, guard_body_label, is_terminator=true);
     add_op(s, guard_body_label, "OpLabel");
     array_add(*s.control_merge_targets, guard_merge_label);
@@ -3898,7 +4171,7 @@ eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_a
   helper_exit_label := new_id(s);
   helper_return_flag_ptr := new_id(s);
   helper_return_flag_zero := get_null_const(s, s.id_bool);
-  add_local_decl(s, "% = OpVariable % Function %", id_text(helper_return_flag_ptr), id_text(s.id_ptr_func_bool), id_text(helper_return_flag_zero));
+  spv_emit_variable_decl(s, helper_return_flag_ptr, s.id_ptr_func_bool, SPV_STORAGE_CLASS_FUNCTION, helper_return_flag_zero);
   add_debug_name(s, helper_return_flag_ptr, tprint("__helper_returned_%", helper.name));
   add_op(s, "OpStore", helper_return_flag_ptr, s.id_bool_false);
 
@@ -3914,7 +4187,7 @@ eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_a
     guard_merge_label := new_id(s);
     guard_flag_id := new_id(s);
     add_op(s, guard_flag_id, "OpLoad", s.id_bool, helper_return_flag_ptr);
-    add_op(s, tprint("OpSelectionMerge % None", id_text(guard_merge_label)));
+    spv_emit_selection_merge(s, guard_merge_label);
     add_op(s, "OpBranchConditional", guard_flag_id, guard_merge_label, guard_body_label, is_terminator=true);
     add_op(s, guard_body_label, "OpLabel");
     array_add(*s.control_merge_targets, guard_merge_label);
@@ -4123,7 +4396,7 @@ ensure_select_result_storage :: (s: *IR_SPV_Gen_State, result_type: IR_SPV_Gen_T
   }
   result_ptr_id.* = new_id(s);
   result_zero := get_null_const(s, result_type_id.*);
-  add_local_decl(s, "% = OpVariable % Function %", id_text(result_ptr_id.*), id_text(result_ptr_type_id.*), id_text(result_zero));
+  spv_emit_variable_decl(s, result_ptr_id.*, result_ptr_type_id.*, SPV_STORAGE_CLASS_FUNCTION, result_zero);
   return true, diag;
 }
 
@@ -4530,7 +4803,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         rhs_label := new_id(s);
         short_label := new_id(s);
         merge_label := new_id(s);
-        add_op(s, tprint("               OpSelectionMerge % None", id_text(merge_label)));
+        spv_emit_selection_merge(s, merge_label);
         if op == "&&" {
           add_op(s, "OpBranchConditional", left_bool, rhs_label, short_label, is_terminator=true);
         } else {
@@ -4693,7 +4966,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       then_label := new_id(s);
       else_label := new_id(s);
       merge_label := new_id(s);
-      add_op(s, tprint("               OpSelectionMerge % None", id_text(merge_label)));
+      spv_emit_selection_merge(s, merge_label);
       add_op(s, "OpBranchConditional", cond_id, then_label, else_label, is_terminator=true);
 
       add_op(s, then_label, "OpLabel");
@@ -4926,9 +5199,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           lo2 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float2, zero, zero);
           hi2 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float2, one, one);
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %",
-                           id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "FClamp",
-                           id_text(v2), id_text(lo2), id_text(hi2)));
+          spv_emit_extinst(s, out, s.id_float2, "FClamp", .[v2, lo2, hi2]);
           return out, .FLOAT2, true, diag;
         }
         if v_type == .FLOAT3 {
@@ -4937,9 +5208,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           lo3 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float3, zero, zero, zero);
           hi3 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float3, one, one, one);
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %",
-                           id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "FClamp",
-                           id_text(v3), id_text(lo3), id_text(hi3)));
+          spv_emit_extinst(s, out, s.id_float3, "FClamp", .[v3, lo3, hi3]);
           return out, .FLOAT3, true, diag;
         }
         if v_type == .FLOAT4 {
@@ -4948,17 +5217,13 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           lo4 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float4, zero, zero, zero, zero);
           hi4 := add_op(s, new_id(s), "OpCompositeConstruct", s.id_float4, one, one, one, one);
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %",
-                           id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "FClamp",
-                           id_text(v4), id_text(lo4), id_text(hi4)));
+          spv_emit_extinst(s, out, s.id_float4, "FClamp", .[v4, lo4, hi4]);
           return out, .FLOAT4, true, diag;
         }
         vf, vf_ok, vf_diag := coerce_to_float(s, v_id, v_type);
         if !vf_ok return 0, .UNKNOWN, false, vf_diag;
         out := new_id(s);
-        add_op(s, tprint("         % = OpExtInst % % % % % %",
-                         id_text(out), id_text(s.id_float), id_text(s.id_extinst), "FClamp",
-                         id_text(vf), id_text(zero), id_text(one)));
+        spv_emit_extinst(s, out, s.id_float, "FClamp", .[vf, zero, one]);
         return out, .FLOAT, true, diag;
       }
       if builtin_kind == .CLAMP {
@@ -4978,9 +5243,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           hi2, hi2_ok, hi2_diag := coerce_to_float2(s, hi_id, hi_type);
           if !hi2_ok return 0, .UNKNOWN, false, hi2_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %",
-                           id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "FClamp",
-                           id_text(x2), id_text(lo2), id_text(hi2)));
+          spv_emit_extinst(s, out, s.id_float2, "FClamp", .[x2, lo2, hi2]);
           return out, .FLOAT2, true, diag;
         }
         if x_type == .FLOAT3 {
@@ -4991,9 +5254,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           hi3, hi3_ok, hi3_diag := coerce_to_float3(s, hi_id, hi_type);
           if !hi3_ok return 0, .UNKNOWN, false, hi3_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %",
-                           id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "FClamp",
-                           id_text(x3), id_text(lo3), id_text(hi3)));
+          spv_emit_extinst(s, out, s.id_float3, "FClamp", .[x3, lo3, hi3]);
           return out, .FLOAT3, true, diag;
         }
         if x_type == .FLOAT4 {
@@ -5004,9 +5265,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           hi4, hi4_ok, hi4_diag := coerce_to_float4(s, hi_id, hi_type);
           if !hi4_ok return 0, .UNKNOWN, false, hi4_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %",
-                           id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "FClamp",
-                           id_text(x4), id_text(lo4), id_text(hi4)));
+          spv_emit_extinst(s, out, s.id_float4, "FClamp", .[x4, lo4, hi4]);
           return out, .FLOAT4, true, diag;
         }
 
@@ -5017,7 +5276,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         hif, hif_ok, hif_diag := coerce_to_float(s, hi_id, hi_type);
         if !hif_ok return 0, .UNKNOWN, false, hif_diag;
         out := new_id(s);
-        add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float), id_text(s.id_extinst), "FClamp", id_text(xf), id_text(lof), id_text(hif)));
+        spv_emit_extinst(s, out, s.id_float, "FClamp", .[xf, lof, hif]);
         return out, .FLOAT, true, diag;
       }
       if builtin_kind == .STEP {
@@ -5032,7 +5291,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           x2, x2_ok, x2_diag := coerce_to_float2(s, x_id, x_type);
           if !x2_ok return 0, .UNKNOWN, false, x2_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % %", id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "Step", id_text(edge2), id_text(x2)));
+          spv_emit_extinst(s, out, s.id_float2, "Step", .[edge2, x2]);
           return out, .FLOAT2, true, diag;
         }
         if x_type == .FLOAT3 || edge_type == .FLOAT3 {
@@ -5041,7 +5300,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           x3, x3_ok, x3_diag := coerce_to_float3(s, x_id, x_type);
           if !x3_ok return 0, .UNKNOWN, false, x3_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % %", id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "Step", id_text(edge3), id_text(x3)));
+          spv_emit_extinst(s, out, s.id_float3, "Step", .[edge3, x3]);
           return out, .FLOAT3, true, diag;
         }
         if x_type == .FLOAT4 || edge_type == .FLOAT4 {
@@ -5050,7 +5309,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           x4, x4_ok, x4_diag := coerce_to_float4(s, x_id, x_type);
           if !x4_ok return 0, .UNKNOWN, false, x4_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % %", id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "Step", id_text(edge4), id_text(x4)));
+          spv_emit_extinst(s, out, s.id_float4, "Step", .[edge4, x4]);
           return out, .FLOAT4, true, diag;
         }
         edgef, edgef_ok, edgef_diag := coerce_to_float(s, edge_id, edge_type);
@@ -5081,7 +5340,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           av, av_ok, av_diag := coerce_to_float2(s, a_id, a_type);
           if !av_ok return 0, .UNKNOWN, false, av_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "FMix", id_text(xv), id_text(yv), id_text(av)));
+          spv_emit_extinst(s, out, s.id_float2, "FMix", .[xv, yv, av]);
           return out, .FLOAT2, true, diag;
         }
         if x_type == .FLOAT3 || y_type == .FLOAT3 || a_type == .FLOAT3 {
@@ -5092,7 +5351,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           av, av_ok, av_diag := coerce_to_float3(s, a_id, a_type);
           if !av_ok return 0, .UNKNOWN, false, av_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "FMix", id_text(xv), id_text(yv), id_text(av)));
+          spv_emit_extinst(s, out, s.id_float3, "FMix", .[xv, yv, av]);
           return out, .FLOAT3, true, diag;
         }
         if x_type == .FLOAT4 || y_type == .FLOAT4 || a_type == .FLOAT4 {
@@ -5103,7 +5362,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           av, av_ok, av_diag := coerce_to_float4(s, a_id, a_type);
           if !av_ok return 0, .UNKNOWN, false, av_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "FMix", id_text(xv), id_text(yv), id_text(av)));
+          spv_emit_extinst(s, out, s.id_float4, "FMix", .[xv, yv, av]);
           return out, .FLOAT4, true, diag;
         }
         xf, xf_ok, xf_diag := coerce_to_float(s, x_id, x_type);
@@ -5113,9 +5372,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         af, af_ok, af_diag := coerce_to_float(s, a_id, a_type);
         if !af_ok return 0, .UNKNOWN, false, af_diag;
         out := new_id(s);
-        add_op(s, tprint("         % = OpExtInst % % % % % %",
-                         id_text(out), id_text(s.id_float), id_text(s.id_extinst), "FMix",
-                         id_text(xf), id_text(yf), id_text(af)));
+        spv_emit_extinst(s, out, s.id_float, "FMix", .[xf, yf, af]);
         return out, .FLOAT, true, diag;
       }
       if builtin_kind == .REFLECT {
@@ -5130,9 +5387,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           nv, nv_ok, nv_diag := coerce_to_float2(s, n_id, n_type);
           if !nv_ok return 0, .UNKNOWN, false, nv_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % %",
-                           id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "Reflect",
-                           id_text(iv), id_text(nv)));
+          spv_emit_extinst(s, out, s.id_float2, "Reflect", .[iv, nv]);
           return out, .FLOAT2, true, diag;
         }
         if i_type == .FLOAT3 || n_type == .FLOAT3 {
@@ -5141,9 +5396,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           nv, nv_ok, nv_diag := coerce_to_float3(s, n_id, n_type);
           if !nv_ok return 0, .UNKNOWN, false, nv_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % %",
-                           id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "Reflect",
-                           id_text(iv), id_text(nv)));
+          spv_emit_extinst(s, out, s.id_float3, "Reflect", .[iv, nv]);
           return out, .FLOAT3, true, diag;
         }
         if i_type == .FLOAT4 || n_type == .FLOAT4 {
@@ -5152,9 +5405,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           nv, nv_ok, nv_diag := coerce_to_float4(s, n_id, n_type);
           if !nv_ok return 0, .UNKNOWN, false, nv_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % %",
-                           id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "Reflect",
-                           id_text(iv), id_text(nv)));
+          spv_emit_extinst(s, out, s.id_float4, "Reflect", .[iv, nv]);
           return out, .FLOAT4, true, diag;
         }
         return_err("reflect requires float2/float3/float4 args, got (%, %).", i_type, n_type);
@@ -5170,8 +5421,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         bf, bf_ok, bf_diag := coerce_to_float(s, b_id, b_type);
         if !bf_ok return 0, .UNKNOWN, false, bf_diag;
         out := new_id(s);
-        add_op(s, tprint("         % = OpExtInst % % % % %",
-                         id_text(out), id_text(s.id_float), id_text(s.id_extinst), "Pow", id_text(af), id_text(bf)));
+        spv_emit_extinst(s, out, s.id_float, "Pow", .[af, bf]);
         return out, .FLOAT, true, diag;
       }
       if builtin_kind == .SMOOTHSTEP {
@@ -5190,7 +5440,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           xv, xv_ok, xv_diag := coerce_to_float2(s, x_id, x_type);
           if !xv_ok return 0, .UNKNOWN, false, xv_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "SmoothStep", id_text(e0v), id_text(e1v), id_text(xv)));
+          spv_emit_extinst(s, out, s.id_float2, "SmoothStep", .[e0v, e1v, xv]);
           return out, .FLOAT2, true, diag;
         }
         if x_type == .FLOAT3 || e0_type == .FLOAT3 || e1_type == .FLOAT3 {
@@ -5201,7 +5451,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           xv, xv_ok, xv_diag := coerce_to_float3(s, x_id, x_type);
           if !xv_ok return 0, .UNKNOWN, false, xv_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "SmoothStep", id_text(e0v), id_text(e1v), id_text(xv)));
+          spv_emit_extinst(s, out, s.id_float3, "SmoothStep", .[e0v, e1v, xv]);
           return out, .FLOAT3, true, diag;
         }
         if x_type == .FLOAT4 || e0_type == .FLOAT4 || e1_type == .FLOAT4 {
@@ -5212,7 +5462,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           xv, xv_ok, xv_diag := coerce_to_float4(s, x_id, x_type);
           if !xv_ok return 0, .UNKNOWN, false, xv_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "SmoothStep", id_text(e0v), id_text(e1v), id_text(xv)));
+          spv_emit_extinst(s, out, s.id_float4, "SmoothStep", .[e0v, e1v, xv]);
           return out, .FLOAT4, true, diag;
         }
         e0f, e0f_ok, e0f_diag := coerce_to_float(s, e0_id, e0_type);
@@ -5230,7 +5480,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         zero := get_f32_const(s, "0.0");
         one := get_f32_const(s, "1.0");
         t := new_id(s);
-        add_op(s, tprint("         % = OpExtInst % % % % % %", id_text(t), id_text(s.id_float), id_text(s.id_extinst), "FClamp", id_text(t_raw), id_text(zero), id_text(one)));
+        spv_emit_extinst(s, t, s.id_float, "FClamp", .[t_raw, zero, one]);
         t2 := new_id(s);
         add_op(s, t2, "OpFMul", s.id_float, t, t);
         two := get_f32_const(s, "2.0");
@@ -5271,7 +5521,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           v2, v2_ok, v2_diag := coerce_to_float2(s, v_id, v_type);
           if !v2_ok return 0, .UNKNOWN, false, v2_diag;
           out := new_id(s);
-          add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float), id_text(s.id_extinst), "Length", id_text(v2)));
+          spv_emit_extinst(s, out, s.id_float, "Length", .[v2]);
           return out, .FLOAT, true, diag;
         }
         if builtin_kind == .NORMALIZE {
@@ -5283,21 +5533,21 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
             v2, v2_ok, v2_diag := coerce_to_float2(s, v_id, v_type);
             if !v2_ok return 0, .UNKNOWN, false, v2_diag;
             out := new_id(s);
-            add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float2), id_text(s.id_extinst), "Normalize", id_text(v2)));
+            spv_emit_extinst(s, out, s.id_float2, "Normalize", .[v2]);
             return out, .FLOAT2, true, diag;
           }
           if v_type == .FLOAT3 {
             v3, v3_ok, v3_diag := coerce_to_float3(s, v_id, v_type);
             if !v3_ok return 0, .UNKNOWN, false, v3_diag;
             out := new_id(s);
-            add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float3), id_text(s.id_extinst), "Normalize", id_text(v3)));
+            spv_emit_extinst(s, out, s.id_float3, "Normalize", .[v3]);
             return out, .FLOAT3, true, diag;
           }
           if v_type == .FLOAT4 {
             v4, v4_ok, v4_diag := coerce_to_float4(s, v_id, v_type);
             if !v4_ok return 0, .UNKNOWN, false, v4_diag;
             out := new_id(s);
-            add_op(s, tprint("         % = OpExtInst % % % %", id_text(out), id_text(s.id_float4), id_text(s.id_extinst), "Normalize", id_text(v4)));
+            spv_emit_extinst(s, out, s.id_float4, "Normalize", .[v4]);
             return out, .FLOAT4, true, diag;
           }
           return_err("normalize requires float2/float3/float4, got %.", v_type);
@@ -5439,7 +5689,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         assert(ptr_type_id != 0);
         local_zero, local_zero_ok, local_zero_diag := spv_local_decl_default_initializer(s, stmt.decl_type, decl_type);
         if !local_zero_ok return false, false, local_zero_diag;
-        add_local_decl(s, "% = OpVariable % Function %", id_text(ptr_id), id_text(ptr_type_id), id_text(local_zero));
+        spv_emit_variable_decl(s, ptr_id, ptr_type_id, SPV_STORAGE_CLASS_FUNCTION, local_zero);
         add_debug_name(s, ptr_id, stmt.decl_name);
         array_add(*s.locals, .{name=stmt.decl_name, ptr_id=ptr_id, type=decl_type});
         if stmt.decl_init {
@@ -5465,7 +5715,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", stmt.decl_name));
         array_zero, array_zero_ok, array_zero_diag := spv_local_decl_default_initializer(s, stmt.decl_type, .UNKNOWN, array_type_id);
         if !array_zero_ok return false, false, array_zero_diag;
-        add_local_decl(s, "% = OpVariable % Function %", id_text(ptr_id), id_text(ptr_func_array_type_id), id_text(array_zero));
+        spv_emit_variable_decl(s, ptr_id, ptr_func_array_type_id, SPV_STORAGE_CLASS_FUNCTION, array_zero);
         add_debug_name(s, ptr_id, stmt.decl_name);
         array_add(*s.local_arrays, .{
           name = stmt.decl_name,
@@ -5810,7 +6060,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       else_label := merge_label;
       if stmt.if_else else_label = new_id(s);
 
-      add_op(s, tprint("OpSelectionMerge % None", id_text(merge_label)));
+      spv_emit_selection_merge(s, merge_label);
       add_op(s, "OpBranchConditional", cond_id, then_label, else_label, is_terminator=true);
       array_add(*s.control_merge_targets, merge_label);
 
@@ -5851,13 +6101,13 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           if has_parent_merge_label {
             add_op(s, "OpBranch", parent_merge_label, is_terminator=true);
           } else {
-            add_op(s, "OpUnreachable", is_terminator=true);
+            spv_emit_terminator0(s, "OpUnreachable");
           }
           return true, true, diag;
         }
         // Keep a concrete merge block for structured control flow, but terminate it
         // so the next emitted label starts a fresh basic block.
-        add_op(s, "OpUnreachable", is_terminator=true);
+        spv_emit_terminator0(s, "OpUnreachable");
         return true, true, diag;
       }
       return true, false, diag;
@@ -5889,9 +6139,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if !it.condition default_label = label;
       }
 
-      add_op(s, tprint("               OpSelectionMerge % None", id_text(merge_label)));
-      switch_line_sb: String_Builder;
-      a(*switch_line_sb, "               OpSwitch % %", id_text(cond_id), id_text(default_label));
+      spv_emit_selection_merge(s, merge_label);
+      case_literals: [..]u32;
+      branch_labels: [..]s64;
       for stmt.switch_cases {
         if !it.condition continue;
         case_word: u32;
@@ -5907,9 +6157,10 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           }
           if !case_ok return_err("switch case values must be int literals.");
         }
-        a(*switch_line_sb, " % %", case_word, id_text(case_labels[it_index]));
+        array_add(*case_literals, case_word);
+        array_add(*branch_labels, case_labels[it_index]);
       }
-      add_op(s, builder_to_string(*switch_line_sb), is_terminator=true);
+      spv_emit_switch(s, cond_id, default_label, case_literals, branch_labels);
 
       array_add(*s.break_targets, merge_label);
       array_add(*s.control_merge_targets, merge_label);
@@ -5958,7 +6209,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       loop_ptr_type_id := func_ptr_type_id_from_kind(s, start_type);
       if loop_ptr_type_id == 0 return_err("for-loop start type is unsupported (%).", start_type);
       loop_zero := get_null_const(s, type_id_from_kind(s, start_type));
-      add_local_decl(s, "% = OpVariable % Function %", id_text(loop_ptr), id_text(loop_ptr_type_id), id_text(loop_zero));
+      spv_emit_variable_decl(s, loop_ptr, loop_ptr_type_id, SPV_STORAGE_CLASS_FUNCTION, loop_zero);
       add_debug_name(s, loop_ptr, loop_name);
       array_add(*s.locals, .{name=loop_name, ptr_id=loop_ptr, type=start_type});
       add_op(s, "OpStore", loop_ptr, start_id);
@@ -5981,7 +6232,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       cmp_id, cmp_type, cmp_ok, cmp_diag := emit_int_binary_op(s, stmt.for_cmp, start_type, it_value, end_id);
       if !cmp_ok return false, false, cmp_diag;
       if cmp_type != .BOOL return_err("for-loop comparison '%' must produce bool.", stmt.for_cmp);
-      add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
+      spv_emit_loop_merge(s, merge_label, continue_label);
       add_op(s, "OpBranchConditional", cmp_id, body_label, merge_label, is_terminator=true);
 
       add_op(s, body_label, "OpLabel");
@@ -6041,7 +6292,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if !cond_ok return false, false, cond_diag;
       cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .BOOL);
       if !cond_ok return false, false, cond_diag;
-      add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
+      spv_emit_loop_merge(s, merge_label, continue_label);
       add_op(s, "OpBranchConditional", cond_id, body_label, merge_label, is_terminator=true);
 
       add_op(s, body_label, "OpLabel");
@@ -6109,7 +6360,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if builtin_kind == .DISCARD {
         if s.stage != .FRAGMENT return_err("discard is currently fragment-stage only.");
         if stmt.call_expr.args.count != 0 return_err("discard expects 0 args.");
-        add_op(s, "OpKill", is_terminator=true);
+        spv_emit_terminator0(s, "OpKill");
         return true, true, diag;
       }
 
@@ -6171,7 +6422,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if stmt.return_expr {
           return_err("return with value is not supported yet for compute.");
         }
-        add_op(s, "OpReturn", is_terminator=true);
+        spv_emit_terminator0(s, "OpReturn");
         return true, true, diag;
       }
 
@@ -6207,7 +6458,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return_err("return expression type does not match output type.");
       }
       add_op(s, "OpStore", output_var.var_id, coerced_id);
-      add_op(s, "OpReturn", is_terminator=true);
+      spv_emit_terminator0(s, "OpReturn");
       return true, true, diag;
     }
   }
@@ -6273,6 +6524,31 @@ append_interface_var_decorations :: (sb: *String_Builder, vars: [] IR_SPV_Gen_In
   }
 }
 
+spv_builtin_value_for_interface_var :: (builtin: IR_SPV_Gen_Interface_Builtin) -> (u32, bool) {
+  if builtin == {
+  case .POSITION;       return SPV_BUILTIN_POSITION, true;
+  case .FRAG_COORD;     return SPV_BUILTIN_FRAG_COORD, true;
+  case .VERTEX_INDEX;   return SPV_BUILTIN_VERTEX_INDEX, true;
+  case .INSTANCE_INDEX; return SPV_BUILTIN_INSTANCE_INDEX, true;
+  case .NONE;           return 0, false;
+  }
+  return 0, false;
+}
+
+spv_module_append_interface_var_decorations_binary :: (m: *SPV_Module, vars: [] IR_SPV_Gen_Interface_Var) {
+  assert(m != null);
+  location: u32 = 0;
+  for vars {
+    builtin_value, builtin_ok := spv_builtin_value_for_interface_var(it.builtin);
+    if builtin_ok {
+      spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.var_id, SPV_DECORATION_BUILTIN, builtin_value);
+      continue;
+    }
+    spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.var_id, SPV_DECORATION_LOCATION, location);
+    location += 1;
+  }
+}
+
 emit_output_return_from_struct :: (s: *IR_SPV_Gen_State, local_struct: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
   if !local_struct return false, make_diag("missing local output struct for return.");
   for s.output_vars {
@@ -6286,7 +6562,7 @@ emit_output_return_from_struct :: (s: *IR_SPV_Gen_State, local_struct: *IR_SPV_G
     add_op(s, value_id, "OpLoad", type_id, src.ptr_id);
     add_op(s, "OpStore", it.var_id, value_id);
   }
-  add_op(s, "OpReturn", is_terminator=true);
+  spv_emit_terminator0(s, "OpReturn");
   return true, {};
 }
 
@@ -6403,6 +6679,116 @@ spv_append_local_array_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State)
     a(sb, "% = OpTypePointer Function %",
       id_text(it.ptr_func_array_type_id),
       id_text(it.array_type_id));
+  }
+}
+
+spv_module_append_base_buffer_decorations_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_State) {
+  assert(m != null && s != null);
+  spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) s.id_runtimearr_uint, SPV_DECORATION_ARRAY_STRIDE, 4);
+  spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) s.id_buffer_struct, SPV_DECORATION_BLOCK);
+  spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) s.id_buffer_struct, 0, SPV_DECORATION_OFFSET, 0);
+}
+
+spv_module_append_buffer_layout_decorations_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_State) {
+  assert(m != null && s != null);
+  for s.buffer_layout_structs {
+    layout := it;
+    for layout.fields {
+      if it.is_array {
+        spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.array_type_id, SPV_DECORATION_ARRAY_STRIDE, cast(u32) it.array_stride);
+      }
+      spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) layout.type_id, cast(u32) it.index, SPV_DECORATION_OFFSET, cast(u32) it.offset);
+    }
+  }
+
+  for s.buffers {
+    buffer := it;
+    if buffer.element_kind == .UINT && buffer.wrapper_struct_type_id == s.id_buffer_struct continue;
+    spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) buffer.runtimearr_type_id, SPV_DECORATION_ARRAY_STRIDE, cast(u32) buffer.array_stride);
+    if buffer.element_kind == .STRUCT {
+      for buffer.fields {
+        if it.is_array {
+          spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.array_type_id, SPV_DECORATION_ARRAY_STRIDE, cast(u32) it.array_stride);
+        }
+        spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) buffer.element_type_id, cast(u32) it.index, SPV_DECORATION_OFFSET, cast(u32) it.offset);
+      }
+    }
+    spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) buffer.wrapper_struct_type_id, SPV_DECORATION_BLOCK);
+    spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) buffer.wrapper_struct_type_id, 0, SPV_DECORATION_OFFSET, 0);
+    if buffer.is_readonly {
+      spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) buffer.wrapper_struct_type_id, 0, SPV_DECORATION_NON_WRITABLE);
+    }
+  }
+}
+
+spv_module_append_buffer_binding_decorations_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_State) {
+  assert(m != null && s != null);
+  for s.buffers {
+    spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.var_id, SPV_DECORATION_BINDING, cast(u32) it.binding_index);
+    spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.var_id, SPV_DECORATION_DESCRIPTOR_SET, 0);
+  }
+}
+
+spv_module_append_buffer_type_decls_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_State, storage_class: u32) {
+  assert(m != null && s != null);
+  for s.buffer_layout_structs {
+    layout := it;
+    for layout.fields {
+      if !it.is_array continue;
+      elem_type_id := ifx it.array_element_type_id != 0 then it.array_element_type_id else it.type_id;
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) it.array_type_id, cast(u32) elem_type_id, cast(u32) it.array_length_const_id);
+    }
+    inst: SPV_Inst;
+    inst.opcode = SPV_OP_TYPE_STRUCT;
+    array_add(*inst.words, cast(u32) layout.type_id);
+    for layout.fields {
+      field_type_id := ifx it.is_array then it.array_type_id else it.type_id;
+      array_add(*inst.words, cast(u32) field_type_id);
+    }
+    spv_module_append_inst(m, .TYPES_CONSTANTS_GLOBALS, inst);
+  }
+
+  for s.buffers {
+    buffer := it;
+    if buffer.element_kind == .UINT && buffer.wrapper_struct_type_id == s.id_buffer_struct continue;
+    if buffer.element_kind == .STRUCT {
+      for buffer.fields {
+        if !it.is_array continue;
+        elem_type_id := ifx it.array_element_type_id != 0 then it.array_element_type_id else it.type_id;
+        spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) it.array_type_id, cast(u32) elem_type_id, cast(u32) it.array_length_const_id);
+      }
+      inst: SPV_Inst;
+      inst.opcode = SPV_OP_TYPE_STRUCT;
+      array_add(*inst.words, cast(u32) buffer.element_type_id);
+      for buffer.fields {
+        field_type_id := ifx it.is_array then it.array_type_id else it.type_id;
+        array_add(*inst.words, cast(u32) field_type_id);
+      }
+      spv_module_append_inst(m, .TYPES_CONSTANTS_GLOBALS, inst);
+    }
+    if buffer.fixed_array_count > 0 {
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) buffer.runtimearr_type_id, cast(u32) buffer.element_type_id, cast(u32) buffer.fixed_array_count_const_id);
+    } else {
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_RUNTIME_ARRAY, cast(u32) buffer.runtimearr_type_id, cast(u32) buffer.element_type_id);
+    }
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_STRUCT, cast(u32) buffer.wrapper_struct_type_id, cast(u32) buffer.runtimearr_type_id);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) buffer.ptr_wrapper_type_id, storage_class, cast(u32) buffer.wrapper_struct_type_id);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) buffer.ptr_storage_element_type_id, storage_class, cast(u32) buffer.element_type_id);
+  }
+}
+
+spv_module_append_buffer_vars_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_State, storage_class: u32) {
+  assert(m != null && s != null);
+  for s.buffers {
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) it.ptr_wrapper_type_id, cast(u32) it.var_id, storage_class);
+  }
+}
+
+spv_module_append_local_array_type_decls_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_State) {
+  assert(m != null && s != null);
+  for s.local_array_types {
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) it.array_type_id, cast(u32) type_id_from_kind(s, it.element_type), cast(u32) it.count_const_id);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) it.ptr_func_array_type_id, SPV_STORAGE_CLASS_FUNCTION, cast(u32) it.array_type_id);
   }
 }
 
