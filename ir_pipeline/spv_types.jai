@@ -92,7 +92,6 @@ kind_info :: (kind: IR_SPV_Gen_Type) -> *IR_SPV_Kind_Info {
 }
 
 state_id_from_slot :: (s: *IR_SPV_Gen_State, slot: IR_SPV_Id_Slot) -> s64 {
-  assert(s != null);
   if slot == {
     case .NONE; return 0;
     case .TYPE_INT; return s.id_int;
@@ -210,7 +209,6 @@ kind_uses_float16 :: (kind: IR_SPV_Gen_Type) -> bool {
 }
 
 state_uses_int64 :: (s: *IR_SPV_Gen_State) -> bool {
-  assert(s != null);
   if s.const_i64.count > 0 || s.const_u64.count > 0 return true;
   for s.locals if kind_uses_int64(it.type) return true;
   for s.local_arrays if kind_uses_int64(it.element_type) return true;
@@ -221,30 +219,6 @@ state_uses_int64 :: (s: *IR_SPV_Gen_State) -> bool {
   for s.uniform_blocks for it.fields if kind_uses_int64(it.type) return true;
   for s.input_vars if kind_uses_int64(it.type) return true;
   for s.output_vars if kind_uses_int64(it.type) return true;
-  return false;
-}
-
-state_uses_float16 :: (s: *IR_SPV_Gen_State) -> bool {
-  assert(s != null);
-  if s.const_f16.count > 0 return true;
-  for s.locals if kind_uses_float16(it.type) return true;
-  for s.local_arrays if kind_uses_float16(it.element_type) return true;
-  for s.buffers {
-    if kind_uses_float16(it.element_kind) return true;
-    for it.fields if kind_uses_float16(it.type) return true;
-  }
-  for s.uniform_blocks for it.fields if kind_uses_float16(it.type) return true;
-  for s.input_vars if kind_uses_float16(it.type) return true;
-  for s.output_vars if kind_uses_float16(it.type) return true;
-  // Fallback for late-emitted paths that use half IDs directly in op/local lines.
-  half_ids: [5] s64 = .[s.id_half, s.id_ptr_input_half, s.id_ptr_uniform_half, s.id_ptr_storage_half, s.id_ptr_func_half];
-  for half_ids {
-    id := it;
-    if id == 0 continue;
-    id_token := id_text(id);
-    for s.local_var_lines if find_index_from_left(it, id_token) != -1 return true;
-    for s.op_lines if find_index_from_left(it, id_token) != -1 return true;
-  }
   return false;
 }
 
@@ -266,90 +240,83 @@ spv_append_capabilities :: (sb: *String_Builder, state: *IR_SPV_Gen_State, use_p
   assert(state != null);
   append(sb, "               OpCapability Shader\n");
   if state_uses_int64(state) append(sb, "               OpCapability Int64\n");
-  if state_uses_float16(state) append(sb, "               OpCapability Float16\n");
+  append(sb, "               OpCapability Float16\n");
   if state.uses_write_2d || state.uses_write_3d append(sb, "               OpCapability StorageImageWriteWithoutFormat\n");
   if use_physical_storage append(sb, "               OpCapability PhysicalStorageBufferAddresses\n");
 }
 
 spv_append_common_type_decls :: (sb: *String_Builder, state: *IR_SPV_Gen_State, storage_class: string) {
-  assert(sb != null);
-  assert(state != null);
-  append(sb, tprint("       % = OpTypeVoid\n", id_text(state.id_void)));
-  append(sb, tprint("          % = OpTypeFunction %\n", id_text(state.id_fn_void), id_text(state.id_void)));
-  append(sb, tprint("       % = OpTypeInt 32 0\n", id_text(state.id_uint)));
-  append(sb, tprint("        % = OpTypeInt 32 1\n", id_text(state.id_int)));
-  append(sb, tprint("      % = OpTypeInt 64 1\n", id_text(state.id_int64)));
-  append(sb, tprint("      % = OpTypeInt 64 0\n", id_text(state.id_uint64)));
-  uses_f16 := state_uses_float16(state);
-  if uses_f16 append(sb, tprint("       % = OpTypeFloat 16\n", id_text(state.id_half)));
-  append(sb, tprint("      % = OpTypeFloat 32\n", id_text(state.id_float)));
-  append(sb, tprint("     % = OpTypeVector % 2\n", id_text(state.id_float2), id_text(state.id_float)));
-  append(sb, tprint("     % = OpTypeVector % 3\n", id_text(state.id_float3), id_text(state.id_float)));
-  append(sb, tprint("     % = OpTypeVector % 4\n", id_text(state.id_float4), id_text(state.id_float)));
-  append(sb, tprint("   % = OpTypeMatrix % 2\n", id_text(state.id_float2x2), id_text(state.id_float2)));
-  append(sb, tprint("       % = OpTypeBool\n", id_text(state.id_bool)));
-  append(sb, tprint("       % = OpConstantTrue %\n", id_text(state.id_bool_true), id_text(state.id_bool)));
-  append(sb, tprint("       % = OpConstantFalse %\n", id_text(state.id_bool_false), id_text(state.id_bool)));
-  append(sb, tprint("     % = OpTypeVector % 3\n", id_text(state.id_v3uint), id_text(state.id_uint)));
-  append(sb, tprint("     % = OpTypeVector % 2\n", id_text(state.id_v2uint), id_text(state.id_uint)));
-  append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_v3uint), id_text(state.id_v3uint)));
-  append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_uint), id_text(state.id_uint)));
-  if uses_f16 append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_half), id_text(state.id_half)));
-  append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float), id_text(state.id_float)));
-  append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float2), id_text(state.id_float2)));
-  append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float3), id_text(state.id_float3)));
-  append(sb, tprint("% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float4), id_text(state.id_float4)));
-  append(sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float), id_text(state.id_float)));
-  append(sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float2), id_text(state.id_float2)));
-  append(sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float3), id_text(state.id_float3)));
-  append(sb, tprint("% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float4), id_text(state.id_float4)));
-  append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_int), id_text(state.id_int)));
-  append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_uint), id_text(state.id_uint)));
-  append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_int64), id_text(state.id_int64)));
-  append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_uint64), id_text(state.id_uint64)));
-  if uses_f16 append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_half), id_text(state.id_half)));
-  append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float), id_text(state.id_float)));
-  append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float2), id_text(state.id_float2)));
-  append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float3), id_text(state.id_float3)));
-  append(sb, tprint("% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float4), id_text(state.id_float4)));
-  append(sb, tprint("% = OpTypeRuntimeArray %\n", id_text(state.id_runtimearr_uint), id_text(state.id_uint)));
-  append(sb, tprint("% = OpTypeStruct %\n", id_text(state.id_buffer_struct), id_text(state.id_runtimearr_uint)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_buffer_struct), storage_class, id_text(state.id_buffer_struct)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_int), storage_class, id_text(state.id_int)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_uint), storage_class, id_text(state.id_uint)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_int64), storage_class, id_text(state.id_int64)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_uint64), storage_class, id_text(state.id_uint64)));
-  if uses_f16 append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_half), storage_class, id_text(state.id_half)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float), storage_class, id_text(state.id_float)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float2), storage_class, id_text(state.id_float2)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float3), storage_class, id_text(state.id_float3)));
-  append(sb, tprint("% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float4), storage_class, id_text(state.id_float4)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int), id_text(state.id_int)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint), id_text(state.id_uint)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int64), id_text(state.id_int64)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint64), id_text(state.id_uint64)));
-  if uses_f16 append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_half), id_text(state.id_half)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float), id_text(state.id_float)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2), id_text(state.id_float2)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float3), id_text(state.id_float3)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float4), id_text(state.id_float4)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2x2), id_text(state.id_float2x2)));
-  append(sb, tprint("% = OpTypePointer Function %\n", id_text(state.id_ptr_func_bool), id_text(state.id_bool)));
+  print_to_builder(sb, "% = OpTypeVoid\n", id_text(state.id_void));
+  print_to_builder(sb, "% = OpTypeFunction %\n", id_text(state.id_fn_void), id_text(state.id_void));
+  print_to_builder(sb, "% = OpTypeInt 32 0\n", id_text(state.id_uint));
+  print_to_builder(sb, "% = OpTypeInt 32 1\n", id_text(state.id_int));
+  print_to_builder(sb, "% = OpTypeInt 64 1\n", id_text(state.id_int64));
+  print_to_builder(sb, "% = OpTypeInt 64 0\n", id_text(state.id_uint64));
+  print_to_builder(sb, "% = OpTypeFloat 16\n", id_text(state.id_half));
+  print_to_builder(sb, "% = OpTypeFloat 32\n", id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypeVector % 2\n", id_text(state.id_float2), id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypeVector % 3\n", id_text(state.id_float3), id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypeVector % 4\n", id_text(state.id_float4), id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypeMatrix % 2\n", id_text(state.id_float2x2), id_text(state.id_float2));
+  print_to_builder(sb, "% = OpTypeBool\n", id_text(state.id_bool));
+  print_to_builder(sb, "% = OpConstantTrue %\n", id_text(state.id_bool_true), id_text(state.id_bool));
+  print_to_builder(sb, "% = OpConstantFalse %\n", id_text(state.id_bool_false), id_text(state.id_bool));
+  print_to_builder(sb, "% = OpTypeVector % 3\n", id_text(state.id_v3uint), id_text(state.id_uint));
+  print_to_builder(sb, "% = OpTypeVector % 2\n", id_text(state.id_v2uint), id_text(state.id_uint));
+  print_to_builder(sb, "% = OpTypePointer Input %\n", id_text(state.id_ptr_input_v3uint), id_text(state.id_v3uint));
+  print_to_builder(sb, "% = OpTypePointer Input %\n", id_text(state.id_ptr_input_uint), id_text(state.id_uint));
+  print_to_builder(sb, "% = OpTypePointer Input %\n", id_text(state.id_ptr_input_half), id_text(state.id_half));
+  print_to_builder(sb, "% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float), id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float2), id_text(state.id_float2));
+  print_to_builder(sb, "% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float3), id_text(state.id_float3));
+  print_to_builder(sb, "% = OpTypePointer Input %\n", id_text(state.id_ptr_input_float4), id_text(state.id_float4));
+  print_to_builder(sb, "% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float), id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float2), id_text(state.id_float2));
+  print_to_builder(sb, "% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float3), id_text(state.id_float3));
+  print_to_builder(sb, "% = OpTypePointer Output %\n", id_text(state.id_ptr_output_float4), id_text(state.id_float4));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_int), id_text(state.id_int));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_uint), id_text(state.id_uint));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_int64), id_text(state.id_int64));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_uint64), id_text(state.id_uint64));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_half), id_text(state.id_half));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float), id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float2), id_text(state.id_float2));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float3), id_text(state.id_float3));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float4), id_text(state.id_float4));
+  print_to_builder(sb, "% = OpTypeRuntimeArray %\n", id_text(state.id_runtimearr_uint), id_text(state.id_uint));
+  print_to_builder(sb, "% = OpTypeStruct %\n", id_text(state.id_buffer_struct), id_text(state.id_runtimearr_uint));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_buffer_struct), storage_class, id_text(state.id_buffer_struct));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_int), storage_class, id_text(state.id_int));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_uint), storage_class, id_text(state.id_uint));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_int64), storage_class, id_text(state.id_int64));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_uint64), storage_class, id_text(state.id_uint64));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_half), storage_class, id_text(state.id_half));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float), storage_class, id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float2), storage_class, id_text(state.id_float2));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float3), storage_class, id_text(state.id_float3));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float4), storage_class, id_text(state.id_float4));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int), id_text(state.id_int));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint), id_text(state.id_uint));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int64), id_text(state.id_int64));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint64), id_text(state.id_uint64));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_half), id_text(state.id_half));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float), id_text(state.id_float));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2), id_text(state.id_float2));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float3), id_text(state.id_float3));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float4), id_text(state.id_float4));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2x2), id_text(state.id_float2x2));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_bool), id_text(state.id_bool));
 }
 
 spv_append_numeric_constants :: (sb: *String_Builder, state: *IR_SPV_Gen_State) {
-  assert(sb != null);
-  assert(state != null);
-  for state.const_u32 append(sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint), it.value));
-  for state.const_i32 append(sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_int), it.value));
-  for state.const_i64 append(sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_int64), it.value));
-  for state.const_u64 append(sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint64), it.value));
-  for state.const_f16 append(sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_half), it.text));
-  for state.const_f32 append(sb, tprint("% = OpConstant % %\n", id_text(it.id), id_text(state.id_float), it.text));
+  for state.const_u32 print_to_builder(sb, "% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint), it.value);
+  for state.const_i32 print_to_builder(sb, "% = OpConstant % %\n", id_text(it.id), id_text(state.id_int), it.value);
+  for state.const_i64 print_to_builder(sb, "% = OpConstant % %\n", id_text(it.id), id_text(state.id_int64), it.value);
+  for state.const_u64 print_to_builder(sb, "% = OpConstant % %\n", id_text(it.id), id_text(state.id_uint64), it.value);
+  for state.const_f16 print_to_builder(sb, "% = OpConstant % %\n", id_text(it.id), id_text(state.id_half), it.text);
+  for state.const_f32 print_to_builder(sb, "% = OpConstant % %\n", id_text(it.id), id_text(state.id_float), it.text);
 }
 
 spv_append_null_constants :: (sb: *String_Builder, state: *IR_SPV_Gen_State) {
-  assert(sb != null);
-  assert(state != null);
-  for state.const_null append(sb, tprint("% = OpConstantNull %\n", id_text(it.id), id_text(it.type_id)));
+  for state.const_null print_to_builder(sb, "% = OpConstantNull %\n", id_text(it.id), id_text(it.type_id));
 }

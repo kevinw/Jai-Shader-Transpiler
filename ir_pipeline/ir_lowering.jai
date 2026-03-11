@@ -346,7 +346,6 @@ ir_lookup_using_field_source :: (active_usings: [] IR_Using_Source, field_name: 
 }
 
 ir_collect_parameter_using_sources :: (header: *Code_Procedure_Header, out_sources: *[..] IR_Using_Source) {
-  assert(out_sources != null);
   if !header return;
   for header.parameter_usings {
     if !it || !it.expression continue;
@@ -815,7 +814,6 @@ ir_float_literal_to_text :: (v: float64) -> string {
 }
 
 ir_literal_to_text :: (using lit: *Code_Literal) -> (string, bool) {
-  assert(lit != null);
   if value_type == .BOOLEAN return ifx _s64 != 0 then "true" else "false", true;
   if value_type == .NUMBER {
     if value_flags & .FLOAT return ir_float_literal_to_text(_float64), true;
@@ -830,7 +828,6 @@ ir_literal_to_text :: (using lit: *Code_Literal) -> (string, bool) {
 }
 
 ir_extract_ifx_branch_expr :: (branch: *Code_Block, branch_label: string, state: *IR_Lowering_State, root_node: *Code_Node) -> (*Code_Node, bool) {
-  assert(state != null);
   assert(root_node != null);
   if !branch {
     ir_set_diagnostic(state, tprint("IR lowering: ifx is missing '%' branch.", branch_label), root_node);
@@ -865,7 +862,6 @@ ir_lower_expr :: (node: *Code_Node,
                   state: *IR_Lowering_State = null,
                   expected_type: *Type_Info = null) -> (*IR_Expr, bool) {
   assert(node != null);
-  assert(state != null);
 
   if node.kind == {
     case .IDENT; {
@@ -1462,8 +1458,6 @@ ir_emit_matrix_constructor_from_scalar_args :: (expr: *IR_Expr) -> (string, bool
 }
 
 ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
-  assert(expr != null);
-
   if expr.kind == {
     case .IDENT;   return expr.text, true;
     case .LITERAL; return expr.text, true;
@@ -1569,7 +1563,6 @@ ir_expr_to_slang_from_ir :: (expr: *IR_Expr) -> (string, bool) {
 // Postfix forms like `.member`, `[index]`, and call argument lists bind tighter than
 // unary/cast/binary forms, so parenthesize those bases to preserve Jai expression meaning.
 ir_expr_to_slang_postfix_base :: (expr: *IR_Expr) -> (string, bool) {
-  assert(expr != null);
   text, ok := ir_expr_to_slang_from_ir(expr);
   if !ok return "", false;
 
@@ -1590,7 +1583,6 @@ ir_expr_to_slang :: (node: *Code_Node,
                      active_usings: [] IR_Using_Source = .[],
                      active_aliases: [] IR_Decl_Alias = .[],
                      state: *IR_Lowering_State = null) -> (string, bool) {
-  assert(state != null);
   expr, ok := ir_lower_expr(node, input_fields, output_fields, active_usings, active_aliases, state);
   if !ok return "", false;
   text, text_ok := ir_expr_to_slang_from_ir(expr);
@@ -1975,7 +1967,6 @@ ir_collect_function_constants_recursive :: (header: *Code_Procedure_Header,
                                            out_constants: *[..] IR_Function_Constant,
                                            main_header: *Code_Procedure_Header,
                                            state: *IR_Lowering_State) -> bool {
-  assert(state != null);
   if !header || !header.body_or_null || !header.body_or_null.block return false;
   if ir_shared_header_in_list(seen_headers, header) return true;
   array_add(seen_headers, header);

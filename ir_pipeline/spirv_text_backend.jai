@@ -208,7 +208,6 @@ resolve_buffer_root_and_field_path :: (expr: *IR_Expr) -> (buffer_name: string, 
 }
 
 resolve_buffer_prefix_and_field_path :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (buffer_name: string, field_path: string, ok: bool) {
-  assert(s != null);
   if !expr return "", "", false;
 
   full_path, path_ok := resolve_member_path(expr);
@@ -352,11 +351,18 @@ call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
 }
 
 compact_text :: (in: string) -> string {
+  need_compact := false;
+  for in {
+    if it == #char " " || it == #char "\t" || it == #char "\n" || it == #char "\r" {
+        need_compact = true;
+    }
+  }
+  if !need_compact return in;
+    
   out: [..] u8;
   for in {
-    ch := it;
-    if ch == #char " " || ch == #char "\t" || ch == #char "\n" || ch == #char "\r" continue;
-    array_add(*out, ch);
+    if it == #char " " || it == #char "\t" || it == #char "\n" || it == #char "\r" continue;
+    array_add(*out, it);
   }
   return string.{data=out.data, count=out.count};
 }
@@ -481,8 +487,8 @@ IR_SPV_Gen_Uniform_Field :: struct {
   is_array: bool;
   array_count: s64;
   array_stride: s64;
-  array_type_id: s64;
-  array_length_const_id: s64;
+  array_type_id: Id;
+  array_length_const_id: Id;
   offset: s64;
 }
 
@@ -490,7 +496,7 @@ IR_SPV_Gen_Uniform_Block :: struct {
   name: string;
   type_name: string;
   binding_index: s64;
-  var_id: s64;
+  var_id: Id;
   struct_type_id: s64;
   ptr_uniform_struct_type_id: s64;
   fields: [..] IR_SPV_Gen_Uniform_Field;
@@ -498,32 +504,34 @@ IR_SPV_Gen_Uniform_Block :: struct {
 
 IR_SPV_Gen_Const_U32 :: struct {
   value: u32;
-  id: s64;
+  id: Id;
 }
+
+Id :: s64;
 
 IR_SPV_Gen_Const_I32 :: struct {
   value: s32;
-  id: s64;
+  id: Id;
 }
 
 IR_SPV_Gen_Const_I64 :: struct {
   value: s64;
-  id: s64;
+  id: Id;
 }
 
 IR_SPV_Gen_Const_U64 :: struct {
   value: u64;
-  id: s64;
+  id: Id;
 }
 
 IR_SPV_Gen_Const_F32 :: struct {
   text: string;
-  id: s64;
+  id: Id;
 }
 
 IR_SPV_Gen_Const_F16 :: struct {
   text: string;
-  id: s64;
+  id: Id;
 }
 
 IR_SPV_Gen_Function_Constant :: struct {
@@ -532,7 +540,7 @@ IR_SPV_Gen_Function_Constant :: struct {
   type: IR_Function_Constant_Type;
   default_value_text: string;
   spec_id: u32;
-  id: s64;
+  id: Id;
   component_count: s64;
   component_ids: [4] s64;
 }
@@ -625,8 +633,9 @@ IR_SPV_Gen_State :: struct {
   inline_helper_contexts: [..] IR_SPV_Inline_Helper_Context;
   functions: [] IR_Function;
   extra_structs: [..] IR_Struct;
-  local_var_lines: [..] string;
-  op_lines: [..] string;
+  local_var_lines: String_Builder;
+  op_lines: String_Builder;
+  last_op_is_terminator: bool;
   debug_names: [..] IR_SPV_Gen_Debug_Name;
   debug_member_names: [..] IR_SPV_Gen_Debug_Member_Name;
   stage: IR_SPV_Gen_Stage;
@@ -759,12 +768,32 @@ IR_SPV_Gen_State :: struct {
 // Core State Helpers
 // -----------------------------------------------------------------------------
 
-id_text :: inline (id: s64) -> string {
-  return tprint("%%", "%", id);
+id_text :: (id: s64) -> string {
+    assert(id >= 0);
+    assert(id <= 0xFFFF);
+    value := cast,no_check(u16) id;
+    
+    if value == 0 return "%0";
+    
+    buffer := cast(*u8)talloc(6);
+
+    n := cast(u32) value;
+    p := buffer + 6;   // write from end
+
+    while n > 0 {
+        p -= 1;
+        p.* = #char "0" + cast,no_check(u8)(n % 10);
+        n /= 10;
+    }
+
+    count := cast,no_check(s64)((buffer + 6) - p);
+    p -= 1;
+    p.* = #char "%";
+    
+    return string.{count + 1, p};
 }
 
 new_id :: (s: *IR_SPV_Gen_State) -> s64 {
-  assert(s != null);
   id := s.next_id;
   s.next_id += 1;
   return id;
@@ -966,44 +995,39 @@ spv_append_function_constant_defs :: (sb: *String_Builder, s: *IR_SPV_Gen_State)
 }
 
 // Emits forms like "OpStore id_1 id2"
-add_op :: (s: *IR_SPV_Gen_State, name: string, args: ..s64) {
-  assert(name[0] == #char "O"); // sanity check for OpXXX
-  auto_release_temp();
-  sb: String_Builder;
-  sb.allocator = temp;
-  append_many(*sb, "               ", name);
-  if args.count > 0 append(*sb, " ");
+add_op :: (using s: *IR_SPV_Gen_State, name: string, args: ..s64, is_terminator := false) {
+  append(*op_lines, name);
+  if args.count > 0 append(*op_lines, " ");
   for args {
-    append(*sb, id_text(it));
-    if it_index != args.count - 1 append(*sb, " ");
+    append(*op_lines, id_text(it));
+    if it_index != args.count - 1 append(*op_lines, " ");
   }
-  array_add(*s.op_lines, builder_to_string(*sb));
+  append(*s.op_lines, "\n");
+  s.last_op_is_terminator = is_terminator;
 }
 
 // Emits forms like "dest = OpLoad id_1"
-add_op :: (s: *IR_SPV_Gen_State, dest: s64, name: string, args: ..s64) -> s64 {
-  assert(name[0] == #char "O"); // sanity check for OpXXX
-  auto_release_temp();
-  sb: String_Builder;
-  sb.allocator = temp;
-  append_many(*sb, "         ", id_text(dest), " = ", name);
-  if args.count > 0 append(*sb, " ");
+add_op :: (using s: *IR_SPV_Gen_State, dest: s64, name: string, args: ..s64, is_terminator := false) -> s64 {
+  append_many(*op_lines, id_text(dest), " = ", name);
+  if args.count > 0 append(*op_lines, " ");
   for args {
-    append(*sb, id_text(it));
-    if it_index != args.count - 1 append(*sb, " ");
+    append(*op_lines, id_text(it));
+    if it_index != args.count - 1 append(*op_lines, " ");
   }
-  array_add(*s.op_lines, builder_to_string(*sb));
+  append(*op_lines, "\n");
+  s.last_op_is_terminator = is_terminator;
   return dest;
 }
 
-add_op :: (s: *IR_SPV_Gen_State, line: string) {
-  assert(s != null);
-  array_add(*s.op_lines, line);
+add_op :: (s: *IR_SPV_Gen_State, line: string, is_terminator := false) {
+  append(*s.op_lines, line);
+  append(*s.op_lines, "\n");
+  s.last_op_is_terminator = is_terminator;
 }
 
-add_local_decl :: (s: *IR_SPV_Gen_State, line: string) {
-  assert(s != null);
-  array_add(*s.local_var_lines, line);
+add_local_decl :: (s: *IR_SPV_Gen_State, line: string, args: ..Any) {
+  print_to_builder(*s.local_var_lines, line, ..args);
+  append(*s.local_var_lines, "\n");
 }
 
 sanitize_debug_name :: (name: string) -> string {
@@ -1045,7 +1069,6 @@ sanitize_identifier_name :: (name: string) -> string {
 }
 
 debug_type_name :: (s: *IR_SPV_Gen_State, base: string) -> string {
-  assert(s != null);
   base_name := sanitize_identifier_name(base);
   prefix := sanitize_identifier_name(s.debug_type_prefix);
   if prefix.count == 0 return base_name;
@@ -1054,7 +1077,6 @@ debug_type_name :: (s: *IR_SPV_Gen_State, base: string) -> string {
 }
 
 add_debug_name :: (s: *IR_SPV_Gen_State, id: s64, name: string) {
-  assert(s != null);
   if id == 0 || name.count == 0 return;
   safe_name := sanitize_debug_name(name);
   if safe_name.count == 0 return;
@@ -1063,7 +1085,6 @@ add_debug_name :: (s: *IR_SPV_Gen_State, id: s64, name: string) {
 }
 
 add_debug_member_name :: (s: *IR_SPV_Gen_State, type_id: s64, member_index: s64, name: string) {
-  assert(s != null);
   if type_id == 0 || member_index < 0 || name.count == 0 return;
   safe_name := sanitize_debug_name(name);
   if safe_name.count == 0 return;
@@ -1151,7 +1172,6 @@ spv_vector_component_in_range :: (vec_type: IR_SPV_Gen_Type, comp_index: s64) ->
 
 spv_extract_vector_member :: (s: *IR_SPV_Gen_State, vec_id: s64, vec_type: IR_SPV_Gen_Type, access: IR_Member_Access_Kind, field_text: string) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(msg, ..args); }
-  assert(s != null);
 
   if access == .SWIZZLE_XY {
     if vec_type == .FLOAT2 return vec_id, .FLOAT2, true, {};
@@ -1330,7 +1350,6 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   return_err :: (msg: string, args: ..Any) #expand { `return false, make_diag(msg, ..args); }
 
   diag: IR_Diagnostic;
-  assert(s != null);
   if s.next_id < 1 s.next_id = 1;
   s.bound_value = bound_value;
   s.use_physical_storage = use_physical_storage;
@@ -1684,7 +1703,6 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
 
 
 load_builtin_vec3_component :: (s: *IR_SPV_Gen_State, builtin_var_id: s64, component_index: s64) -> s64 {
-  assert(s != null);
   assert(component_index >= 0 && component_index <= 2);
   ptr := new_id(s);
   add_op(s, ptr, "OpAccessChain", s.id_ptr_input_uint, builtin_var_id, get_u32_const(s, cast(u32) component_index));
@@ -1692,13 +1710,11 @@ load_builtin_vec3_component :: (s: *IR_SPV_Gen_State, builtin_var_id: s64, compo
 }
 
 load_builtin_u32 :: (s: *IR_SPV_Gen_State, builtin_var_id: s64) -> s64 {
-  assert(s != null);
   return add_op(s, new_id(s), "OpLoad", s.id_uint, builtin_var_id);
 }
 
 
 physical_aligned_suffix :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> string {
-  assert(s != null);
   if !s.use_physical_storage return "";
   align := host_blit_align_for_kind(kind);
   if align <= 0 align = 4;
@@ -1707,7 +1723,6 @@ physical_aligned_suffix :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> stri
 }
 
 emit_load :: (s: *IR_SPV_Gen_State, result_id: s64, type_id: s64, ptr_id: s64, kind: IR_SPV_Gen_Type, needs_physical_align := false) {
-  assert(s != null);
   suffix := "";
   if needs_physical_align suffix = physical_aligned_suffix(s, kind);
   if suffix.count == 0 {
@@ -1718,7 +1733,6 @@ emit_load :: (s: *IR_SPV_Gen_State, result_id: s64, type_id: s64, ptr_id: s64, k
 }
 
 emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, kind: IR_SPV_Gen_Type, needs_physical_align := false) {
-  assert(s != null);
   suffix := "";
   if needs_physical_align suffix = physical_aligned_suffix(s, kind);
   if suffix.count == 0 {
@@ -1754,38 +1768,7 @@ spv_extinst2 :: inline (s: *IR_SPV_Gen_State, type_id: s64, op_name: string, a_i
   return out;
 }
 
-spv_line_is_terminator :: (line: string) -> bool {
-  auto_release_temp();
-  trimmed := compact_text(line,, temp);
-  if trimmed[0] != #char "O" return false;
-  if trimmed[1] != #char "p" return false;
-  advance(*trimmed, 2);
-  if trimmed == {
-  case "Return"; #through;
-  case "Kill"; #through;
-  case "Unreachable"; #through;
-  case "BranchConditional"; #through;
-  case "Branch"; #through;
-  case "Switch";
-    return true;
-  }
-  return false;
-}
-
-spv_last_op_is_terminator :: (op_lines: [] string) -> bool {
-  idx := op_lines.count;
-  while idx > 0 {
-    idx -= 1;
-    line := compact_text(op_lines[idx],, temp);
-    if line.count == 0 continue;
-    return spv_line_is_terminator(line);
-  }
-  return false;
-}
-
 spv_append_module_preamble :: (sb: *String_Builder, s: *IR_SPV_Gen_State, memory_model: string, use_physical_storage := false) {
-  assert(sb != null);
-  assert(s != null);
   a(sb, "; SPIR-V");
   a(sb, "; Version: 1.5");
   a(sb, "; Generator: Jai Shader Transpiler IR SPIR-V generic backend; 1");
@@ -1798,12 +1781,12 @@ spv_append_module_preamble :: (sb: *String_Builder, s: *IR_SPV_Gen_State, memory
 
 spv_append_function_and_body :: (sb: *String_Builder, s: *IR_SPV_Gen_State, entry_label: s64, function_indent: string, label_indent: string) {
   assert(sb != null && s != null);
-  a(sb, "% % = OpFunction % None %", function_indent, id_text(s.id_main), id_text(s.id_void), id_text(s.id_fn_void));
+  a(sb, "% % = OpFunction % None %\n", function_indent, id_text(s.id_main), id_text(s.id_void), id_text(s.id_fn_void));
   a(sb, "% % = OpLabel\n", label_indent, id_text(entry_label));
-  for s.local_var_lines a(sb, it);
-  for s.op_lines a(sb, it);
-  if !spv_last_op_is_terminator(s.op_lines) a(sb, "               OpReturn");
-  a(sb, "               OpFunctionEnd");
+  append_and_steal_buffers(sb, *s.local_var_lines);
+  append_and_steal_buffers(sb, *s.op_lines);
+  if !s.last_op_is_terminator a(sb, "OpReturn");
+  a(sb, "OpFunctionEnd");
 }
 
 align_up :: (value: s64, alignment: s64) -> s64 {
@@ -1826,7 +1809,6 @@ find_buffer_field :: (buffer: *IR_SPV_Gen_Buffer, name: string) -> *IR_SPV_Gen_B
 }
 
 find_buffer_layout_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Buffer_Layout_Struct {
-  assert(s != null);
   return find_by_name(*s.buffer_layout_structs, name);
 }
 
@@ -1836,7 +1818,6 @@ find_buffer_layout_field :: (layout: *IR_SPV_Gen_Buffer_Layout_Struct, name: str
 }
 
 register_buffer_layout_struct :: (s: *IR_SPV_Gen_State, struct_name: string) -> (layout: *IR_SPV_Gen_Buffer_Layout_Struct, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if struct_name.count == 0 return null, false, make_diag("buffer layout struct is missing a name.");
 
   existing := find_buffer_layout_struct(s, struct_name);
@@ -1972,13 +1953,11 @@ register_buffer_layout_struct :: (s: *IR_SPV_Gen_State, struct_name: string) -> 
 }
 
 make_unique_local_struct_name :: (s: *IR_SPV_Gen_State, requested: string) -> string {
-  assert(s != null);
   if !find_local_struct(s, requested) return requested;
   return tprint("%__%", requested, new_id(s));
 }
 
 alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) -> (local_struct: *IR_SPV_Gen_Local_Struct, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   struct_def := find_struct(s, type_name);
   if !struct_def return null, false, make_diag("unknown local struct type '%'.", type_name);
 
@@ -2010,10 +1989,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
     }
     field_ptr := new_id(s);
     field_zero := get_null_const(s, type_id_from_kind(s, field_type));
-    add_local_decl(s, tprint("         % = OpVariable % Function %",
-                             id_text(field_ptr),
-                             id_text(field_ptr_type),
-                             id_text(field_zero)));
+    add_local_decl(s, "% = OpVariable % Function %", id_text(field_ptr), id_text(field_ptr_type), id_text(field_zero));
     add_debug_name(s, field_ptr, tprint("%.%", name, it.name));
     array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=field_type});
   }
@@ -2027,7 +2003,6 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
 }
 
 copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, src: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if !dst || !src return false, make_diag("null struct while copying fields.");
   
@@ -2060,7 +2035,6 @@ copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct
 }
 
 store_value_in_local_struct_alias :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, value_id: s64, value_type: IR_SPV_Gen_Type) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if !dst return false, make_diag("null destination struct for alias store.");
 
   if dst.fields.count == 1 {
@@ -2099,7 +2073,6 @@ store_value_in_local_struct_alias :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Loc
 }
 
 pack_local_struct_alias_to_value :: (s: *IR_SPV_Gen_State, src: *IR_SPV_Gen_Local_Struct, dst_type: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if !src return 0, .UNKNOWN, false, make_diag("null source struct for alias pack.");
 
   if src.fields.count == 1 {
@@ -2164,7 +2137,6 @@ pack_local_struct_alias_to_value :: (s: *IR_SPV_Gen_State, src: *IR_SPV_Gen_Loca
 }
 
 init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, expr: *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if !dst || !expr return false, make_diag("null struct init inputs.");
 
@@ -2266,7 +2238,6 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
 emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, field_name: string) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
   
-  assert(s != null);
   diag: IR_Diagnostic;
   if !subscript || subscript.kind != .SUBSCRIPT return_err("expected subscript expression for buffer struct field access.");
 
@@ -2321,7 +2292,6 @@ emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, fiel
 emit_buffer_struct_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, member_expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
 
-  assert(s != null);
   diag: IR_Diagnostic;
   if !member_expr || member_expr.kind != .MEMBER return_err("expected member expression for struct-buffer field access.");
 
@@ -2353,7 +2323,6 @@ emit_buffer_struct_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, member_e
 emit_buffer_struct_array_element_ptr :: (s: *IR_SPV_Gen_State, member_expr: *IR_Expr, index_expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
 
-  assert(s != null);
   diag: IR_Diagnostic;
   if !member_expr || member_expr.kind != .MEMBER return_err("expected member expression for struct-buffer array element access.");
 
@@ -2393,7 +2362,6 @@ emit_buffer_struct_array_element_ptr :: (s: *IR_SPV_Gen_State, member_expr: *IR_
 emit_buffer_struct_array_element_field_ptr :: (s: *IR_SPV_Gen_State, subscript_expr: *IR_Expr, field_name: string) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
 
-  assert(s != null);
   diag: IR_Diagnostic;
   if !subscript_expr || subscript_expr.kind != .SUBSCRIPT return_err("expected subscript expression for struct-buffer array field access.");
   if !subscript_expr.left || subscript_expr.left.kind != .MEMBER return_err("struct-buffer array field access requires a member array base.");
@@ -2446,7 +2414,6 @@ emit_buffer_struct_array_element_field_ptr :: (s: *IR_SPV_Gen_State, subscript_e
 emit_physical_root_pod_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, member_expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
 
-  assert(s != null);
   diag: IR_Diagnostic;
   if !s.use_physical_storage || s.physical_root_name.count == 0 || s.physical_root_struct_name.count == 0 || s.physical_root_var_id == 0 {
     return_err("physical-root POD field access is unavailable.");
@@ -2508,7 +2475,6 @@ emit_physical_root_pod_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, memb
 emit_physical_root_pod_field_value_from_member_expr :: (s: *IR_SPV_Gen_State, member_expr: *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
 
-  assert(s != null);
   diag: IR_Diagnostic;
   if !s.use_physical_storage || s.physical_root_name.count == 0 || s.physical_root_struct_name.count == 0 || s.physical_root_var_id == 0 {
     return_err("physical-root POD field access is unavailable.");
@@ -2571,7 +2537,6 @@ emit_physical_root_pod_field_value_from_member_expr :: (s: *IR_SPV_Gen_State, me
 emit_buffer_struct_reinterpret_const_subscript_ptr :: (s: *IR_SPV_Gen_State, buffer: *IR_SPV_Gen_Buffer, subscript_expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
 
-  assert(s != null);
   assert(buffer != null);
   if !subscript_expr || subscript_expr.kind != .SUBSCRIPT return_err("expected subscript expression for struct-buffer reinterpret access.");
 
@@ -2673,7 +2638,6 @@ emit_buffer_struct_reinterpret_const_subscript_ptr :: (s: *IR_SPV_Gen_State, buf
 }
 
 load_buffer_struct_into_local_struct :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, subscript_expr: *IR_Expr, field_prefix: string = "") -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if !dst || !subscript_expr return false, make_diag("null input while loading struct buffer into local struct.");
 
   for dst.fields {
@@ -2703,7 +2667,6 @@ load_buffer_struct_into_local_struct :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_
 emit_uniform_field_ptr :: (s: *IR_SPV_Gen_State, uniform_name: string, field_name: string) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
 
-  assert(s != null);
   diag: IR_Diagnostic;
   uniform := find_uniform_block(s, uniform_name);
   if !uniform return_err("unknown uniform block '%'.", uniform_name);
@@ -2724,7 +2687,6 @@ emit_uniform_field_ptr :: (s: *IR_SPV_Gen_State, uniform_name: string, field_nam
 emit_uniform_array_element_ptr :: (s: *IR_SPV_Gen_State, uniform_name: string, field_name: string, index_id: s64, index_type: IR_SPV_Gen_Type) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
 
-  assert(s != null);
   diag: IR_Diagnostic;
   index_id, index_ok, index_diag := coerce_to_kind(s, index_id, index_type, .UINT);
   if !index_ok return 0, .UNKNOWN, false, index_diag;
@@ -2746,7 +2708,6 @@ emit_uniform_array_element_ptr :: (s: *IR_SPV_Gen_State, uniform_name: string, f
 }
 
 emit_int_binary_op :: (s: *IR_SPV_Gen_State, op: string, kind: IR_SPV_Gen_Type, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   assert(is_integral_kind(kind));
   diag: IR_Diagnostic;
   type_id := type_id_from_kind(s, kind);
@@ -2781,7 +2742,6 @@ emit_int_binary_op :: (s: *IR_SPV_Gen_State, op: string, kind: IR_SPV_Gen_Type, 
 }
 
 spv_emit_scalar_conversion :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if src_type == dst_type return value_id, true, {};
   dst_type_id := type_id_from_kind(s, dst_type);
   if dst_type_id == 0 return 0, false, make_diag("unsupported conversion destination type %.", dst_type);
@@ -2898,7 +2858,6 @@ coerce_to_float :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_
 }
 
 coerce_to_float2 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float2_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if value_type == .FLOAT2 return value_id, true, diag;
   scalar_id, scalar_ok, scalar_diag := coerce_to_float(s, value_id, value_type);
@@ -2909,7 +2868,6 @@ coerce_to_float2 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen
 }
 
 coerce_to_float3 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float3_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if value_type == .FLOAT3 return value_id, true, {};
   scalar_id, scalar_ok, scalar_diag := coerce_to_float(s, value_id, value_type);
   if scalar_ok return splat_float3(s, scalar_id), true, {};
@@ -2919,7 +2877,6 @@ coerce_to_float3 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen
 }
 
 coerce_to_float4 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen_Type) -> (float4_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if value_type == .FLOAT4 return value_id, true, {};
   scalar_id, scalar_ok, scalar_diag := coerce_to_float(s, value_id, value_type);
   if scalar_ok return splat_float4(s, scalar_id), true, {};
@@ -2929,14 +2886,12 @@ coerce_to_float4 :: (s: *IR_SPV_Gen_State, value_id: s64, value_type: IR_SPV_Gen
 }
 
 coerce_to_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if src_type == dst_type return value_id, true, {};
   out_id, ok, diag := spv_emit_scalar_conversion(s, value_id, src_type, dst_type);
   return out_id, ok, diag;
 }
 
 coerce_to_exact_kind :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR_SPV_Gen_Type, dst_type: IR_SPV_Gen_Type) -> (out_id: s64, out_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if src_type == dst_type return value_id, src_type, true, {};
   if dst_type == .FLOAT2 {
     coerced, coerced_ok, coerced_diag := coerce_to_float2(s, value_id, src_type);
@@ -2969,7 +2924,6 @@ coerce_to_expr_result_kind :: (s: *IR_SPV_Gen_State, expr: *IR_Expr, value_id: s
 }
 
 emit_float_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   result := new_id(s);
   if op == "+" { add_op(s, result, "OpFAdd", s.id_float, left_id, right_id); return result, .FLOAT, true, {}; }
   if op == "-" { add_op(s, result, "OpFSub", s.id_float, left_id, right_id); return result, .FLOAT, true, {}; }
@@ -2985,7 +2939,6 @@ emit_float_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_i
 }
 
 composite_construct :: (s: *IR_SPV_Gen_State, type_id_and_values: ..s64) -> s64 {
-  assert(s != null);
   return add_op(s, new_id(s), "OpCompositeConstruct", ..type_id_and_values);
 }
 
@@ -2994,7 +2947,6 @@ splat_float3 :: inline (s: *IR_SPV_Gen_State, scalar_id: s64) -> s64 { return co
 splat_float4 :: inline (s: *IR_SPV_Gen_State, scalar_id: s64) -> s64 { return composite_construct(s, s.id_float4, scalar_id, scalar_id, scalar_id, scalar_id); }
 
 emit_float2_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   result := new_id(s);
   if op == "+" { add_op(s, result, "OpFAdd", s.id_float2, left_id, right_id); return result, .FLOAT2, true, {}; }
   if op == "-" { add_op(s, result, "OpFSub", s.id_float2, left_id, right_id); return result, .FLOAT2, true, {}; }
@@ -3004,7 +2956,6 @@ emit_float2_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_
 }
 
 emit_float3_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   result := new_id(s);
   if op == "+" { add_op(s, result, "OpFAdd", s.id_float3, left_id, right_id); return result, .FLOAT3, true, {}; }
   if op == "-" { add_op(s, result, "OpFSub", s.id_float3, left_id, right_id); return result, .FLOAT3, true, {}; }
@@ -3014,7 +2965,6 @@ emit_float3_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_
 }
 
 emit_float4_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   result := new_id(s);
   if op == "+" { add_op(s, result, "OpFAdd", s.id_float4, left_id, right_id); return result, .FLOAT4, true, {}; }
   if op == "-" { add_op(s, result, "OpFSub", s.id_float4, left_id, right_id); return result, .FLOAT4, true, {}; }
@@ -3024,7 +2974,6 @@ emit_float4_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_
 }
 
 emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if builtin_name == "min" || builtin_name == "max" {
     if args.count != 2 {
@@ -3074,7 +3023,6 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
 }
 
 emit_sample_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .FRAGMENT return 0, .UNKNOWN, false, make_diag("sample_2d is currently fragment-stage only.");
   if args.count != 3      return 0, .UNKNOWN, false, make_diag("sample_2d expects 3 args (texture_index, sampler_index, uv).");
@@ -3112,7 +3060,6 @@ emit_sample_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s
 }
 
 emit_sample_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .FRAGMENT return 0, .UNKNOWN, false, make_diag("sample_3d is currently fragment-stage only.");
   if args.count != 3      return 0, .UNKNOWN, false, make_diag("sample_3d expects 3 args (texture_index, sampler_index, uvw).");
@@ -3148,7 +3095,6 @@ emit_sample_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s
 }
 
 emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .COMPUTE return false, make_diag("write_2d is currently compute-stage only.");
   if !s.uses_write_2d return false, make_diag("internal backend error: write_2d call was not pre-analyzed before compute emission.");
@@ -3187,7 +3133,6 @@ emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
 }
 
 emit_write_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .COMPUTE return false, make_diag("write_3d is currently compute-stage only.");
   if !s.uses_write_3d return false, make_diag("internal backend error: write_3d call was not pre-analyzed before compute emission.");
@@ -3229,7 +3174,6 @@ emit_write_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
 }
 
 emit_atomic_u32_call :: (s: *IR_SPV_Gen_State, op_name: string, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .COMPUTE return 0, .UNKNOWN, false, make_diag("% is currently compute-stage only.", op_name);
   if args.count != 2 return 0, .UNKNOWN, false, make_diag("% expects 2 args (*dst, value).", op_name);
@@ -3251,7 +3195,6 @@ emit_atomic_u32_call :: (s: *IR_SPV_Gen_State, op_name: string, args: [] *IR_Exp
 }
 
 emit_atomic_sub_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .COMPUTE return 0, .UNKNOWN, false, make_diag("atomic_sub_u32 is currently compute-stage only.");
   if args.count != 2 return 0, .UNKNOWN, false, make_diag("atomic_sub_u32 expects 2 args (*dst, value).");
@@ -3277,7 +3220,6 @@ emit_atomic_sub_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_
 }
 
 emit_atomic_compare_exchange_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .COMPUTE return 0, .UNKNOWN, false, make_diag("OpAtomicCompareExchange is currently compute-stage only.");
   if args.count != 3 return 0, .UNKNOWN, false, make_diag("atomic_compare_exchange_u32 expects 3 args (*dst, compare, value).");
@@ -3304,7 +3246,6 @@ emit_atomic_compare_exchange_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Exp
 }
 
 emit_atomic_reduce_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr, reduce_kind: string) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if s.stage != .COMPUTE return 0, .UNKNOWN, false, make_diag("atomic_%_u32 is currently compute-stage only.", reduce_kind);
   if args.count != 2 return 0, .UNKNOWN, false, make_diag("atomic_%_u32 expects 2 args (*dst, value).", reduce_kind);
@@ -3320,10 +3261,7 @@ emit_atomic_reduce_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr, reduce_
 
   prev_ptr := new_id(s);
   prev_zero := get_null_const(s, s.id_uint);
-  add_local_decl(s, tprint("         % = OpVariable % Function %",
-                           id_text(prev_ptr),
-                           id_text(s.id_ptr_func_uint),
-                           id_text(prev_zero)));
+  add_local_decl(s, "% = OpVariable % Function %", id_text(prev_ptr), id_text(s.id_ptr_func_uint), id_text(prev_zero));
   add_debug_name(s, prev_ptr, tprint("__atomic_%_prev", reduce_kind));
 
   header_label := new_id(s);
@@ -3331,10 +3269,10 @@ emit_atomic_reduce_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr, reduce_
   continue_label := new_id(s);
   merge_label := new_id(s);
 
-  add_op(s, "OpBranch", header_label);
+  add_op(s, "OpBranch", header_label, is_terminator=true);
   add_op(s, header_label, "OpLabel");
   add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
-  add_op(s, "OpBranch", body_label);
+  add_op(s, "OpBranch", body_label, is_terminator=true);
 
   add_op(s, body_label, "OpLabel");
   old_value := new_id(s);
@@ -3358,10 +3296,10 @@ emit_atomic_reduce_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr, reduce_
 
   success := new_id(s);
   add_op(s, success, "OpIEqual", s.id_bool, prev_value, old_value);
-  add_op(s, "OpBranchConditional", success, merge_label, continue_label);
+  add_op(s, "OpBranchConditional", success, merge_label, continue_label, is_terminator=true);
 
   add_op(s, continue_label, "OpLabel");
-  add_op(s, "OpBranch", header_label);
+  add_op(s, "OpBranch", header_label, is_terminator=true);
 
   add_op(s, merge_label, "OpLabel");
   out := new_id(s);
@@ -3567,10 +3505,7 @@ bind_inline_function_scalar_arg_with_value :: (s: *IR_SPV_Gen_State, function_na
   }
   arg_ptr := new_id(s);
   arg_zero := get_null_const(s, type_id_from_kind(s, arg_type));
-  add_local_decl(s, tprint("         % = OpVariable % Function %",
-                           id_text(arg_ptr),
-                           id_text(arg_ptr_type),
-                           id_text(arg_zero)));
+  add_local_decl(s, "% = OpVariable % Function %", id_text(arg_ptr), id_text(arg_ptr_type), id_text(arg_zero));
   add_debug_name(s, arg_ptr, arg.name);
   add_op(s, "OpStore", arg_ptr, final_value);
   array_add(*s.locals, .{name=arg.name, ptr_id=arg_ptr, type=arg_type});
@@ -3675,10 +3610,7 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
   add_debug_name(s, array_type_id, tprint("%_array", arg.name));
   add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", arg.name));
   array_zero := get_null_const(s, array_type_id);
-  add_local_decl(s, tprint("         % = OpVariable % Function %",
-                           id_text(ptr_id),
-                           id_text(ptr_func_array_type_id),
-                           id_text(array_zero)));
+  add_local_decl(s, "% = OpVariable % Function %", id_text(ptr_id), id_text(ptr_func_array_type_id), id_text(array_zero));
   add_debug_name(s, ptr_id, arg.name);
   array_add(*s.local_arrays, .{
     name = arg.name,
@@ -3842,7 +3774,6 @@ bind_inline_function_args :: (s: *IR_SPV_Gen_State, ir_function: *IR_Function, c
 }
 
 eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if !helper return 0, .UNKNOWN, false, make_diag("missing helper metadata for inline call.");
   
   return_kind := spv_kind_from_ir_type(helper.return_type);
@@ -3858,9 +3789,6 @@ eval_inline_function :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: 
 }
 
 eval_inline_function_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr, return_kind: IR_SPV_Gen_Type) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
-  assert(helper != null);
-
   result_type_id := type_id_from_kind(s, return_kind);
   if result_type_id == 0 {
     return 0, .UNKNOWN, false, make_diag("helper '%' return type % has no SPIR-V type id.", helper.name, return_kind);
@@ -3887,19 +3815,13 @@ eval_inline_function_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_
   helper_exit_label := new_id(s);
   helper_return_flag_ptr := new_id(s);
   helper_return_flag_zero := get_null_const(s, s.id_bool);
-  add_local_decl(s, tprint("         % = OpVariable % Function %",
-                           id_text(helper_return_flag_ptr),
-                           id_text(s.id_ptr_func_bool),
-                           id_text(helper_return_flag_zero)));
+  add_local_decl(s, "% = OpVariable % Function %", id_text(helper_return_flag_ptr), id_text(s.id_ptr_func_bool), id_text(helper_return_flag_zero));
   add_debug_name(s, helper_return_flag_ptr, tprint("__helper_returned_%", helper.name));
   add_op(s, "OpStore", helper_return_flag_ptr, s.id_bool_false);
 
   helper_return_value_ptr := new_id(s);
   helper_return_value_zero := get_null_const(s, result_type_id);
-  add_local_decl(s, tprint("         % = OpVariable % Function %",
-                           id_text(helper_return_value_ptr),
-                           id_text(result_ptr_type_id),
-                           id_text(helper_return_value_zero)));
+  add_local_decl(s, "% = OpVariable % Function %", id_text(helper_return_value_ptr), id_text(result_ptr_type_id), id_text(helper_return_value_zero));
   add_debug_name(s, helper_return_value_ptr, tprint("__helper_return_value_%", helper.name));
 
   array_add(*s.inline_return_targets, helper_exit_label);
@@ -3919,7 +3841,7 @@ eval_inline_function_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_
     guard_flag_id := new_id(s);
     add_op(s, guard_flag_id, "OpLoad", s.id_bool, helper_return_flag_ptr);
     add_op(s, tprint("OpSelectionMerge % None", id_text(guard_merge_label)));
-    add_op(s, "OpBranchConditional", guard_flag_id, guard_merge_label, guard_body_label);
+    add_op(s, "OpBranchConditional", guard_flag_id, guard_merge_label, guard_body_label, is_terminator=true);
     add_op(s, guard_body_label, "OpLabel");
     array_add(*s.control_merge_targets, guard_merge_label);
 
@@ -3932,7 +3854,7 @@ eval_inline_function_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_
     }
     if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
     if !stmt_terminated {
-      add_op(s, "OpBranch", guard_merge_label);
+      add_op(s, "OpBranch", guard_merge_label, is_terminator=true);
     }
     add_op(s, guard_merge_label, "OpLabel");
   }
@@ -3940,7 +3862,7 @@ eval_inline_function_value :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_
   if s.inline_helper_contexts.count > 0 s.inline_helper_contexts.count -= 1;
   if s.inline_return_targets.count > 0 s.inline_return_targets.count -= 1;
 
-  add_op(s, "OpBranch", helper_exit_label);
+  add_op(s, "OpBranch", helper_exit_label, is_terminator=true);
   add_op(s, helper_exit_label, "OpLabel");
 
   helper_value := new_id(s);
@@ -3954,7 +3876,6 @@ helper_returns_void :: (helper: *IR_Function) -> bool {
 }
 
 eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if !helper return false, make_diag("missing helper metadata for inline void call.");
   if !helper_returns_void(helper) {
     return false, make_diag("helper '%' is not a void helper.", helper.name);
@@ -3977,10 +3898,7 @@ eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_a
   helper_exit_label := new_id(s);
   helper_return_flag_ptr := new_id(s);
   helper_return_flag_zero := get_null_const(s, s.id_bool);
-  add_local_decl(s, tprint("         % = OpVariable % Function %",
-                           id_text(helper_return_flag_ptr),
-                           id_text(s.id_ptr_func_bool),
-                           id_text(helper_return_flag_zero)));
+  add_local_decl(s, "% = OpVariable % Function %", id_text(helper_return_flag_ptr), id_text(s.id_ptr_func_bool), id_text(helper_return_flag_zero));
   add_debug_name(s, helper_return_flag_ptr, tprint("__helper_returned_%", helper.name));
   add_op(s, "OpStore", helper_return_flag_ptr, s.id_bool_false);
 
@@ -3997,7 +3915,7 @@ eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_a
     guard_flag_id := new_id(s);
     add_op(s, guard_flag_id, "OpLoad", s.id_bool, helper_return_flag_ptr);
     add_op(s, tprint("OpSelectionMerge % None", id_text(guard_merge_label)));
-    add_op(s, "OpBranchConditional", guard_flag_id, guard_merge_label, guard_body_label);
+    add_op(s, "OpBranchConditional", guard_flag_id, guard_merge_label, guard_body_label, is_terminator=true);
     add_op(s, guard_body_label, "OpLabel");
     array_add(*s.control_merge_targets, guard_merge_label);
 
@@ -4010,21 +3928,20 @@ eval_inline_function_void :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_a
     }
     if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
     if !stmt_terminated {
-      add_op(s, "OpBranch", guard_merge_label);
+      add_op(s, "OpBranch", guard_merge_label, is_terminator=true);
     }
     add_op(s, guard_merge_label, "OpLabel");
   }
   if s.inline_helper_contexts.count > 0 s.inline_helper_contexts.count -= 1;
   if s.inline_return_targets.count > 0 s.inline_return_targets.count -= 1;
 
-  add_op(s, "OpBranch", helper_exit_label);
+  add_op(s, "OpBranch", helper_exit_label, is_terminator=true);
   add_op(s, helper_exit_label, "OpLabel");
 
   return true, {};
 }
 
 eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, call_args: [] *IR_Expr, out_struct: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   diag: IR_Diagnostic;
   if !helper {
     return false, make_diag("missing helper metadata for inline struct call.");
@@ -4190,7 +4107,6 @@ eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, c
 }
 
 ensure_select_result_storage :: (s: *IR_SPV_Gen_State, result_type: IR_SPV_Gen_Type, result_ptr_id: *s64, result_ptr_type_id: *s64, result_type_id: *s64) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   assert(result_ptr_id != null);
   assert(result_ptr_type_id != null);
   assert(result_type_id != null);
@@ -4207,10 +4123,7 @@ ensure_select_result_storage :: (s: *IR_SPV_Gen_State, result_type: IR_SPV_Gen_T
   }
   result_ptr_id.* = new_id(s);
   result_zero := get_null_const(s, result_type_id.*);
-  add_local_decl(s, tprint("         % = OpVariable % Function %",
-                           id_text(result_ptr_id.*),
-                           id_text(result_ptr_type_id.*),
-                           id_text(result_zero)));
+  add_local_decl(s, "% = OpVariable % Function %", id_text(result_ptr_id.*), id_text(result_ptr_type_id.*), id_text(result_zero));
   return true, diag;
 }
 
@@ -4228,7 +4141,6 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       `return 0, .UNKNOWN, false, diag; 
   }
 
-  assert(s != null);
   diag: IR_Diagnostic;
   if !expr return_err("null IR expression.");
 
@@ -4620,16 +4532,16 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         merge_label := new_id(s);
         add_op(s, tprint("               OpSelectionMerge % None", id_text(merge_label)));
         if op == "&&" {
-          add_op(s, "OpBranchConditional", left_bool, rhs_label, short_label);
+          add_op(s, "OpBranchConditional", left_bool, rhs_label, short_label, is_terminator=true);
         } else {
-          add_op(s, "OpBranchConditional", left_bool, short_label, rhs_label);
+          add_op(s, "OpBranchConditional", left_bool, short_label, rhs_label, is_terminator=true);
         }
 
         add_op(s, short_label, "OpLabel");
         short_value := s.id_bool_false;
         if op == "||" short_value = s.id_bool_true;
         emit_store(s, result_ptr_id, short_value, .BOOL);
-        add_op(s, "OpBranch", merge_label);
+        add_op(s, "OpBranch", merge_label, is_terminator=true);
 
         add_op(s, rhs_label, "OpLabel");
         right_id, right_type, right_ok, right_diag := emit_expr(s, expr.right);
@@ -4637,7 +4549,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         right_bool, right_bool_ok, right_bool_diag := coerce_to_kind(s, right_id, right_type, .BOOL);
         if !right_bool_ok return 0, .UNKNOWN, false, right_bool_diag;
         emit_store(s, result_ptr_id, right_bool, .BOOL);
-        add_op(s, "OpBranch", merge_label);
+        add_op(s, "OpBranch", merge_label, is_terminator=true);
 
         add_op(s, merge_label, "OpLabel");
         out := new_id(s);
@@ -4782,7 +4694,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       else_label := new_id(s);
       merge_label := new_id(s);
       add_op(s, tprint("               OpSelectionMerge % None", id_text(merge_label)));
-      add_op(s, "OpBranchConditional", cond_id, then_label, else_label);
+      add_op(s, "OpBranchConditional", cond_id, then_label, else_label, is_terminator=true);
 
       add_op(s, then_label, "OpLabel");
       then_id, then_type, then_ok, then_diag := emit_expr(s, expr.right);
@@ -4793,7 +4705,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       then_id, then_type, then_ok, then_diag = coerce_to_exact_kind(s, then_id, then_type, result_type);
       if !then_ok return 0, .UNKNOWN, false, then_diag;
       emit_store(s, result_ptr_id, then_id, result_type);
-      add_op(s, "OpBranch", merge_label);
+      add_op(s, "OpBranch", merge_label, is_terminator=true);
 
       add_op(s, else_label, "OpLabel");
       else_id, else_type, else_ok, else_diag := emit_expr(s, expr.args[0]);
@@ -4803,7 +4715,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         return_err("select branches must resolve to a common type (then=% else=% target=%).", then_type, else_type, result_type);
       }
       emit_store(s, result_ptr_id, else_id, result_type);
-      add_op(s, "OpBranch", merge_label);
+      add_op(s, "OpBranch", merge_label, is_terminator=true);
 
       add_op(s, merge_label, "OpLabel");
       out := new_id(s);
@@ -5499,7 +5411,6 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
 // -----------------------------------------------------------------------------
 
 spv_local_decl_default_initializer :: (s: *IR_SPV_Gen_State, decl_type: IR_Type, scalar_kind: IR_SPV_Gen_Type, array_type_id: s64 = 0) -> (init_id: s64, ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if scalar_kind != .UNKNOWN {
     type_id := type_id_from_kind(s, scalar_kind);
     if type_id == 0 return 0, false, make_diag("missing SPIR-V type id for scalar declaration kind %.", scalar_kind);
@@ -5515,7 +5426,6 @@ spv_local_decl_default_initializer :: (s: *IR_SPV_Gen_State, decl_type: IR_Type,
 emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return false, false, make_diag(msg, ..args); }
   
-  assert(s != null);
   diag: IR_Diagnostic;
   if !stmt return_err("null statement.");
   
@@ -5529,10 +5439,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         assert(ptr_type_id != 0);
         local_zero, local_zero_ok, local_zero_diag := spv_local_decl_default_initializer(s, stmt.decl_type, decl_type);
         if !local_zero_ok return false, false, local_zero_diag;
-        add_local_decl(s, tprint("         % = OpVariable % Function %",
-                                 id_text(ptr_id),
-                                 id_text(ptr_type_id),
-                                 id_text(local_zero)));
+        add_local_decl(s, "% = OpVariable % Function %", id_text(ptr_id), id_text(ptr_type_id), id_text(local_zero));
         add_debug_name(s, ptr_id, stmt.decl_name);
         array_add(*s.locals, .{name=stmt.decl_name, ptr_id=ptr_id, type=decl_type});
         if stmt.decl_init {
@@ -5558,10 +5465,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", stmt.decl_name));
         array_zero, array_zero_ok, array_zero_diag := spv_local_decl_default_initializer(s, stmt.decl_type, .UNKNOWN, array_type_id);
         if !array_zero_ok return false, false, array_zero_diag;
-        add_local_decl(s, tprint("         % = OpVariable % Function %",
-                                 id_text(ptr_id),
-                                 id_text(ptr_func_array_type_id),
-                                 id_text(array_zero)));
+        add_local_decl(s, "% = OpVariable % Function %", id_text(ptr_id), id_text(ptr_func_array_type_id), id_text(array_zero));
         add_debug_name(s, ptr_id, stmt.decl_name);
         array_add(*s.local_arrays, .{
           name = stmt.decl_name,
@@ -5907,7 +5811,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if stmt.if_else else_label = new_id(s);
 
       add_op(s, tprint("OpSelectionMerge % None", id_text(merge_label)));
-      add_op(s, "OpBranchConditional", cond_id, then_label, else_label);
+      add_op(s, "OpBranchConditional", cond_id, then_label, else_label, is_terminator=true);
       array_add(*s.control_merge_targets, merge_label);
 
       add_op(s, then_label, "OpLabel");
@@ -5917,7 +5821,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return false, false, then_diag;
       }
       if !then_terminated {
-        add_op(s, "OpBranch", merge_label);
+        add_op(s, "OpBranch", merge_label, is_terminator=true);
       }
 
       else_terminated := false;
@@ -5930,7 +5834,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           return false, false, else_diag;
         }
         if !else_terminated {
-          add_op(s, "OpBranch", merge_label);
+          add_op(s, "OpBranch", merge_label, is_terminator=true);
         }
       }
       if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
@@ -5945,15 +5849,15 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if has_inline_helper_context {
           parent_merge_label, has_parent_merge_label := get_current_control_merge_target(s);
           if has_parent_merge_label {
-            add_op(s, "OpBranch", parent_merge_label);
+            add_op(s, "OpBranch", parent_merge_label, is_terminator=true);
           } else {
-            add_op(s, "               OpUnreachable");
+            add_op(s, "OpUnreachable", is_terminator=true);
           }
           return true, true, diag;
         }
         // Keep a concrete merge block for structured control flow, but terminate it
         // so the next emitted label starts a fresh basic block.
-        add_op(s, "               OpUnreachable");
+        add_op(s, "OpUnreachable", is_terminator=true);
         return true, true, diag;
       }
       return true, false, diag;
@@ -6005,7 +5909,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         }
         a(*switch_line_sb, " % %", case_word, id_text(case_labels[it_index]));
       }
-      add_op(s, builder_to_string(*switch_line_sb));
+      add_op(s, builder_to_string(*switch_line_sb), is_terminator=true);
 
       array_add(*s.break_targets, merge_label);
       array_add(*s.control_merge_targets, merge_label);
@@ -6028,7 +5932,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           if it.falls_through && it_index + 1 < case_labels.count {
             target_label = case_labels[it_index+1];
           }
-          add_op(s, "OpBranch", target_label);
+          add_op(s, "OpBranch", target_label, is_terminator=true);
         }
       }
       if s.control_merge_targets.count > 0 s.control_merge_targets.count -= 1;
@@ -6054,10 +5958,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       loop_ptr_type_id := func_ptr_type_id_from_kind(s, start_type);
       if loop_ptr_type_id == 0 return_err("for-loop start type is unsupported (%).", start_type);
       loop_zero := get_null_const(s, type_id_from_kind(s, start_type));
-      add_local_decl(s, tprint("         % = OpVariable % Function %",
-                                          id_text(loop_ptr),
-                                          id_text(loop_ptr_type_id),
-                                          id_text(loop_zero)));
+      add_local_decl(s, "% = OpVariable % Function %", id_text(loop_ptr), id_text(loop_ptr_type_id), id_text(loop_zero));
       add_debug_name(s, loop_ptr, loop_name);
       array_add(*s.locals, .{name=loop_name, ptr_id=loop_ptr, type=start_type});
       add_op(s, "OpStore", loop_ptr, start_id);
@@ -6067,7 +5968,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       continue_label := new_id(s);
       merge_label := new_id(s);
 
-      add_op(s, "OpBranch", header_label);
+      add_op(s, "OpBranch", header_label, is_terminator=true);
       add_op(s, header_label, "OpLabel");
 
       it_value := new_id(s);
@@ -6081,7 +5982,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if !cmp_ok return false, false, cmp_diag;
       if cmp_type != .BOOL return_err("for-loop comparison '%' must produce bool.", stmt.for_cmp);
       add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
-      add_op(s, "OpBranchConditional", cmp_id, body_label, merge_label);
+      add_op(s, "OpBranchConditional", cmp_id, body_label, merge_label, is_terminator=true);
 
       add_op(s, body_label, "OpLabel");
       array_add(*s.break_targets, merge_label);
@@ -6093,7 +5994,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if s.break_targets.count > 0 s.break_targets.count -= 1;
       if !body_ok return false, false, body_diag;
       if !body_terminated {
-        add_op(s, "OpBranch", continue_label);
+        add_op(s, "OpBranch", continue_label, is_terminator=true);
       }
 
       add_op(s, continue_label, "OpLabel");
@@ -6118,7 +6019,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if !next_ok return false, false, next_diag;
       if next_type != start_type return_err("for-loop step must preserve induction type.");
       add_op(s, "OpStore", loop_ptr, next_it);
-      add_op(s, "OpBranch", header_label);
+      add_op(s, "OpBranch", header_label, is_terminator=true);
 
       add_op(s, merge_label, "OpLabel");
       s.locals.count = local_count_before;
@@ -6133,7 +6034,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       continue_label := new_id(s);
       merge_label := new_id(s);
 
-      add_op(s, "OpBranch", header_label);
+      add_op(s, "OpBranch", header_label, is_terminator=true);
       add_op(s, header_label, "OpLabel");
 
       cond_id, cond_type, cond_ok, cond_diag := emit_expr(s, stmt.while_condition);
@@ -6141,7 +6042,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       cond_id, cond_ok, cond_diag = coerce_to_kind(s, cond_id, cond_type, .BOOL);
       if !cond_ok return false, false, cond_diag;
       add_op(s, tprint("               OpLoopMerge % % None", id_text(merge_label), id_text(continue_label)));
-      add_op(s, "OpBranchConditional", cond_id, body_label, merge_label);
+      add_op(s, "OpBranchConditional", cond_id, body_label, merge_label, is_terminator=true);
 
       add_op(s, body_label, "OpLabel");
       array_add(*s.break_targets, merge_label);
@@ -6153,11 +6054,11 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if s.break_targets.count > 0 s.break_targets.count -= 1;
       if !body_ok return false, false, body_diag;
       if !body_terminated {
-        add_op(s, "OpBranch", continue_label);
+        add_op(s, "OpBranch", continue_label, is_terminator=true);
       }
 
       add_op(s, continue_label, "OpLabel");
-      add_op(s, "OpBranch", header_label);
+      add_op(s, "OpBranch", header_label, is_terminator=true);
 
       add_op(s, merge_label, "OpLabel");
       return true, false, diag;
@@ -6166,14 +6067,14 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
     case .BREAK; {
       break_target, found := get_current_break_target(s);
       if !found return_err("break used outside loop.");
-      add_op(s, "OpBranch", break_target);
+      add_op(s, "OpBranch", break_target, is_terminator=true);
       return true, true, diag;
     }
 
     case .CONTINUE; {
       loop_target, found := get_current_loop_target(s);
       if !found return_err("continue used outside loop.");
-      add_op(s, "OpBranch", loop_target.continue_label);
+      add_op(s, "OpBranch", loop_target.continue_label, is_terminator=true);
       return true, true, diag;
     }
 
@@ -6208,7 +6109,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if builtin_kind == .DISCARD {
         if s.stage != .FRAGMENT return_err("discard is currently fragment-stage only.");
         if stmt.call_expr.args.count != 0 return_err("discard expects 0 args.");
-        add_op(s, tprint("               OpKill"));
+        add_op(s, "OpKill", is_terminator=true);
         return true, true, diag;
       }
 
@@ -6253,7 +6154,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             branch_target = s.control_merge_targets[s.control_merge_targets.count-1];
           }
         }
-        add_op(s, "OpBranch", branch_target);
+        add_op(s, "OpBranch", branch_target, is_terminator=true);
         return true, true, diag;
       }
 
@@ -6262,7 +6163,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if stmt.return_expr {
           return_err("inline helper return cannot return a value.");
         }
-        add_op(s, "OpBranch", inline_return_target);
+        add_op(s, "OpBranch", inline_return_target, is_terminator=true);
         return true, true, diag;
       }
 
@@ -6270,7 +6171,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if stmt.return_expr {
           return_err("return with value is not supported yet for compute.");
         }
-        add_op(s, "               OpReturn");
+        add_op(s, "OpReturn", is_terminator=true);
         return true, true, diag;
       }
 
@@ -6306,7 +6207,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return_err("return expression type does not match output type.");
       }
       add_op(s, "OpStore", output_var.var_id, coerced_id);
-      add_op(s, "               OpReturn");
+      add_op(s, "OpReturn", is_terminator=true);
       return true, true, diag;
     }
   }
@@ -6317,7 +6218,6 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
 emit_stmt_block :: (using s: *IR_SPV_Gen_State, block: *IR_Block) -> (ok: bool, terminated: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return false, false, make_diag(msg, ..args); }
 
-  assert(s != null);
   if !block return_err("null statement block.");
   local_count_before := s.locals.count;
   local_array_count_before := s.local_arrays.count;
@@ -6374,7 +6274,6 @@ append_interface_var_decorations :: (sb: *String_Builder, vars: [] IR_SPV_Gen_In
 }
 
 emit_output_return_from_struct :: (s: *IR_SPV_Gen_State, local_struct: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
-  assert(s != null);
   if !local_struct return false, make_diag("missing local output struct for return.");
   for s.output_vars {
     src := find_local_struct_field(local_struct, it.name);
@@ -6387,7 +6286,7 @@ emit_output_return_from_struct :: (s: *IR_SPV_Gen_State, local_struct: *IR_SPV_G
     add_op(s, value_id, "OpLoad", type_id, src.ptr_id);
     add_op(s, "OpStore", it.var_id, value_id);
   }
-  add_op(s, "               OpReturn");
+  add_op(s, "OpReturn", is_terminator=true);
   return true, {};
 }
 
@@ -6459,7 +6358,7 @@ spv_append_buffer_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State, stor
       append(*struct_type_line_sb, " ", id_text(field_type_id));
     }
     append(*struct_type_line_sb, "\n");
-    append(sb, builder_to_string(*struct_type_line_sb));
+    append_and_steal_buffers(sb, *struct_type_line_sb);
   }
 
   for s.buffers {
@@ -6478,7 +6377,7 @@ spv_append_buffer_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State, stor
         append(*struct_type_line_sb, " ", id_text(field_type_id));
       }
       append(*struct_type_line_sb, "\n");
-      append(sb, builder_to_string(*struct_type_line_sb));
+      append_and_steal_buffers(sb, *struct_type_line_sb);
     }
     spv_append_buffer_array_type(sb, buffer);
     a(sb, "% = OpTypeStruct %", id_text(buffer.wrapper_struct_type_id), id_text(buffer.runtimearr_type_id));
@@ -6522,7 +6421,6 @@ find_pointer_root_arg :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct)
 }
 
 ps_assign_struct_info :: (s: *IR_SPV_Gen_State, infos: *[..] IR_SPV_PS_Struct_Info, struct_name: string, prefix: string, depth := 0) -> bool {
-  assert(s != null);
   assert(infos != null);
   if depth > 24 return false;
   existing := find_ps_struct_info(infos, struct_name);
@@ -6557,7 +6455,6 @@ ps_assign_struct_info :: (s: *IR_SPV_Gen_State, infos: *[..] IR_SPV_PS_Struct_In
 }
 
 ps_get_ptr_to_ptr_type :: (s: *IR_SPV_Gen_State, ptr_to_ptr_types: *[..] IR_SPV_PS_Ptr_To_Ptr, ptr_type_id: s64) -> s64 {
-  assert(s != null);
   assert(ptr_to_ptr_types != null);
   for ptr_to_ptr_types.* if it.ptr_type_id == ptr_type_id return it.ptr_to_ptr_type_id;
   new_ptr := new_id(s);

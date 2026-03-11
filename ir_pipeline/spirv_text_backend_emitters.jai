@@ -73,7 +73,7 @@ ps_emit_struct_type_decl_recursive :: (sb: *String_Builder, state: *IR_SPV_Gen_S
     append(*type_line, " ", id_text(member_type_id));
   }
   append(*type_line, "\n");
-  append(sb, builder_to_string(*type_line));
+  append_and_steal_buffers(sb, *type_line);
   array_add(emitted, struct_name);
   return true, {};
 }
@@ -374,7 +374,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     append(*entry_point_sb, " ", id_text(state.id_write_3d_textures_var));
   }
   append(*entry_point_sb, "\n");
-  append(*sb, builder_to_string(*entry_point_sb));
+  append_and_steal_buffers(*sb, *entry_point_sb);
   if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
   append(*sb, "               OpSource Unknown 100000\n");
   append(*sb, tprint("               OpName % \"%\"\n", id_text(state.id_main), entry_name));
@@ -720,7 +720,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     append(*entry_point_sb, " ", id_text(state.id_write_3d_textures_var));
   }
   append(*entry_point_sb, "\n");
-  append(*sb, builder_to_string(*entry_point_sb));
+  append_and_steal_buffers(*sb, *entry_point_sb);
   if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
   append(*sb, "               OpSource Unknown 100000\n");
   append(*sb, tprint("               OpName % \"%\"\n", id_text(state.id_main), entry_name));
@@ -802,7 +802,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     append(*type_line, tprint("% = OpTypeStruct", id_text(it.struct_type_id)));
     for it.fields append(*type_line, " ", id_text(it.field_type_id));
     append(*type_line, "\n");
-    append(*sb, builder_to_string(*type_line));
+    append_and_steal_buffers(*sb, *type_line);
     append(*sb, tprint("% = OpTypePointer Uniform %\n", id_text(it.ptr_uniform_struct_type_id), id_text(it.struct_type_id)));
   }
   spv_append_buffer_type_decls(*sb, *state, "StorageBuffer");
@@ -1069,35 +1069,35 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   if state.uses_write_2d append(*entry_point_sb, " ", id_text(state.id_write_2d_textures_var));
   if state.uses_write_3d append(*entry_point_sb, " ", id_text(state.id_write_3d_textures_var));
   append(*entry_point_sb, "\n");
-  append(*sb, builder_to_string(*entry_point_sb));
-  append(*sb, tprint("               OpExecutionMode % LocalSize 1 1 1\n", id_text(state.id_main)));
-  append(*sb, "               OpSource Unknown 100000\n");
-  append(*sb, tprint("               OpName % \"ComputeMain\"\n", id_text(state.id_main)));
-  append(*sb, tprint("               OpName % \"gl_GlobalInvocationID\"\n", id_text(state.id_gl_global_invocation_id)));
-  append(*sb, tprint("               OpName % \"gl_LocalInvocationID\"\n", id_text(state.id_gl_local_invocation_id)));
-  append(*sb, tprint("               OpName % \"gl_WorkGroupID\"\n", id_text(state.id_gl_workgroup_id)));
-  append(*sb, tprint("               OpName % \"gl_LocalInvocationIndex\"\n", id_text(state.id_gl_local_invocation_index)));
-  for state.buffers append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
-  if state.uses_write_2d append(*sb, tprint("               OpName % \"write_2d_textures\"\n", id_text(state.id_write_2d_textures_var)));
-  if state.uses_write_3d append(*sb, tprint("               OpName % \"write_3d_textures\"\n", id_text(state.id_write_3d_textures_var)));
+  append_and_steal_buffers(*sb, *entry_point_sb);
+  append(*sb, tprint("OpExecutionMode % LocalSize 1 1 1\n", id_text(state.id_main)));
+  append(*sb, "OpSource Unknown 100000\n");
+  append(*sb, tprint("OpName % \"ComputeMain\"\n", id_text(state.id_main)));
+  append(*sb, tprint("OpName % \"gl_GlobalInvocationID\"\n", id_text(state.id_gl_global_invocation_id)));
+  append(*sb, tprint("OpName % \"gl_LocalInvocationID\"\n", id_text(state.id_gl_local_invocation_id)));
+  append(*sb, tprint("OpName % \"gl_WorkGroupID\"\n", id_text(state.id_gl_workgroup_id)));
+  append(*sb, tprint("OpName % \"gl_LocalInvocationIndex\"\n", id_text(state.id_gl_local_invocation_index)));
+  for state.buffers append(*sb, tprint("OpName % \"%\"\n", id_text(it.var_id), it.name));
+  if state.uses_write_2d append(*sb, tprint("OpName % \"write_2d_textures\"\n", id_text(state.id_write_2d_textures_var)));
+  if state.uses_write_3d append(*sb, tprint("OpName % \"write_3d_textures\"\n", id_text(state.id_write_3d_textures_var)));
   spv_append_function_constant_names(*sb, *state);
-  for state.debug_names append(*sb, tprint("               OpName % \"%\"\n", id_text(it.id), it.name));
-  for state.debug_member_names append(*sb, tprint("               OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
-  append(*sb, tprint("               OpDecorate % BuiltIn GlobalInvocationId\n", id_text(state.id_gl_global_invocation_id)));
-  append(*sb, tprint("               OpDecorate % BuiltIn LocalInvocationId\n", id_text(state.id_gl_local_invocation_id)));
-  append(*sb, tprint("               OpDecorate % BuiltIn WorkgroupId\n", id_text(state.id_gl_workgroup_id)));
-  append(*sb, tprint("               OpDecorate % BuiltIn LocalInvocationIndex\n", id_text(state.id_gl_local_invocation_index)));
+  for state.debug_names append(*sb, tprint("OpName % \"%\"\n", id_text(it.id), it.name));
+  for state.debug_member_names append(*sb, tprint("OpMemberName % % \"%\"\n", id_text(it.type_id), it.member_index, it.name));
+  append(*sb, tprint("OpDecorate % BuiltIn GlobalInvocationId\n", id_text(state.id_gl_global_invocation_id)));
+  append(*sb, tprint("OpDecorate % BuiltIn LocalInvocationId\n", id_text(state.id_gl_local_invocation_id)));
+  append(*sb, tprint("OpDecorate % BuiltIn WorkgroupId\n", id_text(state.id_gl_workgroup_id)));
+  append(*sb, tprint("OpDecorate % BuiltIn LocalInvocationIndex\n", id_text(state.id_gl_local_invocation_index)));
   spv_append_function_constant_decorations(*sb, *state);
   spv_append_base_buffer_decorations(*sb, *state);
   spv_append_buffer_layout_decorations(*sb, *state);
   spv_append_buffer_binding_decorations(*sb, *state);
   if state.uses_write_2d {
-    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_write_2d_textures_var), WRITE_2D_TEXTURES_BINDING));
-    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_write_2d_textures_var)));
+    append(*sb, tprint("OpDecorate % Binding %\n", id_text(state.id_write_2d_textures_var), WRITE_2D_TEXTURES_BINDING));
+    append(*sb, tprint("OpDecorate % DescriptorSet 0\n", id_text(state.id_write_2d_textures_var)));
   }
   if state.uses_write_3d {
-    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_write_3d_textures_var), WRITE_3D_TEXTURES_BINDING));
-    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_write_3d_textures_var)));
+    append(*sb, tprint("OpDecorate % Binding %\n", id_text(state.id_write_3d_textures_var), WRITE_3D_TEXTURES_BINDING));
+    append(*sb, tprint("OpDecorate % DescriptorSet 0\n", id_text(state.id_write_3d_textures_var)));
   }
 
   spv_append_common_type_decls(*sb, *state, "StorageBuffer");
