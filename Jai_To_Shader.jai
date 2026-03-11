@@ -119,27 +119,15 @@ jst_detect_module_root :: () -> string {
 }
 
 jst_collect_module_jai_files :: (module_root: string) -> [..] string {
+  #import "File_Utilities";
   files: [..] string;
-  if module_root.count == 0 return files;
-
-  cmd := tprint("find \"%\" -type f -name \"*.jai\" -not -path \"*/.build/*\" -not -path \"*/.git/*\" | LC_ALL=C sort", module_root);
-  result, stdout, stderr, timeout_reached := Process.run_command("sh", "-lc", cmd, capture_and_return_output=true, timeout_ms=10_000);
-  if timeout_reached return files;
-  if result.type != .EXITED || result.exit_code != 0 {
-    if VERBOSE && stderr.count != 0 log("JST fingerprint find stderr: %", stderr);
-    return files;
+  visitor :: (info: *File_Visit_Info, user_data: *[..] string) {
+      if ends_with(info.full_name, ".jai") {
+          if contains(info.full_name, "/.") return; // TODO @Perf see why descend_into_directory isn't working on mac?
+          array_add(user_data, copy_string(info.full_name));
+      }
   }
-
-  i: s64 = 0;
-  while i < stdout.count {
-    start := i;
-    while i < stdout.count && stdout[i] != #char "\n" i += 1;
-    line: string = .{i - start, stdout.data + start};
-    if i < stdout.count && stdout[i] == #char "\n" i += 1;
-    line = trim_ascii_whitespace(line);
-    if line.count == 0 continue;
-    array_add(*files, copy_string(line));
-  }
+  visit_files(module_root, true, *files, visitor);
   return files;
 }
 
@@ -889,6 +877,12 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
         emit_lookup_overloads(plugin, p.workspace);
       }
     }
+    
+    /*
+    case .FILE;
+        message_file := cast(*Message_File)message;
+        log("FILE: % vs %", message_file.fully_pathed_filename, #file);
+    */
     
     case .COMPLETE; {
       using,except(message, plugin) plugin;
