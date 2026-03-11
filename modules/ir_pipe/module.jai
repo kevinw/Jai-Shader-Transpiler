@@ -17,6 +17,7 @@ assemble_spirv_text :: (spvasm_path: string, output_spv: string) -> bool #c_call
 ir_run_command_checked :: (description: string, args: [] string) -> bool #c_call #foreign ir_pipe_lib;
 normalize_shader :: (shader: *IR_Shader) #foreign ir_pipe_lib "_jdll_normalize_shader";
 emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: IR_Shader_Kind, target: Toolchain_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool #c_call #foreign ir_pipe_lib;
+to_spv_binary :: (shader: *IR_Shader) -> IR_Result([] u8) #foreign ir_pipe_lib "_jdll_to_spv_binary";
 to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) #foreign ir_pipe_lib "_jdll_to_spvasm";
 ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Compute_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_compute_from_shader_context";
 ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Fragment_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_fragment_from_shader_context";
