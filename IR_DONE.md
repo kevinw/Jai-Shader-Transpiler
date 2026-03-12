@@ -348,3 +348,37 @@ Status: Fixed (March 8, 2026) via generated compare-exchange retry loops.
 - Verification:
   - `jai -quiet modules/Jai-Shader-Transpiler/headless_ir/build_ir_headless.jai -`
   - `jai -quiet modules/Jai-Shader-Transpiler/build.jai - -run_tests`
+
+## 44) Vector-valued helper math no longer mis-coerces through scalar float paths
+Status: Fixed (March 12, 2026) for compact vector helper expressions and exact result-kind coercion.
+- Symptom before:
+  - Pair shader lowering could fail with diagnostics such as:
+    - `SPIR-V backend: cannot coerce value type FLOAT2 to float3.`
+    - `detail: SPIR-V backend: unsupported conversion from FLOAT2 to FLOAT.`
+- Where hit:
+  - `src/apps/shaders/raytracer_shader.jai` while adding animated floor-noise helpers using compact `Vector2` math, for example:
+```jai
+raytracer_noise2 :: (p: Vector2) -> float {
+    cell := Vector2.{floor(p.x), floor(p.y)};
+    local := Vector2.{frac(p.x), frac(p.y)};
+    smooth := local * local * (Vector2.{3.0, 3.0} - local * 2.0);
+
+    n00 := raytracer_hash2(cell.x, cell.y);
+    n10 := raytracer_hash2(cell.x + 1.0, cell.y);
+    n01 := raytracer_hash2(cell.x, cell.y + 1.0);
+    n11 := raytracer_hash2(cell.x + 1.0, cell.y + 1.0);
+    nx0 := n00 + (n10 - n00) * smooth.x;
+    nx1 := n01 + (n11 - n01) * smooth.x;
+    return nx0 + (nx1 - nx0) * smooth.y;
+}
+```
+- Implemented:
+  - Switched `coerce_to_expr_result_kind` to use exact-kind coercion so vector-typed expression result slots preserve `FLOAT2/3/4` instead of falling through scalar-only conversion.
+  - Added compact float-vector constructor flattening in the SPIR-V backend, so vector constructors can consume vector/scalar component mixes without misrouting through scalar coercion.
+  - Added compute semantics coverage in `headless_ir/compute_semantics_runner.jai`:
+    - `vector2_noise_compact_chain`
+  - Restored the compact vector form in `src/apps/shaders/raytracer_shader.jai` instead of keeping the scalar-expanded workaround.
+- Verification:
+  - `jai modules/Jai-Shader-Transpiler/headless_ir/build_ir_compute_semantics.jai`
+  - `jai modules/Jai-Shader-Transpiler/headless_ir/build_ir_graphics_semantics.jai`
+  - `jai build.jai - src/apps/raytracer.jai`

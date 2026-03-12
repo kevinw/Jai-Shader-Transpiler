@@ -3191,9 +3191,60 @@ coerce_to_expr_result_kind :: (s: *IR_SPV_Gen_State, expr: *IR_Expr, value_id: s
   if target_kind == .UNKNOWN || target_kind == .STRUCT || target_kind == value_type {
     return value_id, value_type, true, {};
   }
-  coerced, coerced_ok, coerced_diag := coerce_to_kind(s, value_id, value_type, target_kind);
+  // Expression result slots can be vector-typed, so they need the exact coercion path.
+  coerced, coerced_type, coerced_ok, coerced_diag := coerce_to_exact_kind(s, value_id, value_type, target_kind);
   if !coerced_ok return 0, .UNKNOWN, false, coerced_diag;
-  return coerced, target_kind, true, {};
+  return coerced, coerced_type, true, {};
+}
+
+spv_float_vector_component_count :: (kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .FLOAT2 return 2;
+  if kind == .FLOAT3 return 3;
+  if kind == .FLOAT4 return 4;
+  return 0;
+}
+
+emit_flattened_float_ctor_components :: (
+  s: *IR_SPV_Gen_State,
+  args: [] *IR_Expr,
+  expected_count: s64,
+  out_components: *[4]s64,
+) -> (ok: bool, diag: IR_Diagnostic) {
+  component_count := 0;
+  for args {
+    arg_id, arg_type, arg_ok, arg_diag := emit_expr(s, it);
+    if !arg_ok return false, arg_diag;
+
+    vector_components := spv_float_vector_component_count(arg_type);
+    if vector_components != 0 {
+      if component_count + vector_components > expected_count {
+        return false, make_diag(tprint("float% constructor received too many components (%/%).", expected_count, component_count + vector_components, expected_count));
+      }
+
+      // Flatten vector constructor args so forms like float4(float2, float, float) lower cleanly.
+      for component_index: 0..vector_components-1 {
+        component_id := new_id(s);
+        spv_emit_composite_extract(s, component_id, s.id_float, arg_id, .[cast(u32) component_index]);
+        out_components.*[component_count] = component_id;
+        component_count += 1;
+      }
+      continue;
+    }
+
+    scalar_id, scalar_ok, scalar_diag := coerce_to_float(s, arg_id, arg_type);
+    if !scalar_ok return false, scalar_diag;
+    if component_count >= expected_count {
+      return false, make_diag(tprint("float% constructor received too many components.", expected_count));
+    }
+    out_components.*[component_count] = scalar_id;
+    component_count += 1;
+  }
+
+  if component_count != expected_count {
+    return false, make_diag(tprint("float% constructor expects % components, got %.", expected_count, expected_count, component_count));
+  }
+
+  return true, {};
 }
 
 emit_float_binary_op :: (s: *IR_SPV_Gen_State, op: string, left_id: s64, right_id: s64) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
@@ -5567,57 +5618,27 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
     case .CONSTRUCTOR; {
       ctor_type := spv_kind_from_ir_expr_result(expr);
       if ctor_type == .FLOAT2 {
-        if expr.args.count != 2 return_err("float2 constructor expects 2 args, got %.", expr.args.count);
-        a_id, a_type, a_ok, a_diag := emit_expr(s, expr.args[0]);
-        if !a_ok return 0, .UNKNOWN, false, a_diag;
-        b_id, b_type, b_ok, b_diag := emit_expr(s, expr.args[1]);
-        if !b_ok return 0, .UNKNOWN, false, b_diag;
-        af, af_ok, af_diag := coerce_to_float(s, a_id, a_type);
-        if !af_ok return 0, .UNKNOWN, false, af_diag;
-        bf, bf_ok, bf_diag := coerce_to_float(s, b_id, b_type);
-        if !bf_ok return 0, .UNKNOWN, false, bf_diag;
+        components: [4]s64;
+        components_ok, components_diag := emit_flattened_float_ctor_components(s, expr.args, 2, *components);
+        if !components_ok return 0, .UNKNOWN, false, components_diag;
         out := new_id(s);
-        add_op(s, out, "OpCompositeConstruct", s.id_float2, af, bf);
+        spv_emit_composite_construct(s, out, s.id_float2, .[components[0], components[1]]);
         return out, .FLOAT2, true, diag;
       }
       if ctor_type == .FLOAT3 {
-        if expr.args.count != 3 return_err("float3 constructor expects 3 args, got %.", expr.args.count);
-        a0_id, a0_type, a0_ok, a0_diag := emit_expr(s, expr.args[0]);
-        if !a0_ok return 0, .UNKNOWN, false, a0_diag;
-        a1_id, a1_type, a1_ok, a1_diag := emit_expr(s, expr.args[1]);
-        if !a1_ok return 0, .UNKNOWN, false, a1_diag;
-        a2_id, a2_type, a2_ok, a2_diag := emit_expr(s, expr.args[2]);
-        if !a2_ok return 0, .UNKNOWN, false, a2_diag;
-        f0, f0_ok, f0_diag := coerce_to_float(s, a0_id, a0_type);
-        if !f0_ok return 0, .UNKNOWN, false, f0_diag;
-        f1, f1_ok, f1_diag := coerce_to_float(s, a1_id, a1_type);
-        if !f1_ok return 0, .UNKNOWN, false, f1_diag;
-        f2, f2_ok, f2_diag := coerce_to_float(s, a2_id, a2_type);
-        if !f2_ok return 0, .UNKNOWN, false, f2_diag;
+        components: [4]s64;
+        components_ok, components_diag := emit_flattened_float_ctor_components(s, expr.args, 3, *components);
+        if !components_ok return 0, .UNKNOWN, false, components_diag;
         out := new_id(s);
-        add_op(s, out, "OpCompositeConstruct", s.id_float3, f0, f1, f2);
+        spv_emit_composite_construct(s, out, s.id_float3, .[components[0], components[1], components[2]]);
         return out, .FLOAT3, true, diag;
       }
       if ctor_type == .FLOAT4 {
-        if expr.args.count != 4 return_err("float4 constructor expects 4 args, got %.", expr.args.count);
-        a0_id, a0_type, a0_ok, a0_diag := emit_expr(s, expr.args[0]);
-        if !a0_ok return 0, .UNKNOWN, false, a0_diag;
-        a1_id, a1_type, a1_ok, a1_diag := emit_expr(s, expr.args[1]);
-        if !a1_ok return 0, .UNKNOWN, false, a1_diag;
-        a2_id, a2_type, a2_ok, a2_diag := emit_expr(s, expr.args[2]);
-        if !a2_ok return 0, .UNKNOWN, false, a2_diag;
-        a3_id, a3_type, a3_ok, a3_diag := emit_expr(s, expr.args[3]);
-        if !a3_ok return 0, .UNKNOWN, false, a3_diag;
-        f0, f0_ok, f0_diag := coerce_to_float(s, a0_id, a0_type);
-        if !f0_ok return 0, .UNKNOWN, false, f0_diag;
-        f1, f1_ok, f1_diag := coerce_to_float(s, a1_id, a1_type);
-        if !f1_ok return 0, .UNKNOWN, false, f1_diag;
-        f2, f2_ok, f2_diag := coerce_to_float(s, a2_id, a2_type);
-        if !f2_ok return 0, .UNKNOWN, false, f2_diag;
-        f3, f3_ok, f3_diag := coerce_to_float(s, a3_id, a3_type);
-        if !f3_ok return 0, .UNKNOWN, false, f3_diag;
+        components: [4]s64;
+        components_ok, components_diag := emit_flattened_float_ctor_components(s, expr.args, 4, *components);
+        if !components_ok return 0, .UNKNOWN, false, components_diag;
         out := new_id(s);
-        add_op(s, out, "OpCompositeConstruct", s.id_float4, f0, f1, f2, f3);
+        spv_emit_composite_construct(s, out, s.id_float4, .[components[0], components[1], components[2], components[3]]);
         return out, .FLOAT4, true, diag;
       }
       if ctor_type == .FLOAT2X2 {

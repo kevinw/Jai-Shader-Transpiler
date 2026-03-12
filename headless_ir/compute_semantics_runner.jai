@@ -157,6 +157,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"shaderfuncs_vector_coerce_int_scalars", .Bare},
   {"vector_anonymous_literal_chain", .Bare},
   {"vector_anonymous_literal_chain_34", .Bare},
+  {"vector2_noise_compact_chain", .Bare},
   {"vector_negate", .Bare},
   {"helper_nested_call", .Bare},
   {"struct_constructor_from_member_expr", .Boids},
@@ -2316,6 +2317,39 @@ vector_anonymous_literal_chain_34 :: (using in: Compute_Semantics_In, values: *u
   p4 := Vector4.{q3.x, q3.y, q3.z, 0.5};
   q4 := p4 * 0.91 + .{0.1, 0.2, 0.3, 0.4};
   values[idx] = cast(u32) floor((q4.x + q4.y + q4.z + q4.w) * 30.0 + 0.5);
+} @compute_shader
+
+vector2_noise_hash :: (p: Vector2) -> float {
+  // Keep the hash arithmetic deterministic across CPU/GPU so this stays a
+  // lowering test instead of turning into a transcendental precision test.
+  return frac((p.x * 17.0 + p.y * 23.0) * 0.125);
+}
+
+vector2_noise_compact :: (p: Vector2) -> float {
+  cell := Vector2.{floor(p.x), floor(p.y)};
+  local := Vector2.{frac(p.x), frac(p.y)};
+  smooth := local * local * (Vector2.{3.0, 3.0} - local * 2.0);
+
+  n00 := vector2_noise_hash(cell);
+  n10 := vector2_noise_hash(cell + .{1.0, 0.0});
+  n01 := vector2_noise_hash(cell + .{0.0, 1.0});
+  n11 := vector2_noise_hash(cell + .{1.0, 1.0});
+  nx0 := n00 + (n10 - n00) * smooth.x;
+  nx1 := n01 + (n11 - n01) * smooth.x;
+  return nx0 + (nx1 - nx0) * smooth.y;
+}
+
+vector2_noise_compact_chain :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  base := Vector2.{cast(float) (idx % 11) * 0.17 + 0.25, cast(float) (idx % 7) * 0.13 + 0.4};
+  flow_t := cast(float) idx * 0.03125;
+  warp_x := vector2_noise_compact(base * 0.42 + .{flow_t, -flow_t * 0.7});
+  warp_y := vector2_noise_compact(base * 0.42 + .{3.7 - flow_t * 0.5, 8.1 + flow_t});
+  swell := vector2_noise_compact(base * 0.18 + .{5.4 + flow_t * 0.35, 1.9 - flow_t * 0.25});
+  offset := Vector2.{warp_x - 0.5, warp_y - 0.5} * (0.22 + swell * 0.16);
+  warped := base + offset;
+  values[idx] = cast(u32) floor((warped.x * 131.0 + warped.y * 173.0) + 0.5);
 } @compute_shader
 
 // Gap probes (not in ALL_TEST_FUNCTIONS yet):
