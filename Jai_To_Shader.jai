@@ -872,7 +872,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
         }
 
         if plugin.manifest_entries.count > 0 emit_shader_reload_manifest(plugin);
-        jst_log_cache_summary();
+        #if VERBOSE jst_log_cache_summary();
 
         emit_lookup_overloads(plugin, p.workspace);
       }
