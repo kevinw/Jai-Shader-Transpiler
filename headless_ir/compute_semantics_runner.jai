@@ -143,6 +143,8 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"nested_struct_helper_arg_copy", .Bare},
   {"scalar_helper_if_return_chain", .Bare},
   {"pointer_alias_from_member_expr", .Bare},
+  {"nested_pointer_field_from_local_struct", .Bare},
+  {"nested_local_member_expr_chain", .Bare},
   {"shaderfuncs_normalize_mix_clamp", .Bare},
   {"shaderfuncs_saturate", .Bare},
   {"shaderfuncs_lerp", .Bare},
@@ -174,6 +176,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"access_chain", .Boids},
   {"helper_struct_chain", .Boids},
   {"helper_struct_direct_assign", .Boids},
+  {"nested_boid_member_chain", .Boids},
   {"raw_vec3_buffer_component_write", .Vec3},
   {"raw_vec4_buffer_component_write", .Vec4},
   {"struct_vec4_field_write", .Vec4Box},
@@ -2133,6 +2136,35 @@ Edge_Case_108_Params :: struct {
   values: *u32;
 }
 
+Edge_Case_115_Inner :: struct {
+  base: u32;
+  bias: u32;
+}
+
+Edge_Case_115_Params :: struct {
+  nested: Edge_Case_115_Inner;
+}
+
+Edge_Case_115_Boid_View :: struct {
+  scale: float;
+  offset: float;
+}
+
+Edge_Case_115_Boid_Params :: struct {
+  view: Edge_Case_115_Boid_View;
+  bias: u32;
+}
+
+Edge_Case_116_Inner :: struct {
+  values: *u32;
+  bias: u32;
+}
+
+Edge_Case_116_Params :: struct {
+  nested: Edge_Case_116_Inner;
+  gain: u32;
+}
+
 pointer_alias_from_member_expr :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;
@@ -2140,6 +2172,39 @@ pointer_alias_from_member_expr :: (using in: Compute_Semantics_In, values: *u32)
   alias := params.values;
   alias[idx] = alias[idx] + idx + 9;
   alias[idx] = alias_read(alias, idx) * 3 + 2;
+} @compute_shader
+
+nested_pointer_field_from_local_struct :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  params := Edge_Case_116_Params.{
+    nested = .{
+      values = values,
+      bias = (idx % 5) + 4,
+    },
+    gain = 2,
+  };
+  params.nested.values[idx] = alias_read(params.nested.values, idx) + params.nested.bias * params.gain + idx;
+} @compute_shader
+
+nested_local_member_expr_chain :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  params := Edge_Case_115_Params.{nested = .{base = values[idx], bias = (idx % 5) + 4}};
+  values[idx] = params.nested.base + params.nested.bias + idx * 2;
+} @compute_shader
+
+nested_boid_member_chain :: (using in: Compute_Semantics_In, values: *u32, boids: *Compute_Boid_State) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  params := Edge_Case_115_Boid_Params.{};
+  params.view.scale = 1.5;
+  params.view.offset = 0.25;
+  params.bias = (idx % 7) + 3;
+  src := boids[idx];
+  px := src.pos.x + src.vel.x * params.view.scale + params.view.offset;
+  py := src.pos.y + src.vel.y * params.view.scale + params.view.offset;
+  values[idx] = cast(u32) (px * 6.0 + py * 4.0) + params.bias;
 } @compute_shader
 
 shaderfuncs_normalize_mix_clamp :: (using in: Compute_Semantics_In, values: *u32) {

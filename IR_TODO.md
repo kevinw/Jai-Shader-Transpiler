@@ -234,11 +234,11 @@ Direction note:
 
 ## Low Impact / Cleanup
 
-## 19) Maintain identifier names in IR for better diagnostics and debugging
+## 20) Maintain identifier names in IR for better diagnostics and debugging
 - Desired fix:
   - Preserve stable source-facing identifier names through more IR/debug paths so backend diagnostics and dumped IR are easier to read while debugging failures.
 
-## 20) Builtin-note detection still relies on note text parsing
+## 21) Builtin-note detection still relies on note text parsing
 - Symptom:
   - Compute builtin mapping uses normalized exact note-name text matching instead of structured note/operator identity.
 - Where hit:
@@ -251,7 +251,7 @@ Direction note:
   - Thread source-declaration provenance for compute input members so lowering can read structured `Code_Note` info when available.
   - Emit diagnostics that include exact source note location/operator when unsupported.
 
-## 21) IR still duplicates some frontend shape that can be referenced directly during lowering
+## 22) IR still duplicates some frontend shape that can be referenced directly during lowering
 - Symptom:
   - Several lowering paths reconstruct semantics from IR text fields (`expr.text`, type-name text) instead of carrying direct provenance.
 - Where hit:

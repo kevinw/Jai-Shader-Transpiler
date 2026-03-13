@@ -162,92 +162,148 @@ resolve_ident_or_zero_deref :: (expr: *IR_Expr) -> (name: string, ok: bool) {
   return "", false;
 }
 
+ir_type_is_pointer_like :: (type: IR_Type) -> bool {
+  if type.kind == .POINTER return true;
+  if type.pointee_kind != .UNKNOWN || type.pointee_struct_name.count != 0 ||
+     type.pointee_element_kind != .UNKNOWN || type.pointee_element_struct_name.count != 0 return true;
+  return type.display_name.count > 0 && type.display_name[0] == #char "*";
+}
+
+IR_SPV_Access_Step_Kind :: enum {
+  MEMBER;
+  SUBSCRIPT;
+}
+
+IR_SPV_Access_Step :: struct {
+  kind: IR_SPV_Access_Step_Kind;
+  expr: *IR_Expr;
+  field_name: string;
+  member_access: IR_Member_Access_Kind;
+  index_expr: *IR_Expr;
+}
+
+IR_SPV_Normalized_Access :: struct {
+  root_expr: *IR_Expr;
+  root_name: string;
+  steps: [..] IR_SPV_Access_Step;
+}
+
+spv_normalize_access_expr :: (expr: *IR_Expr) -> (IR_SPV_Normalized_Access, bool) {
+  append_steps :: (expr: *IR_Expr, access: *IR_SPV_Normalized_Access) -> bool {
+    if !expr return false;
+    if expr.kind == .CAST && expr.left return append_steps(expr.left, access);
+    if expr.kind == .UNARY && expr.left &&
+       (expr.unary_op == .ADDRESS_OF || expr.unary_op == .DEREF) return append_steps(expr.left, access);
+
+    if expr.kind == .MEMBER {
+      left_ok := append_steps(expr.left, access);
+      if !left_ok return false;
+      array_add(*access.steps, .{
+        kind = .MEMBER,
+        expr = expr,
+        field_name = expr.text,
+        member_access = expr.member_access,
+      });
+      return true;
+    }
+
+    if expr.kind == .SUBSCRIPT {
+      _, zero_deref_ok := resolve_ident_or_zero_deref(expr);
+      if zero_deref_ok return append_steps(expr.left, access);
+      left_ok := append_steps(expr.left, access);
+      if !left_ok return false;
+      array_add(*access.steps, .{
+        kind = .SUBSCRIPT,
+        expr = expr,
+        index_expr = expr.right,
+      });
+      return true;
+    }
+
+    access.root_expr = expr;
+    access.root_name, _ = resolve_ident_or_zero_deref(expr);
+    return true;
+  }
+
+  access: IR_SPV_Normalized_Access;
+  access.steps.allocator = temp;
+  ok := append_steps(expr, *access);
+  if !ok return access, false;
+  return access, access.root_expr != null;
+}
+
+spv_access_path_string :: (access: IR_SPV_Normalized_Access, max_steps := -1) -> (string, bool) {
+  if access.root_name.count == 0 return "", false;
+  path := access.root_name;
+  steps_to_use := access.steps.count;
+  if max_steps >= 0 && max_steps < steps_to_use steps_to_use = max_steps;
+  for i: 0..steps_to_use-1 {
+    step := access.steps[i];
+    if step.kind != .MEMBER || step.field_name.count == 0 return "", false;
+    path = tprint("%.%", path, step.field_name);
+  }
+  return path, true;
+}
+
+spv_access_root_and_field :: (expr: *IR_Expr) -> (string, string, bool) {
+  access, access_ok := spv_normalize_access_expr(expr);
+  if !access_ok || access.steps.count != 1 return "", "", false;
+  step := access.steps[0];
+  if step.kind != .MEMBER || access.root_name.count == 0 || step.field_name.count == 0 return "", "", false;
+  return access.root_name, step.field_name, true;
+}
+
+spv_access_buffer_prefix_and_field_path :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (string, string, bool) {
+  if !expr return "", "", false;
+
+  access, access_ok := spv_normalize_access_expr(expr);
+  if !access_ok || access.root_name.count == 0 return "", "", false;
+
+  best_prefix := "";
+  best_steps: s64 = -1;
+  for i: 0..access.steps.count {
+    if i > 0 && access.steps[i-1].kind != .MEMBER break;
+    prefix, prefix_ok := spv_access_path_string(access, i);
+    if !prefix_ok break;
+    if find_buffer(s, prefix) {
+      best_prefix = prefix;
+      best_steps = i;
+    }
+  }
+
+  if best_prefix.count == 0 return "", "", false;
+  buffer_name := best_prefix;
+  if best_steps == access.steps.count return buffer_name, "", true;
+
+  suffix: string;
+  suffix_builder: String_Builder;
+  wrote_suffix := false;
+  for i: best_steps..access.steps.count-1 {
+    step := access.steps[i];
+    if step.kind != .MEMBER || step.field_name.count == 0 return buffer_name, "", false;
+    if wrote_suffix print_to_builder(*suffix_builder, ".");
+    print_to_builder(*suffix_builder, "%", step.field_name);
+    wrote_suffix = true;
+  }
+  suffix = builder_to_string(*suffix_builder);
+  return buffer_name, suffix, suffix.count > 0;
+}
+
 resolve_member_root_and_field :: (expr: *IR_Expr) -> (root_name: string, field_name: string, ok: bool) {
-  if !expr || expr.kind != .MEMBER return "", "", false;
-  root_name, root_ok := resolve_ident_or_zero_deref(expr.left);
-  if !root_ok return "", "", false;
-  return root_name, expr.text, true;
+  root_name, field_name, ok := spv_access_root_and_field(expr);
+  return root_name, field_name, ok;
 }
 
 resolve_member_path :: (expr: *IR_Expr) -> (path: string, ok: bool) {
-  if !expr return "", false;
-  if expr.kind != .MEMBER {
-    base_name, base_ok := resolve_ident_or_zero_deref(expr);
-    if !base_ok return "", false;
-    return base_name, true;
-  }
-
-  left_path, left_ok := resolve_member_path(expr.left);
-  if !left_ok return "", false;
-  if expr.text.count == 0 return "", false;
-  return tprint("%.%", left_path, expr.text), true;
-}
-
-split_path_root :: (path: string) -> (root: string, tail: string, ok: bool) {
-  if path.count == 0 return "", "", false;
-  for path {
-    if it == #char "." {
-      if it_index <= 0 || it_index + 1 >= path.count return "", "", false;
-      root: string;
-      root.data = path.data;
-      root.count = it_index;
-      tail: string;
-      tail.data = path.data + it_index + 1;
-      tail.count = path.count - it_index - 1;
-      return root, tail, true;
-    }
-  }
-  return path, "", true;
-}
-
-split_path_last :: (path: string) -> (prefix: string, tail: string, ok: bool) {
-  if path.count == 0 return "", "", false;
-  i := path.count - 1;
-  while i >= 0 {
-    if path[i] == #char "." {
-      if i <= 0 || i + 1 >= path.count return "", "", false;
-      prefix: string = .{i, path.data};
-      tail: string = .{path.count - i - 1, path.data + i + 1};
-      return prefix, tail, true;
-    }
-    if i == 0 break;
-    i -= 1;
-  }
-  return "", "", false;
-}
-
-resolve_buffer_root_and_field_path :: (expr: *IR_Expr) -> (buffer_name: string, field_path: string, ok: bool) {
-  full_path, path_ok := resolve_member_path(expr);
-  if !path_ok return "", "", false;
-  root, tail, split_ok := split_path_root(full_path);
-  if !split_ok return "", "", false;
-  if tail.count == 0 return "", "", false;
-  return root, tail, true;
+  access, access_ok := spv_normalize_access_expr(expr);
+  if !access_ok return "", false;
+  path, ok := spv_access_path_string(access);
+  return path, ok;
 }
 
 resolve_buffer_prefix_and_field_path :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (buffer_name: string, field_path: string, ok: bool) {
-  if !expr return "", "", false;
-
-  full_path, path_ok := resolve_member_path(expr);
-  if !path_ok {
-    base_name, base_ok := resolve_buffer_name_from_expr(expr);
-    if !base_ok return "", "", false;
-    full_path = base_name;
-  }
-
-  if find_buffer(s, full_path) return full_path, "", true;
-
-  prefix := full_path;
-  suffix := "";
-  while true {
-    next_prefix, tail, split_ok := split_path_last(prefix);
-    if !split_ok break;
-    suffix = ifx suffix.count == 0 then tail else tprint("%.%", tail, suffix);
-    prefix = next_prefix;
-    if find_buffer(s, prefix) return prefix, suffix, true;
-  }
-
-  return "", "", false;
+  buffer_name, field_path, ok := spv_access_buffer_prefix_and_field_path(s, expr);
+  return buffer_name, field_path, ok;
 }
 
 expr_text :: (expr: *IR_Expr) -> string {
@@ -463,7 +519,11 @@ IR_SPV_Gen_Local_Struct_Field :: struct {
   name: string;
   ptr_id: s64;
   type: IR_SPV_Gen_Type;
+  ir_type: IR_Type;
   nested_struct_name: string;
+  pointer_buffer_name: string;
+  pointer_has_base_index: bool;
+  pointer_base_index_id: s64;
 }
 
 IR_SPV_Gen_Local_Struct :: struct {
@@ -1422,30 +1482,15 @@ find_local_array :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Ar
 find_buffer :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Buffer { return find_by_name(*s.buffers, name); }
 
 resolve_buffer_name_from_expr :: (expr: *IR_Expr) -> (buffer_name: string, ok: bool) {
-  if !expr return "", false;
-  if expr.kind == .CAST && expr.left {
-    name, ok := resolve_buffer_name_from_expr(expr.left);
-    return name, ok;
+  access, access_ok := spv_normalize_access_expr(expr);
+  if !access_ok return "", false;
+  member_steps: s64 = 0;
+  while member_steps < access.steps.count {
+    if access.steps[member_steps].kind != .MEMBER break;
+    member_steps += 1;
   }
-  if expr.kind == .UNARY && expr.left {
-    if expr.unary_op == .ADDRESS_OF || expr.unary_op == .DEREF {
-      name, ok := resolve_buffer_name_from_expr(expr.left);
-      return name, ok;
-    }
-  }
-  if expr.kind == .SUBSCRIPT && expr.left {
-    name, ok := resolve_buffer_name_from_expr(expr.left);
-    return name, ok;
-  }
-  buffer_name, base_ok := resolve_ident_or_zero_deref(expr);
-  if base_ok return buffer_name, true;
-  if expr.kind == .MEMBER {
-    member_root, member_field, member_ok := resolve_member_root_and_field(expr);
-    if member_ok return tprint("%.%", member_root, member_field), true;
-    member_path, path_ok := resolve_member_path(expr);
-    if path_ok return member_path, true;
-  }
-  return "", false;
+  buffer_name, ok := spv_access_path_string(access, member_steps);
+  return buffer_name, ok;
 }
 
 spv_member_component_index :: inline (access: IR_Member_Access_Kind) -> (s64, bool) {
@@ -1527,6 +1572,135 @@ find_local_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_S
   return null;
 }
 find_local_struct_field :: (s: *IR_SPV_Gen_Local_Struct, name: string) -> *IR_SPV_Gen_Local_Struct_Field { return find_by_name(*s.fields, name); }
+
+emit_local_struct_field_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
+  diag: IR_Diagnostic;
+
+  access, access_ok := spv_normalize_access_expr(expr);
+  if !access_ok || access.root_name.count == 0 || access.steps.count == 0 return 0, .UNKNOWN, false, diag;
+
+  current_struct := find_local_struct(s, access.root_name);
+  if !current_struct return 0, .UNKNOWN, false, diag;
+
+  for i: 0..access.steps.count-1 {
+    step := access.steps[i];
+    if step.kind != .MEMBER return 0, .UNKNOWN, false, diag;
+
+    field := find_local_struct_field(current_struct, step.field_name);
+    if !field return_err("unknown struct field '%.%'.", current_struct.name, step.field_name);
+
+    is_last := i == access.steps.count-1;
+    if is_last {
+      if ir_type_is_pointer_like(field.ir_type) return_err("pointer field '%.%' must be used as a buffer alias, not a value lvalue.", current_struct.name, step.field_name);
+      if field.type == .STRUCT return_err("nested struct field '%.%' must be accessed through a member.", current_struct.name, step.field_name);
+      return field.ptr_id, field.type, true, diag;
+    }
+
+    if field.type != .STRUCT return_err("unsupported member expression '%'.", expr_text(expr));
+    current_struct = find_local_struct(s, field.nested_struct_name);
+    if !current_struct return_err("nested struct '%' is missing.", field.nested_struct_name);
+  }
+
+  return 0, .UNKNOWN, false, diag;
+}
+
+resolve_local_struct_pointer_field :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (field: *IR_SPV_Gen_Local_Struct_Field, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (message: string, args: ..Any) #expand { `return null, false, make_diag(message, ..args); }
+  diag: IR_Diagnostic;
+
+  access, access_ok := spv_normalize_access_expr(expr);
+  if !access_ok || access.root_name.count == 0 || access.steps.count == 0 return null, false, diag;
+
+  current_struct := find_local_struct(s, access.root_name);
+  if !current_struct return null, false, diag;
+
+  for i: 0..access.steps.count-1 {
+    step := access.steps[i];
+    if step.kind != .MEMBER return null, false, diag;
+
+    candidate := find_local_struct_field(current_struct, step.field_name);
+    if !candidate return_err("unknown struct field '%.%'.", current_struct.name, step.field_name);
+
+    is_last := i == access.steps.count-1;
+    if is_last {
+      if !ir_type_is_pointer_like(candidate.ir_type) return null, false, diag;
+      return candidate, true, diag;
+    }
+
+    if candidate.type != .STRUCT return_err("unsupported member expression '%'.", expr_text(expr));
+    current_struct = find_local_struct(s, candidate.nested_struct_name);
+    if !current_struct return_err("nested struct '%' is missing.", candidate.nested_struct_name);
+  }
+
+  return null, false, diag;
+}
+
+resolve_buffer_alias_from_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (alias: IR_SPV_Gen_Buffer, buffer_name: string, ok: bool, diag: IR_Diagnostic) {
+  alias: IR_SPV_Gen_Buffer;
+  buffer_name := "";
+  diag: IR_Diagnostic;
+  source_expr := expr;
+  if source_expr && source_expr.kind == .CAST && source_expr.left source_expr = source_expr.left;
+  if source_expr && source_expr.kind == .UNARY && source_expr.left &&
+     (source_expr.unary_op == .ADDRESS_OF || source_expr.unary_op == .DEREF) source_expr = source_expr.left;
+
+  local_pointer_field, local_pointer_ok, local_pointer_diag := resolve_local_struct_pointer_field(s, source_expr);
+  if local_pointer_ok {
+    buffer_name = local_pointer_field.pointer_buffer_name;
+    source_buffer := find_buffer(s, buffer_name);
+    if !source_buffer return alias, "", false, make_diag("pointer field '%' references unknown buffer '%'.", expr_text(source_expr), buffer_name);
+    alias = source_buffer.*;
+    alias.has_base_index = source_buffer.has_base_index || local_pointer_field.pointer_has_base_index;
+    if local_pointer_field.pointer_has_base_index alias.base_index_id = local_pointer_field.pointer_base_index_id;
+    return alias, buffer_name, true, {};
+  }
+  if local_pointer_diag.message.count != 0 return alias, "", false, local_pointer_diag;
+
+  base_expr := source_expr;
+  if source_expr && source_expr.kind == .SUBSCRIPT base_expr = source_expr.left;
+
+  resolved_buffer_name, buffer_name_ok := resolve_buffer_name_from_expr(base_expr);
+  if !buffer_name_ok return alias, "", false, {};
+  buffer_name = resolved_buffer_name;
+  source_buffer := find_buffer(s, buffer_name);
+  if !source_buffer return alias, "", false, make_diag("expected storage buffer identifier, got '%'.", buffer_name);
+
+  alias = source_buffer.*;
+  if source_expr && source_expr.kind == .SUBSCRIPT {
+    idx_id, idx_type, idx_ok, idx_diag := emit_expr(s, source_expr.right);
+    if !idx_ok return alias, "", false, idx_diag;
+    idx_id, idx_ok, idx_diag = coerce_to_kind(s, idx_id, idx_type, .UINT);
+    if !idx_ok return alias, "", false, idx_diag;
+    alias.has_base_index = true;
+    alias.base_index_id = apply_buffer_base_index(s, source_buffer, idx_id);
+  }
+
+  return alias, buffer_name, true, {};
+}
+
+init_local_struct_pointer_field_from_expr :: (s: *IR_SPV_Gen_State, dst_field: *IR_SPV_Gen_Local_Struct_Field, expr: *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  if !dst_field return false, make_diag("null destination pointer field.");
+  if !ir_type_is_pointer_like(dst_field.ir_type) return false, make_diag("field '%' is not pointer-typed.", dst_field.name);
+
+  local_pointer_field, local_pointer_ok, local_pointer_diag := resolve_local_struct_pointer_field(s, expr);
+  if local_pointer_ok {
+    dst_field.pointer_buffer_name = local_pointer_field.pointer_buffer_name;
+    dst_field.pointer_has_base_index = local_pointer_field.pointer_has_base_index;
+    dst_field.pointer_base_index_id = local_pointer_field.pointer_base_index_id;
+    return true, {};
+  }
+  if local_pointer_diag.message.count != 0 return false, local_pointer_diag;
+
+  _, buffer_name, alias_ok, alias_diag := resolve_buffer_alias_from_expr(s, expr);
+  if !alias_ok return false, alias_diag;
+  alias, _, _, _ := resolve_buffer_alias_from_expr(s, expr);
+  dst_field.pointer_buffer_name = buffer_name;
+  dst_field.pointer_has_base_index = alias.has_base_index;
+  dst_field.pointer_base_index_id = alias.base_index_id;
+  return true, {};
+}
+
 find_interface_var :: (arr: *[]IR_SPV_Gen_Interface_Var, name: string) -> *IR_SPV_Gen_Interface_Var { return find_by_name(arr, name); }
 find_uniform_field :: (uniform: *IR_SPV_Gen_Uniform_Block, name: string) -> *IR_SPV_Gen_Uniform_Field { return find_by_name(*uniform.fields, name); }
 
@@ -2270,11 +2444,31 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
   local_struct.type_name = type_name;
   for struct_def.fields {
     field_type := spv_kind_from_ir_type(it.type);
-    field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
+    field_type_name := compact_text(ir_string_first_non_empty(it.type.display_name, it.type.struct_name));
+    has_pointer_marker, _ := contains(field_type_name, "*");
+    field_is_pointer := ir_type_is_pointer_like(it.type) || has_pointer_marker;
+    if field_is_pointer {
+      array_add(*local_struct.fields, .{
+        name = it.name,
+        type = .UNKNOWN,
+        ir_type = it.type,
+      });
+      continue;
+    }
     if field_type == .UNKNOWN || field_type == .STRUCT {
       nested_type_name := spv_struct_name_from_ir_type(it.type);
       nested_def := find_struct(s, nested_type_name);
-      if !nested_def return null, false, make_diag("local struct '%' field '%' has unsupported type '%'.", type_name, it.name, field_type_name);
+      if !nested_def {
+        if has_pointer_marker {
+          array_add(*local_struct.fields, .{
+            name = it.name,
+            type = .UNKNOWN,
+            ir_type = it.type,
+          });
+          continue;
+        }
+        return null, false, make_diag("local struct '%' field '%' has unsupported type '%'.", type_name, it.name, field_type_name);
+      }
       
       nested_name := make_unique_local_struct_name(s, tprint("%.%", name, it.name));
       _, nested_ok, nested_diag := alloc_local_struct(s, nested_name, nested_type_name);
@@ -2283,6 +2477,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
         name = it.name,
         ptr_id = 0,
         type = .STRUCT,
+        ir_type = it.type,
         nested_struct_name = nested_name,
       });
       continue;
@@ -2295,7 +2490,7 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
     field_zero := get_null_const(s, type_id_from_kind(s, field_type));
     spv_emit_variable_decl(s, field_ptr, field_ptr_type, SPV_STORAGE_CLASS_FUNCTION, field_zero);
     add_debug_name(s, field_ptr, tprint("%.%", name, it.name));
-    array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=field_type});
+    array_add(*local_struct.fields, .{name=it.name, ptr_id=field_ptr, type=field_type, ir_type=it.type});
   }
 
   array_add(*s.local_structs, local_struct);
@@ -2312,9 +2507,16 @@ copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct
   
   if dst.type_name != src.type_name return false, make_diag("struct copy type mismatch ('%' vs '%').", dst.type_name, src.type_name);
   
-  for dst.fields {
+  for *dst.fields {
     src_field := find_local_struct_field(src, it.name);
     if !src_field  return false, make_diag("source struct '%' missing field '%'.", src.type_name, it.name);
+    if ir_type_is_pointer_like(it.ir_type) {
+      if !ir_type_is_pointer_like(src_field.ir_type) return false, make_diag("pointer field '%' type mismatch.", it.name);
+      it.pointer_buffer_name = src_field.pointer_buffer_name;
+      it.pointer_has_base_index = src_field.pointer_has_base_index;
+      it.pointer_base_index_id = src_field.pointer_base_index_id;
+      continue;
+    }
     if it.type == .STRUCT {
       if src_field.type != .STRUCT {
         return false, make_diag("struct field '%' type mismatch.", it.name);
@@ -2492,11 +2694,16 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
     positional_index += 1;
   }
 
-  for dst.fields {
+  for *dst.fields {
     arg_expr := resolved_args[it_index];
     if !arg_expr {
       // Local struct fields are zero-initialized at allocation time; omitted constructor
       // members keep that default value.
+      continue;
+    }
+    if ir_type_is_pointer_like(it.ir_type) {
+      init_ok, init_diag := init_local_struct_pointer_field_from_expr(s, it, arg_expr);
+      if !init_ok return false, init_diag;
       continue;
     }
     if it.type == .STRUCT {
@@ -3756,13 +3963,10 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
     }
   }
 
-  buffer_name, buffer_name_ok := resolve_buffer_name_from_expr(expr);
+  source_buffer, buffer_name, buffer_name_ok, buffer_name_diag := resolve_buffer_alias_from_expr(s, expr);
   if !buffer_name_ok {
+    if buffer_name_diag.message.count != 0 return true, false, buffer_name_diag;
     return true, false, make_diag("helper '%' pointer arg '%' must be a buffer identifier/subscript or local lvalue.", helper_name, arg.name);
-  }
-  source_buffer := find_buffer(s, buffer_name);
-  if !source_buffer {
-    return true, false, make_diag("helper '%' pointer arg '%' expected storage buffer identifier, got '%'.", helper_name, arg.name, buffer_name);
   }
   if arg.type.pointee_kind == .FIXED_ARRAY {
     expected_elem := spv_kind_from_ir_type_kind(arg.type.pointee_element_kind);
@@ -3797,19 +4001,8 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
     }
   }
 
-  alias := source_buffer.*;
+  alias := source_buffer;
   alias.name = arg.name;
-  alias.has_base_index = false;
-  alias.base_index_id = 0;
-
-  if expr && expr.kind == .SUBSCRIPT {
-    idx_id, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
-    if !idx_ok return true, false, idx_diag;
-    idx_id, idx_ok, idx_diag = coerce_to_kind(s, idx_id, idx_type, .UINT);
-    if !idx_ok return true, false, idx_diag;
-    alias.has_base_index = true;
-    alias.base_index_id = apply_buffer_base_index(s, source_buffer, idx_id);
-  }
 
   array_add(*s.buffers, alias);
   return true, true, diag;
@@ -4706,35 +4899,25 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           _ = member_diag;
         }
       }
-      if expr.left && expr.left.kind == .IDENT {
-        local_struct := find_local_struct(s, expr.left.text);
-        if local_struct {
-          field := find_local_struct_field(local_struct, expr.text);
-          if !field return_err("unknown struct field '%.%'.", expr.left.text, expr.text);
-          if field.type == .STRUCT return_err("struct field '%.%' must be accessed through a member.", expr.left.text, expr.text);
-          value_id := new_id(s);
-          result_type_id := type_id_from_kind(s, field.type);
-          assert(result_type_id != 0);
-          add_op(s, value_id, "OpLoad", result_type_id, field.ptr_id);
-          return value_id, field.type, true, diag;
-        }
+      local_field_ptr, local_field_type, local_field_ok, _ := emit_local_struct_field_ptr(s, expr);
+      if local_field_ok {
+        result_type_id := type_id_from_kind(s, local_field_type);
+        if result_type_id == 0 return_err("unsupported local struct field type for '%'.", path);
+        value_id := new_id(s);
+        add_op(s, value_id, "OpLoad", result_type_id, local_field_ptr);
+        return value_id, local_field_type, true, diag;
       }
-      if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .IDENT {
-        local_struct := find_local_struct(s, expr.left.left.text);
-        if local_struct {
-          parent_field := find_local_struct_field(local_struct, expr.left.text);
-          if !parent_field return_err("unknown struct field '%.%'.", expr.left.left.text, expr.left.text);
-          if parent_field.type != .STRUCT return_err("unsupported member expression(2) '%'.", path);
-          nested_struct := find_local_struct(s, parent_field.nested_struct_name);
-          if !nested_struct return_err("nested struct '%.%' is missing.", expr.left.left.text, expr.left.text);
-          nested_field := find_local_struct_field(nested_struct, expr.text);
-          if !nested_field return_err("unknown nested struct field '%.%.%'.", expr.left.left.text, expr.left.text, expr.text);
-          if nested_field.type == .STRUCT return_err("nested struct field '%.%.%' must be accessed through a member.", expr.left.left.text, expr.left.text, expr.text);
-          value_id := new_id(s);
-          result_type_id := type_id_from_kind(s, nested_field.type);
-          if result_type_id == 0 return_err("unsupported nested struct field type for '%.%.%'.", expr.left.left.text, expr.left.text, expr.text);
-          add_op(s, value_id, "OpLoad", result_type_id, nested_field.ptr_id);
-          return value_id, nested_field.type, true, diag;
+
+      if expr.left && expr.left.kind == .MEMBER {
+        local_vec_ptr, local_vec_type, local_vec_ok, _ := emit_local_struct_field_ptr(s, expr.left);
+        if local_vec_ok && (local_vec_type == .FLOAT2 || local_vec_type == .FLOAT3 || local_vec_type == .FLOAT4) {
+          vec_type_id := type_id_from_kind(s, local_vec_type);
+          if vec_type_id == 0 return_err("unsupported local struct vector field type for '%'.", path);
+          vec_value := new_id(s);
+          add_op(s, vec_value, "OpLoad", vec_type_id, local_vec_ptr);
+          member_id, member_type, member_ok, member_diag := spv_extract_vector_member(s, vec_value, local_vec_type, expr.member_access, expr.text);
+          if member_ok return member_id, member_type, true, diag;
+          _ = member_diag;
         }
       }
       if expr.left && expr.left.kind == .MEMBER {
@@ -4803,17 +4986,17 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         }
       }
 
-      buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left);
+      buffer_alias, buffer_name, base_ok, base_diag := resolve_buffer_alias_from_expr(s, expr.left);
       if !base_ok {
+        if base_diag.message.count != 0 return 0, .UNKNOWN, false, base_diag;
         return_err("subscript base must resolve to an identifier/member.");
       }
-      buffer := find_buffer(s, buffer_name);
-      if !buffer return_err("unknown subscript base '%'.", buffer_name);
       idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
       if !idx_ok return 0, .UNKNOWN, false, idx_diag;
       idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
       if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-      idx = apply_buffer_base_index(s, buffer, idx);
+      idx = apply_buffer_base_index(s, *buffer_alias, idx);
+      buffer := *buffer_alias;
       if buffer.element_kind != .STRUCT {
         value_ptr_id := new_id(s);
         add_op(s, value_ptr_id, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);

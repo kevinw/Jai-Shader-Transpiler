@@ -147,6 +147,39 @@ Status: Fixed (March 3, 2026).
 - Regression coverage:
   - Added bool-cast usage in `ir_headless_fragment_nested_params_main` and SPIR-V text assertion for `OpSelect`.
 
+## 27) Field/member access normalization for non-trivial roots
+Status: Fixed (March 13, 2026).
+- Symptom before:
+  - Member access could fail or route through the wrong backend path when the root was not a plain identifier, for example:
+    - nested resource-param access like `data.p.texture_index`
+    - zero-deref/root-pointer forms like `params[0].core.mix_gain`
+    - mixed chains with subscript + field + vector component
+- Implemented:
+  - Replaced ad hoc recursive text recovery with one normalized access-chain path in the SPIR-V backend.
+  - Reused the normalized path for:
+    - member-path reconstruction
+    - buffer-prefix resolution
+    - local nested-struct field traversal
+    - lvalue field/component access
+  - Preserved the old zero-deref normalization so pointer-root parameter-buffer forms still resolve correctly.
+- Regression coverage:
+  - Added compute semantics cases:
+    - `nested_local_member_expr_chain`
+    - `nested_boid_member_chain`
+  - Existing graphics headless regression `ir_headless_fragment_nested_params_main` continues to validate `params[0].core.mix_gain`.
+
+## 28) Local shader structs with storage-buffer pointer fields
+Status: Fixed (March 13, 2026).
+- Symptom before:
+  - Local struct declarations with pointer fields failed during backend lowering, for example:
+    - `SPIR-V backend: local struct '...' field 'values' has unsupported type '*uint'.`
+- Implemented:
+  - Added support for pointer-typed local struct fields by storing them as buffer-alias metadata instead of function-memory scalar values.
+  - Extended struct initialization/copy paths and helper pointer-arg binding to preserve that alias information.
+  - Reused the alias metadata in subscript/lvalue lowering so expressions like `params.nested.values[idx]` work the same as direct buffer aliases.
+- Regression coverage:
+  - Added compute semantics case `nested_pointer_field_from_local_struct`.
+
 ## 1) Helper procs with `void` return are not supported in compute lowering
 Status: Fixed (February 28, 2026) for statement-level void helper calls with side effects.
 - Symptom:

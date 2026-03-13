@@ -62,17 +62,17 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       if buffer_ptr_ok return buffer_ptr, buffer_elem_type, true, diag;
     }
 
-    buffer_name, base_ok := resolve_buffer_name_from_expr(expr.left);
+    buffer_alias, _, base_ok, base_diag := resolve_buffer_alias_from_expr(s, expr.left);
     if !base_ok {
+      if base_diag.message.count != 0 return 0, .UNKNOWN, false, base_diag;
       return_err("unsupported lvalue subscript base.");
     }
-    buffer := find_buffer(s, buffer_name);
-    if !buffer return_err("unknown lvalue subscript base '%'.", buffer_name);
     idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
     if !idx_ok return 0, .UNKNOWN, false, idx_diag;
     idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
     if !idx_ok return 0, .UNKNOWN, false, idx_diag;
-    idx = apply_buffer_base_index(s, buffer, idx);
+    buffer := *buffer_alias;
+    idx = apply_buffer_base_index(s, *buffer_alias, idx);
     if buffer.element_kind != .STRUCT {
       ptr := new_id(s);
       add_op(s, ptr, "OpAccessChain", buffer.ptr_storage_element_type_id, buffer.var_id, s.id_int_0, idx);
@@ -138,37 +138,25 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
         add_op(s, ptr, "OpAccessChain", s.id_ptr_func_float, local_vec.ptr_id, comp_index_id);
         return ptr, .FLOAT, true, diag;
       }
-      local_struct := find_local_struct(s, expr.left.text);
-      if local_struct {
-        field := find_local_struct_field(local_struct, expr.text);
-        if !field return_err("unknown struct field '%.%'.", expr.left.text, expr.text);
-        if field.type == .STRUCT return_err("struct field '%.%' must be accessed through a member.", expr.left.text, expr.text);
-        return field.ptr_id, field.type, true, diag;
-      }
     }
-    if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .IDENT {
-      local_struct := find_local_struct(s, expr.left.left.text);
-      if local_struct {
-        field := find_local_struct_field(local_struct, expr.left.text);
-        if !field return_err("unknown struct field '%.%'.", expr.left.left.text, expr.left.text);
-        if field.type == .STRUCT {
-          nested_struct := find_local_struct(s, field.nested_struct_name);
-          if !nested_struct return_err("nd: nested struct '%.%' is missing.", expr.left.left.text, expr.left.text);
-          nested_field := find_local_struct_field(nested_struct, expr.text);
-          if !nested_field return_err("unknown nested struct field '%.%.%'.", expr.left.left.text, expr.left.text, expr.text);
-          if nested_field.type == .STRUCT return_err("nested struct field '%.%.%' must be accessed through a member.", expr.left.left.text, expr.left.text, expr.text);
-          return nested_field.ptr_id, nested_field.type, true, diag;
-        }
-        if field.type != .FLOAT2 && field.type != .FLOAT3 && field.type != .FLOAT4 return_err("component lvalue requires float2/float3/float4 field, got %.", field.type);
+
+    local_field_ptr, local_field_type, local_field_ok, _ := emit_local_struct_field_ptr(s, expr);
+    if local_field_ok return local_field_ptr, local_field_type, true, diag;
+
+    if expr.left && expr.left.kind == .MEMBER {
+      local_vec_ptr, local_vec_type, local_vec_ok, _ := emit_local_struct_field_ptr(s, expr.left);
+      if local_vec_ok {
+        if local_vec_type != .FLOAT2 && local_vec_type != .FLOAT3 && local_vec_type != .FLOAT4 return_err("component lvalue requires float2/float3/float4 field, got %.", local_vec_type);
         comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
         if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
-        if !spv_vector_component_in_range(field.type, cast(s64) comp_index) return_err("vector component '%' out of range for type % lvalue.", expr.text, field.type);
+        if !spv_vector_component_in_range(local_vec_type, cast(s64) comp_index) return_err("vector component '%' out of range for type % lvalue.", expr.text, local_vec_type);
         comp_index_id := get_u32_const(s, comp_index);
         ptr := new_id(s);
-        add_op(s, ptr, "OpAccessChain", s.id_ptr_func_float, field.ptr_id, comp_index_id);
+        add_op(s, ptr, "OpAccessChain", s.id_ptr_func_float, local_vec_ptr, comp_index_id);
         return ptr, .FLOAT, true, diag;
       }
     }
+
     return_err("unsupported lvalue member expression '%'.", expr_text(expr));
   }
   return_err("unsupported lvalue expression kind %.", expr.kind);
