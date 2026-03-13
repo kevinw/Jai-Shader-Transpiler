@@ -1391,17 +1391,21 @@ spv_emit_extinst :: (s: *IR_SPV_Gen_State, result_id: s64, result_type_id: s64, 
 }
 
 sanitize_debug_name :: (name: string) -> string {
-  if name.count == 0 return "";
-  out: String_Builder;
-  for name {
-    ch := it;
-    if ch == #char "\"" || ch == #char "\\" || ch == #char "\n" || ch == #char "\r" || ch == #char "\t" {
-      append(*out, "_");
-    } else {
-      append(*out, ch);
-    }
+  indices: [..]int;
+  for name if it == #char "\"" || it == #char "\\" || it == #char "\n" || it == #char "\r" || it == #char "\t" {
+    array_add(*indices, it_index);
   }
-  return builder_to_string(*out);
+  
+  if indices.count == 0 {
+      return name;
+  }
+  
+  result := copy_string(name,, temp);
+  for indices {
+      result[it] = #char "_";
+  }
+  
+  return result;
 }
 
 sanitize_identifier_name :: (name: string) -> string {
@@ -1433,7 +1437,7 @@ debug_type_name :: (s: *IR_SPV_Gen_State, base: string) -> string {
   prefix := sanitize_identifier_name(s.debug_type_prefix);
   if prefix.count == 0 return base_name;
   if base_name.count == 0 return prefix;
-  return tprint("%_%", prefix, base_name);
+  return join(prefix, "_", base_name, separator="",, temp);
 }
 
 add_debug_name :: (s: *IR_SPV_Gen_State, id: s64, name: string) {

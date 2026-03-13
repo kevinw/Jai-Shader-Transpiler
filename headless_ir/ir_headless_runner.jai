@@ -11,6 +11,22 @@ check_contains :: (source: string, pattern: string, where: string) {
   if !ok fail("Expected '%' in %", pattern, where);
 }
 
+check_occurs_once :: (source: string, pattern: string, where: string) {
+  search: string = source;
+  found_count: s64 = 0;
+  while true {
+    index := find_index_from_left(search, pattern);
+    if index == -1 break;
+    found_count += 1;
+    next_start := index + pattern.count;
+    if next_start >= search.count break;
+    search.data += next_start;
+    search.count -= next_start;
+  }
+
+  if found_count != 1 fail("Expected '%' exactly once in %, found % occurrences", pattern, where, found_count);
+}
+
 check_generated_file_contains :: (path: string, pattern: string, where: string) {
   if !file_exists(path) fail("Expected generated file missing: %", path);
   source, ok := read_entire_file(path);
@@ -787,6 +803,9 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   metal_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_main);
   check_contains(metal_pair, "vertex", "pair metal output");
   check_contains(metal_pair, "fragment", "pair metal output");
+  check_occurs_once(metal_pair, "using namespace metal;", "pair metal output");
+  check_occurs_once(metal_pair, "\nvertex ", "pair metal output");
+  check_occurs_once(metal_pair, "\nfragment ", "pair metal output");
   check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Vertex", "generated pair SPIR-V text output");
   check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Fragment", "generated pair SPIR-V text output");
   pair_path := tprint("%/ir_pair.metal", HEADLESS_IR_DIR);

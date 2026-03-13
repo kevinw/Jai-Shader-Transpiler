@@ -415,3 +415,25 @@ raytracer_noise2 :: (p: Vector2) -> float {
   - `jai modules/Jai-Shader-Transpiler/headless_ir/build_ir_compute_semantics.jai`
   - `jai modules/Jai-Shader-Transpiler/headless_ir/build_ir_graphics_semantics.jai`
   - `jai build.jai - src/apps/raytracer.jai`
+
+## 45) Metal pair shaders no longer rely on broad text-merge reconciliation between stage outputs
+Status: Fixed (March 13, 2026) for linked-pair SPIR-V assembly with narrower same-module declaration handling.
+- Symptom before:
+  - `ir_merge_metal_pair_sources` tried to reconcile vertex/fragment SPIRV-Cross Metal output with broad declaration text surgery, including ad hoc replacement of colliding type names across stage outputs.
+  - This was fragile for pair shaders because even when both stages came from the same linked SPIR-V module, entry-point-specific SPIRV-Cross emission could still vary declaration bodies.
+- Implemented:
+  - Kept the existing pair pipeline shape:
+    - compile vertex/fragment SPIR-V separately
+    - link into one pair SPIR-V module
+    - run SPIRV-Cross twice against that same linked module
+  - Reworked `ir_pipeline/ir_util.jai` pair assembly to:
+    - assert that the two Metal preambles match
+    - exact-dedupe identical top-level declarations
+    - identify declarations by a canonical signature/header key instead of compacted full-source heuristics
+    - only allow later-stage replacement for colliding type declarations, to handle entry-point-specific layout variants such as `float3` vs `packed_float3`
+    - hard-fail on non-type declaration identity conflicts instead of trying to recover textually
+  - Added regression coverage:
+    - headless pair output now asserts exactly one Metal preamble and one vertex/fragment entry declaration
+    - graphics semantics now compiles two combined pair libraries and resolves their actual generated entry names from source before loading them from Metal
+- Verification:
+  - `jai modules/Jai-Shader-Transpiler/build.jai - -run_tests`

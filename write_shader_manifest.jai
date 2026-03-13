@@ -406,17 +406,65 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
     return;
   }
 
-  latest_path := tprint("%/shader_reload_manifest_latest.txt", DEBUG_OUTDIR);
-  latest_tmp_path := tprint("%/shader_reload_manifest_latest_%.tmp", DEBUG_OUTDIR, formatInt(manifest_set_hash, base=16));
+  app_latest_name := shader_reload_manifest_app_latest_alias_name(plugin);
+  app_latest_path := ifx app_latest_name.count != 0 then tprint("%/%", DEBUG_OUTDIR, app_latest_name) else "";
+  app_latest_tmp_path := ifx app_latest_name.count != 0 then tprint("%/%_%.tmp", DEBUG_OUTDIR, app_latest_name, formatInt(manifest_set_hash, base=16)) else "";
 
-  tmp_ok := write_entire_file(latest_tmp_path, manifest_text);
-  if !tmp_ok {
-    compiler_report(tprint("Could not write temporary manifest file '%'", latest_tmp_path));
-    return;
-  }
+  if app_latest_path.count != 0 {
+    tmp_ok := write_entire_file(app_latest_tmp_path, manifest_text);
+    if !tmp_ok {
+      compiler_report(tprint("Could not write temporary app manifest file '%'", app_latest_tmp_path));
+      return;
+    }
 
-  move_ok := file_move(latest_tmp_path, latest_path);
-  if !move_ok {
-    compiler_report(tprint("Could not atomically update manifest '%'", latest_path));
+    move_ok := file_move(app_latest_tmp_path, app_latest_path);
+    if !move_ok {
+      compiler_report(tprint("Could not atomically update app manifest '%'", app_latest_path));
+    }
   }
+}
+
+#scope_file
+
+shader_reload_manifest_app_latest_alias_name :: (plugin: *Jai_To_Shader_Plugin) -> string {
+  if !plugin return "";
+  app_name := copy_string(plugin.manifest_app_name,, temp);
+  if app_name.count == 0 {
+    workspace_name := copy_string(get_name(plugin.workspace),, temp);
+    app_name = shader_reload_manifest_app_name_from_workspace(workspace_name);
+  }
+  if app_name.count == 0 app_name = stable_metallib_workspace_name(plugin);
+  app_name = sanitize_shader_reload_manifest_alias_component(app_name);
+  if app_name.count == 0 return "";
+  return tprint("shader_reload_manifest_app_%_latest.txt", app_name);
+}
+
+shader_reload_manifest_app_name_from_workspace :: (workspace_name: string) -> string {
+  prefixes := string.["Build shaders ", "Build app "];
+  for prefixes {
+    prefix := it;
+    if !begins_with(workspace_name, prefix) continue;
+    out: string = {
+      count = workspace_name.count - prefix.count,
+      data = workspace_name.data + prefix.count,
+    };
+    return copy_string(out,, temp);
+  }
+  return "";
+}
+
+sanitize_shader_reload_manifest_alias_component :: (value: string) -> string {
+  out := copy_string(value,, temp);
+  for out {
+    if it == {
+    case #char " "; #through;
+    case #char "/"; #through;
+    case #char "\\"; #through;
+    case #char ":"; #through;
+    case #char "."; #through;
+    case #char "-";
+      out[it_index] = #char "_";
+    }
+  }
+  return out;
 }

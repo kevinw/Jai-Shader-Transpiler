@@ -419,11 +419,25 @@ spv_module_append_numeric_constants_binary :: (m: *SPV_Module, state: *IR_SPV_Ge
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_int, cast(u32) it.id, cast(u32) it.value);
   }
   for state.const_i64 {
+    if it.id <= 0 {
+      assert(false, "SPIR-V binary backend: invalid int64 constant id % for value %.", it.id, it.value);
+    }
     bits := cast(u64) it.value;
-    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_int64, cast(u32) it.id, cast(u32) bits, cast(u32) (bits >> 32));
+    type_id := cast(u32) state.id_int64;
+    const_id := cast(u32) it.id;
+    low_word := cast,no_check(u32) (bits & cast(u64) 0xFFFF_FFFF);
+    high_word := cast,no_check(u32) ((bits >> 32) & cast(u64) 0xFFFF_FFFF);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, type_id, const_id, low_word, high_word);
   }
   for state.const_u64 {
-    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_uint64, cast(u32) it.id, cast(u32) it.value, cast(u32) (it.value >> 32));
+    if it.id <= 0 {
+      assert(false, "SPIR-V binary backend: invalid uint64 constant id % for value %.", it.id, it.value);
+    }
+    type_id := cast(u32) state.id_uint64;
+    const_id := cast(u32) it.id;
+    low_word := cast,no_check(u32) (it.value & cast(u64) 0xFFFF_FFFF);
+    high_word := cast,no_check(u32) ((it.value >> 32) & cast(u64) 0xFFFF_FFFF);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, type_id, const_id, low_word, high_word);
   }
   for state.const_f16 {
     value, value_ok, remainder := string_to_float(it.text);

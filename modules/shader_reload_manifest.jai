@@ -40,7 +40,7 @@ Shader_Reload_Dependency_State :: struct {
 Shader_Path_Context :: struct {
     workspace_root: string;
     generated_dir: string;
-    manifest_latest_path: string;
+    manifest_app_latest_path: string;
     build_working_dir: string;
 }
 
@@ -161,18 +161,13 @@ shader_reload_manifest_load :: (manifest: *Shader_Reload_Manifest, path: string)
     return true;
 }
 
-shader_reload_manifest_load_latest :: (manifest: *Shader_Reload_Manifest) -> bool {
-    return shader_reload_manifest_load(manifest, ".generated_shaders/shader_reload_manifest_latest.txt");
-}
-
 shader_reload_manifest_load_with_context :: (manifest: *Shader_Reload_Manifest, using paths: *Shader_Path_Context) -> bool {
     MANIFEST_LOAD_RETRY_ATTEMPTS :: 5;
     MANIFEST_LOAD_RETRY_BACKOFF_MS :: 10;
 
     candidate_paths: [..] string;
     candidate_paths.allocator = temp;
-    if manifest_latest_path.count != 0 array_add(*candidate_paths, manifest_latest_path);
-    if generated_dir.count != 0 array_add(*candidate_paths, tprint("%/shader_reload_manifest_latest.txt", generated_dir));
+    if manifest_app_latest_path.count != 0 array_add(*candidate_paths, manifest_app_latest_path);
 
     for attempt: 0..MANIFEST_LOAD_RETRY_ATTEMPTS-1 {
         for candidate_paths {
@@ -190,6 +185,12 @@ shader_reload_manifest_load_with_context :: (manifest: *Shader_Reload_Manifest, 
     }
     verbose_log("manifest load failed (root=% generated=%).", workspace_root, generated_dir);
     return false;
+}
+
+shader_reload_manifest_app_latest_exists :: (using paths: *Shader_Path_Context) -> bool {
+    if manifest_app_latest_path.count == 0 return false;
+    _, _, exists := File_Utilities.file_modtime_and_size(manifest_app_latest_path);
+    return exists;
 }
 
 shader_reload_manifest_load_auto :: (manifest: *Shader_Reload_Manifest) -> bool {
@@ -242,6 +243,11 @@ shader_reload_watcher_init_auto :: (watcher: *Shader_Reload_Watcher, app_source_
     if !watcher.enabled return false;
 
     if !shader_reload_manifest_load_with_context(*watcher.manifest, *watcher.paths) {
+        if !shader_reload_manifest_app_latest_exists(*watcher.paths) {
+            verbose_log("disabled app=% reason=no_app_manifest path=%", watcher.app_source_file, watcher.paths.manifest_app_latest_path);
+            watcher.enabled = false;
+            return false;
+        }
         log_error("SHADER_RELOAD failed to load manifest.");
         watcher.enabled = false;
         return false;
@@ -601,9 +607,12 @@ make_path_context_auto :: (app_source_file: string) -> Shader_Path_Context {
     }
 
     out.generated_dir = String.path_join(out.workspace_root, ".generated_shaders");
-    out.manifest_latest_path = String.path_join(out.generated_dir, "shader_reload_manifest_latest.txt");
+    app_stem := manifest_app_stem_from_source_file(app_source_file,, temp);
+    if app_stem.count != 0 {
+        out.manifest_app_latest_path = String.path_join(out.generated_dir, manifest_app_latest_filename(app_stem,, temp));
+    }
     out.build_working_dir = copy_string(out.workspace_root);
-    verbose_log("context cwd=% app=% root=% generated=%", cwd, app_source_file, out.workspace_root, out.generated_dir);
+    verbose_log("context cwd=% app=% root=% generated=% app_manifest=%", cwd, app_source_file, out.workspace_root, out.generated_dir, out.manifest_app_latest_path);
     return out;
 }
 
@@ -641,6 +650,35 @@ manifest_walk_up_for_workspace_root :: (start_path: string) -> string {
         path = next;
     }
     return "";
+}
+
+manifest_app_stem_from_source_file :: (app_source_file: string) -> string {
+    if app_source_file.count == 0 return "";
+    stem := String.path_filename(app_source_file);
+    if String.ends_with(stem, ".jai") stem = String.path_strip_extension(stem);
+    return manifest_sanitize_alias_component(stem);
+}
+
+manifest_app_latest_filename :: (app_stem: string) -> string {
+    if app_stem.count == 0 return "";
+    return tprint("shader_reload_manifest_app_%_latest.txt", manifest_sanitize_alias_component(app_stem));
+}
+
+manifest_sanitize_alias_component :: (value: string) -> string {
+    out := copy_string(value);
+    if out.count == 0 return out;
+    for out {
+        if it == {
+        case #char " "; #through;
+        case #char "/"; #through;
+        case #char "\\"; #through;
+        case #char ":"; #through;
+        case #char "."; #through;
+        case #char "-";
+            out[it_index] = #char "_";
+        }
+    }
+    return out;
 }
 
 manifest_parent_dir :: (path: string) -> string {

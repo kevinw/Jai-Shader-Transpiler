@@ -1040,15 +1040,57 @@ run_mixed_resource_vec3_container_case_metal :: () {
   }
   defer release(pair_lib);
 
-  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString("VertexMain"));
-  if !fn_vertex fail("Failed to find mixed-resource-vec3 vertex entry point 'VertexMain'");
+  vertex_entry := extract_stage_entry_name(pair_source, "vertex");
+  fragment_entry := extract_stage_entry_name(pair_source, "fragment");
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(vertex_entry));
+  if !fn_vertex fail("Failed to find mixed-resource-vec3 pair vertex entry point '%'", vertex_entry);
   defer release(fn_vertex);
 
-  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString("FragmentMain"));
-  if !fn_fragment fail("Failed to find mixed-resource-vec3 fragment entry point 'FragmentMain'");
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(fragment_entry));
+  if !fn_fragment fail("Failed to find mixed-resource-vec3 pair fragment entry point '%'", fragment_entry);
   defer release(fn_fragment);
 
   log("[OK] graphics_mixed_resource_vec3_container");
+}
+
+run_nested_resource_pair_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  pair_source := get_transpiled(.METAL, graphics_test_bindless_vertex, graphics_test_nested_resource_fragment);
+  check_contains(pair_source, "vertex", "nested-resource pair metal");
+  check_contains(pair_source, "fragment", "nested-resource pair metal");
+  check_occurs_once(pair_source, "using namespace metal;", "nested-resource pair metal");
+  check_occurs_once(pair_source, "\nvertex ", "nested-resource pair metal");
+  check_occurs_once(pair_source, "\nfragment ", "nested-resource pair metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  pair_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(pair_source), compile_options, *error);
+  if log_nserror("Failed to compile nested-resource pair metal source", error) || !pair_lib {
+    fail("Failed to compile nested-resource pair metal source");
+  }
+  defer release(pair_lib);
+
+  vertex_entry := extract_stage_entry_name(pair_source, "vertex");
+  fragment_entry := extract_stage_entry_name(pair_source, "fragment");
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(vertex_entry));
+  if !fn_vertex fail("Failed to find nested-resource pair vertex entry point '%'", vertex_entry);
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(fragment_entry));
+  if !fn_fragment fail("Failed to find nested-resource pair fragment entry point '%'", fragment_entry);
+  defer release(fn_fragment);
+
+  log("[OK] graphics_nested_resource_pair");
 }
 
 main :: () {
@@ -1064,5 +1106,29 @@ main :: () {
   run_nested_return_pair_case_metal();
   run_nested_resource_container_case_metal();
   run_mixed_resource_container_case_metal();
-  log("Passed 7 graphics semantics cases.");
+  run_nested_resource_pair_case_metal();
+  run_mixed_resource_vec3_container_case_metal();
+  log("Passed 9 graphics semantics cases.");
+}
+
+#scope_file
+
+extract_stage_entry_name :: (source: string, stage_keyword: string) -> string {
+  needle := tprint("\n% ", stage_keyword);
+  start := find_index_from_left(source, needle);
+  if start == -1 fail("Failed to find % function declaration in generated Metal source", stage_keyword);
+  cursor := start + needle.count;
+
+  while cursor < source.count && source[cursor] == #char " " cursor += 1;
+  while cursor < source.count && source[cursor] != #char " " cursor += 1; // return type
+  while cursor < source.count && source[cursor] == #char " " cursor += 1;
+
+  name_start := cursor;
+  while cursor < source.count && source[cursor] != #char "(" cursor += 1;
+  if cursor <= name_start fail("Failed to parse % entry name from generated Metal source", stage_keyword);
+
+  name: string;
+  name.data = source.data + name_start;
+  name.count = cursor - name_start;
+  return name;
 }

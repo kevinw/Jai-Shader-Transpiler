@@ -122,61 +122,14 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
   ir_metal_split_top_level_decls(fragment_source, *preamble_f, *decls_f);
 
   sb: String_Builder;
-  if preamble_v.count != 0      a(*sb, preamble_v);
-  else if preamble_f.count != 0 a(*sb, preamble_f);
+  a(*sb, ir_metal_merge_pair_preambles(preamble_v, preamble_f));
 
-  seen: Table(string, bool);
+  seen_exact: Table(string, bool);
+  identity_to_index: Table(string, s64);
   selected_decls: [..] string;
-  selected_type_decl_index: Table(string, s64);
 
-  for decls_v {
-    decl := it;
-    key := ir_metal_compact_decl_key(decl);
-    if key.count == 0 continue;
-    found, _ := table_find(*seen, key);
-    if found continue;
-
-    is_forward := ir_metal_is_forward_type_decl(decl);
-    type_name, type_name_ok := ir_metal_declared_type_name(decl);
-    if type_name_ok && !is_forward {
-      type_found, existing_index := table_find(*selected_type_decl_index, type_name);
-      if type_found {
-        selected_decls[existing_index] = copy_string(decl);
-        table_add(*seen, copy_string(key), true);
-        continue;
-      }
-      table_add(*selected_type_decl_index, copy_string(type_name), selected_decls.count);
-    }
-
-    array_add(*selected_decls, copy_string(decl));
-    table_add(*seen, copy_string(key), true);
-  }
-
-  for decls_f {
-    decl := it;
-    key := ir_metal_compact_decl_key(decl);
-    if key.count == 0 continue;
-    found, _ := table_find(*seen, key);
-    if found continue;
-
-    is_forward := ir_metal_is_forward_type_decl(decl);
-    type_name, type_name_ok := ir_metal_declared_type_name(decl);
-    if type_name_ok && !is_forward {
-      type_found, existing_index := table_find(*selected_type_decl_index, type_name);
-      if type_found {
-        // Prefer the later stage declaration for colliding type names.
-        // This resolves stage-split spirv-cross output that may emit differing
-        // definitions (for example, vector3 UBO packing variants) under the same type name.
-        selected_decls[existing_index] = copy_string(decl);
-        table_add(*seen, copy_string(key), true);
-        continue;
-      }
-      table_add(*selected_type_decl_index, copy_string(type_name), selected_decls.count);
-    }
-
-    array_add(*selected_decls, copy_string(decl));
-    table_add(*seen, copy_string(key), true);
-  }
+  for decls_v ir_metal_append_pair_decl(*selected_decls, *seen_exact, *identity_to_index, it);
+  for decls_f ir_metal_append_pair_decl(*selected_decls, *seen_exact, *identity_to_index, it);
 
   for selected_decls a(*sb, it);
   return builder_to_string(*sb);
@@ -244,34 +197,127 @@ ir_metal_find_preamble_end :: (source: string) -> s64 {
   return end;
 }
 
+ir_metal_decl_identity_key :: (decl: string) -> string {
+  text := trim_ascii_whitespace(decl);
+  if text.count == 0 return "";
+
+  if ir_metal_is_forward_type_decl(text) {
+    return ir_metal_compact_decl_key(text);
+  }
+
+  brace_index := find_index_from_left(text, "{");
+  if brace_index != -1 {
+    header: string;
+    header.data = text.data;
+    header.count = brace_index;
+    return ir_metal_compact_decl_key(header);
+  }
+
+  semicolon_index := find_index_from_left(text, ";");
+  if semicolon_index != -1 {
+    header: string;
+    header.data = text.data;
+    header.count = semicolon_index;
+    return ir_metal_compact_decl_key(header);
+  }
+
+  return ir_metal_compact_decl_key(text);
+}
+
+ir_metal_merge_pair_preambles :: (vertex_preamble: string, fragment_preamble: string) -> string {
+  seen: Table(string, bool);
+  sb: String_Builder;
+  ir_metal_append_unique_preamble_lines(*sb, *seen, vertex_preamble);
+  ir_metal_append_unique_preamble_lines(*sb, *seen, fragment_preamble);
+  return builder_to_string(*sb);
+}
+
+ir_metal_append_unique_preamble_lines :: (sb: *String_Builder, seen: *Table(string, bool), preamble: string) {
+  if preamble.count == 0 return;
+
+  cursor: s64 = 0;
+  emitted_any := false;
+  emitted_blank := false;
+  while cursor < preamble.count {
+    line_start := cursor;
+    while cursor < preamble.count && preamble[cursor] != #char "\n" cursor += 1;
+    if cursor < preamble.count && preamble[cursor] == #char "\n" cursor += 1;
+
+    line: string;
+    line.data = preamble.data + line_start;
+    line.count = cursor - line_start;
+    line_key := ir_metal_compact_decl_key(line);
+    if line_key.count == 0 {
+      if emitted_any && !emitted_blank {
+        a(sb, "\n");
+        emitted_blank = true;
+      }
+      continue;
+    }
+
+    found, _ := table_find(seen, line_key);
+    if found continue;
+    table_add(seen, copy_string(line_key), true);
+    a(sb, line);
+    emitted_any = true;
+    emitted_blank = false;
+  }
+}
+
+ir_metal_append_pair_decl :: (selected_decls: *[..] string, seen_exact: *Table(string, bool), identity_to_index: *Table(string, s64), decl: string) {
+  key := ir_metal_compact_decl_key(decl);
+  if key.count == 0 return;
+
+  found_exact, _ := table_find(seen_exact, key);
+  if found_exact return;
+
+  identity := ir_metal_decl_identity_key(decl);
+  if identity.count != 0 {
+    found_identity, existing_index := table_find(identity_to_index, identity);
+    if found_identity {
+      prior_decl := (selected_decls.data + existing_index).*;
+      prior_key := ir_metal_compact_decl_key(prior_decl);
+      if prior_key != key {
+        assert(ir_metal_is_type_decl(prior_decl) && ir_metal_is_type_decl(decl),
+               "Metal pair assembly: non-type declaration identity '%' differed between vertex and fragment SPIRV-Cross outputs for the same linked module.",
+               identity);
+        assert(!ir_metal_is_forward_type_decl(prior_decl) && !ir_metal_is_forward_type_decl(decl),
+               "Metal pair assembly: forward type declaration identity '%' conflicted unexpectedly.",
+               identity);
+        // SPIRV-Cross can emit entry-point-specific layout variants for the same shared type.
+        // Keep the later stage's declaration instead of trying to reconcile bodies textually.
+        (selected_decls.data + existing_index).* = copy_string(decl);
+      }
+      table_add(seen_exact, copy_string(key), true);
+      return;
+    }
+    table_add(identity_to_index, copy_string(identity), selected_decls.count);
+  }
+
+  array_add(selected_decls, copy_string(decl));
+  table_add(seen_exact, copy_string(key), true);
+}
+
+ir_metal_is_type_decl :: (decl: string) -> bool {
+  text := trim_ascii_whitespace(decl);
+  if text.count == 0 return false;
+  if begins_with(text, "struct ") return true;
+  if begins_with(text, "class ") return true;
+  if begins_with(text, "enum ") return true;
+  if begins_with(text, "template") {
+    if find_index_from_left(text, "struct ") != -1 return true;
+    if find_index_from_left(text, "class ") != -1 return true;
+    if find_index_from_left(text, "enum ") != -1 return true;
+  }
+  return false;
+}
+
 ir_metal_is_forward_type_decl :: (decl: string) -> bool {
   text := trim_ascii_whitespace(decl);
   if text.count == 0 return false;
   if find_index_from_left(text, "{") != -1 return false;
   if !ends_with(text, ";") return false;
-  if begins_with(text, "struct ") return true;
-  if begins_with(text, "class ") return true;
-  if begins_with(text, "enum ") return true;
-  return false;
-}
-
-ir_metal_declared_type_name :: (decl: string) -> (string, bool) {
-  text := trim_ascii_whitespace(decl);
-  if text.count == 0 return "", false;
-  keywords := string.["struct ", "class ", "enum "];
-  for keywords {
-    keyword := it;
-    idx: s64 = -1;
-    if begins_with(text, keyword) {
-      idx = 0;
-    } else if begins_with(text, "template") {
-      idx = find_index_from_left(text, keyword);
-    }
-    if idx == -1 continue;
-    type_name, ok := ir_metal_extract_type_name_after(text, idx + keyword.count);
-    if ok return type_name, true;
-  }
-  return "", false;
+  return ir_metal_is_type_decl(text);
 }
 
 trim_ascii_whitespace :: (in: string) -> string {
@@ -294,31 +340,6 @@ expression_to_source_string :: (node: *Code_Node) -> string {
   sb: String_Builder;
   PP.print_expression(*sb, node);
   return builder_to_string(*sb);
-}
-
-ir_metal_extract_type_name_after :: (text: string, after_index: s64) -> (string, bool) {
-  i := after_index;
-  while i < text.count {
-    ch := text[i];
-    if ch != #char " " && ch != #char "\t" && ch != #char "\r" && ch != #char "\n" break;
-    i += 1;
-  }
-  if i >= text.count return "", false;
-  if !ir_metal_is_ident_char(text[i]) return "", false;
-  start := i;
-  while i < text.count && ir_metal_is_ident_char(text[i]) i += 1;
-  if i <= start return "", false;
-  out: string;
-  out.data = text.data + start;
-  out.count = i - start;
-  return out, true;
-}
-
-ir_metal_is_ident_char :: (ch: u8) -> bool {
-  return (ch >= #char "a" && ch <= #char "z") ||
-         (ch >= #char "A" && ch <= #char "Z") ||
-         (ch >= #char "0" && ch <= #char "9") ||
-         ch == #char "_";
 }
 
 PP :: #import "Program_Print";

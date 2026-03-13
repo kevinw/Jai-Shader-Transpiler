@@ -60,6 +60,7 @@ Jai_To_Shader_Plugin :: struct {
     // options
     output_shaders: bool;
     shader_entry_ids_filter: string;
+    manifest_app_name: string;
     
     // internal
     using impl: struct {
