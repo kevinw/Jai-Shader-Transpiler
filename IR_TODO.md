@@ -14,7 +14,20 @@ Direction note:
 
 ## High Impact
 
-## 1) SPIR-V backend lacks production-ready `f16`/`half` buffer/type path
+## 1) Pair-shader lowering is still brittle around some fragment-side vector constructor/builtin expressions
+- Symptom:
+  - Otherwise-valid pair shaders can fail during SPIR-V backend lowering with type-confusion errors such as:
+    - `cannot coerce value type FLOAT3 to float2`
+    - `unsupported conversion from FLOAT3 to FLOAT`
+- Where hit:
+  - `model_scene` fragment work while adding subtle ground variation, with simple helper-based noise and vector constructor/builtin use in the fragment stage.
+- Current workaround:
+  - Keep the pair on the simpler known-good code shape and move non-essential variation work out of the shader until the lowering path is hardened.
+- Desired fix:
+  - Make pair-shader type propagation for vector constructors/builtins robust, especially through helper calls and temporary values in fragment shaders.
+  - Add a focused graphics-pair regression that exercises fragment-side `Vector2`/`Vector3` constructor use plus scalar/vector builtin mixing so this class of failure stops regressing.
+
+## 2) SPIR-V backend lacks production-ready `f16`/`half` buffer/type path
 - Symptom:
   - No reliable end-to-end `half` (`f16`) compute storage path is available in the current IR -> SPIR-V -> backend flow for this terrain workload.
 - Where hit:
@@ -28,7 +41,7 @@ Direction note:
   - Add explicit `f16` type lowering and capability/extension emission in the SPIR-V backend.
   - Validate cross-backend codegen and ABI layout for `half` storage buffers, including transpiler regression tests.
 
-## 2) Hard-fail compile-time validation is missing for host-vs-shader struct ABI alignment mismatches
+## 3) Hard-fail compile-time validation is missing for host-vs-shader struct ABI alignment mismatches
 - Symptom:
   - Runtime-only rendering failures can occur when host-side struct layout (Jai) diverges from shader-side ABI layout, for example `Vector3` 12-byte host layout vs MSL `float3` 16-byte alignment rules in constant/device buffers.
 - Where hit:
@@ -39,7 +52,7 @@ Direction note:
   - Add compile-time ABI checks that compare generated/reflected host layout against target shader layout rules and fail the build on mismatch.
   - Error output should name the struct/field, expected offset/align/stride, actual host values, and a concrete fix hint (`packed_*`, explicit padding, or layout-safe type substitution).
 
-## 3) Structured-buffer element layout/alignment is fragile for non-16-byte strides
+## 4) Structured-buffer element layout/alignment is fragile for non-16-byte strides
 - Symptom:
   - `spirv-opt` rejects generated SPIR-V with block-layout errors such as: `array with stride 44 not satisfying alignment to 16`.
 - Where hit:
@@ -49,7 +62,7 @@ Direction note:
 - Desired fix:
   - Backend should enforce/validate target block layout proactively and/or auto-pad reflected struct layout for storage buffers so misaligned host-side structs fail early with actionable diagnostics.
 
-## 4) Graphics physical-pointer roots still fail for large host-blittable structs nested behind root pointers
+## 5) Graphics physical-pointer roots still fail for large host-blittable structs nested behind root pointers
 - Symptom:
   - Pair shader lowering reaches `spirv-opt` block-layout failures for generated physical-storage wrappers, for example:
     - `Structure ... Block for variable in PhysicalStorageBuffer ... array with stride ... not satisfying alignment to 16`
@@ -61,7 +74,7 @@ Direction note:
   - Make physical-pointer wrapper emission validate and emit legal block layout for pointed-to structs used from graphics roots, including large POD payloads with `Vector3` fields and fixed arrays.
   - Add a focused pair-shader regression once the wrapper stride/layout rules are corrected.
 
-## 5) Storage-buffer struct fields cannot currently be arrays of user-defined structs
+## 6) Storage-buffer struct fields cannot currently be arrays of user-defined structs
 - Symptom:
   - Pair shader lowering fails for storage buffer payloads with array-of-struct fields, e.g.:
     - `buffer struct 'Brickmap_Params' field 'lod_info' array element type 'Brickmap_Lod_Info' is unsupported.`
@@ -74,7 +87,7 @@ Direction note:
   - Add SPIR-V storage buffer type emission + access support for arrays of user-defined struct element types.
   - Include layout/stride validation diagnostics for nested/arrayed struct fields.
 
-## 6) Storage-buffer struct-array support still does not cover whole-struct indexed loads/stores
+## 7) Storage-buffer struct-array support still does not cover whole-struct indexed loads/stores
 - Symptom:
   - Backend rejects whole-struct lvalue access like:
     - `unknown lvalue subscript base 'queues.candidates'`
@@ -85,7 +98,7 @@ Direction note:
 - Desired fix:
   - Extend lvalue lowering/emission so indexed storage-buffer struct elements can be assigned/loaded as whole POD structs, not only by field.
 
-## 7) Resource-container arguments cannot mix buffers with scalar/uniform fields
+## 8) Resource-container arguments cannot mix buffers with scalar/uniform fields
 - Symptom at compile time:
   - `SPIR-V backend: resource-container arg 'resources' currently requires all fields to be StructuredBuffer/RWStructuredBuffer.`
 - Where hit:
@@ -99,7 +112,7 @@ Direction note:
 - Desired fix:
   - Support mixed resource+uniform payloads in one argument container, or add a first-class root-constants/params channel in the IR ABI, so compute kernels do not need artificial split structs.
 
-## 8) Integer fragment varyings can fail output-pointer typing in the SPIR-V backend
+## 9) Integer fragment varyings can fail output-pointer typing in the SPIR-V backend
 - Symptom:
   - Pair shader lowering can fail with: `SPIR-V backend: missing output pointer type for field '<field>'` when passing integer varyings (for example `u32 flags`) from vertex to fragment.
 - Where hit:
@@ -109,7 +122,7 @@ Direction note:
 - Desired fix:
   - Ensure integer varyings in stage I/O structs always produce valid pointer/result types in the SPIR-V text backend, including interpolation/storage decorations as needed.
 
-## 9) Vector `min`/`max` lowering can still mis-type element-wise expressions
+## 10) Vector `min`/`max` lowering can still mis-type element-wise expressions
 - Symptom:
   - Pair shader lowering can fail with: `SPIR-V backend: unsupported conversion from FLOAT3 to FLOAT.`
 - Where hit:
@@ -123,7 +136,7 @@ Direction note:
 
 ## Medium Impact
 
-## 10) Root-parameter helper lowering is fragile for nested pointer/resource-container access
+## 11) Root-parameter helper lowering is fragile for nested pointer/resource-container access
 - Symptom:
   - Helper lowering can fail with errors like:
     - `helper '...' pointer arg 'params' expected storage buffer identifier, got 'params'`
@@ -134,7 +147,7 @@ Direction note:
 - Desired fix:
   - Allow helper lowering to resolve and propagate root storage identifiers through nested pointer/resource-container expressions reliably.
 
-## 11) Compute helper calls with storage-buffer pointer args plus atomic retry loops are still fragile
+## 12) Compute helper calls with storage-buffer pointer args plus atomic retry loops are still fragile
 - Symptom:
   - Backend can reject otherwise-valid compute helper calls with:
     - `SPIR-V backend: unsupported call target '<helper_name>'`

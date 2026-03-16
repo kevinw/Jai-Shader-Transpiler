@@ -473,6 +473,8 @@ IR_SPV_Gen_Type :: enum {
   FLOAT3;
   FLOAT4;
   FLOAT2X2;
+  FLOAT3X3;
+  FLOAT4X4;
   BOOL;
 }
 
@@ -755,6 +757,8 @@ IR_SPV_Gen_State :: struct {
     id_float3: s64;
     id_float4: s64;
     id_float2x2: s64;
+    id_float3x3: s64;
+    id_float4x4: s64;
     id_bool: s64;
     id_bool_true: s64;
     id_bool_false: s64;
@@ -782,6 +786,9 @@ IR_SPV_Gen_State :: struct {
     id_ptr_storage_float2: s64;
     id_ptr_storage_float3: s64;
     id_ptr_storage_float4: s64;
+    id_ptr_storage_float2x2: s64;
+    id_ptr_storage_float3x3: s64;
+    id_ptr_storage_float4x4: s64;
     id_ptr_input_float: s64;
     id_ptr_input_float2: s64;
     id_ptr_input_float3: s64;
@@ -795,6 +802,9 @@ IR_SPV_Gen_State :: struct {
     id_ptr_uniform_float2: s64;
     id_ptr_uniform_float3: s64;
     id_ptr_uniform_float4: s64;
+    id_ptr_uniform_float2x2: s64;
+    id_ptr_uniform_float3x3: s64;
+    id_ptr_uniform_float4x4: s64;
     id_ptr_uniform_int: s64;
     id_ptr_uniform_uint: s64;
     id_ptr_uniform_int64: s64;
@@ -832,6 +842,8 @@ IR_SPV_Gen_State :: struct {
     id_ptr_func_float3: s64;
     id_ptr_func_float4: s64;
     id_ptr_func_float2x2: s64;
+    id_ptr_func_float3x3: s64;
+    id_ptr_func_float4x4: s64;
     id_ptr_func_bool: s64;
     id_ptr_func_int: s64;
     id_ptr_func_uint: s64;
@@ -2280,6 +2292,7 @@ align_up :: (value: s64, alignment: s64) -> s64 {
 host_blit_align_for_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
   if kind == .FLOAT16 return 2;
   if kind == .INT64 || kind == .UINT64 return 8;
+  if kind == .FLOAT2X2 || kind == .FLOAT3X3 || kind == .FLOAT4X4 return 4;
   if kind == .INT || kind == .UINT || kind == .FLOAT || kind == .FLOAT2 ||
      kind == .FLOAT3 || kind == .FLOAT4 || kind == .FLOAT2X2 || kind == .BOOL return 4;
   return 4;
@@ -3415,6 +3428,30 @@ spv_float_vector_component_count :: (kind: IR_SPV_Gen_Type) -> s64 {
   return 0;
 }
 
+spv_float_matrix_dims :: (kind: IR_SPV_Gen_Type) -> (cols: s64, rows: s64, ok: bool) {
+  if kind == .FLOAT2X2 return 2, 2, true;
+  if kind == .FLOAT3X3 return 3, 3, true;
+  if kind == .FLOAT4X4 return 4, 4, true;
+  return 0, 0, false;
+}
+
+spv_matrix_column_type_id :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
+  cols, rows, ok := spv_float_matrix_dims(kind);
+  _ = cols;
+  if !ok return 0;
+  if rows == 2 return s.id_float2;
+  if rows == 3 return s.id_float3;
+  if rows == 4 return s.id_float4;
+  return 0;
+}
+
+spv_matrix_stride_for_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .FLOAT2X2 return 8;
+  if kind == .FLOAT3X3 return 16;
+  if kind == .FLOAT4X4 return 16;
+  return 0;
+}
+
 emit_flattened_float_ctor_components :: (
   s: *IR_SPV_Gen_State,
   args: [] *IR_Expr,
@@ -3854,6 +3891,8 @@ spv_kind_from_ir_type_kind :: (kind: IR_Type_Kind) -> IR_SPV_Gen_Type {
   if kind == .F32x3 return .FLOAT3;
   if kind == .F32x4 return .FLOAT4;
   if kind == .F32x2x2 return .FLOAT2X2;
+  if kind == .F32x3x3 return .FLOAT3X3;
+  if kind == .F32x4x4 return .FLOAT4X4;
   if kind == .STRUCT return .STRUCT;
   return .UNKNOWN;
 }
@@ -3883,7 +3922,7 @@ spv_kind_from_struct_alias :: (s: *IR_SPV_Gen_State, struct_name: string) -> IR_
 
   if st.fields.count == 1 {
     k := spv_kind_from_ir_type_kind(st.fields[0].type.kind);
-    if k == .FLOAT || k == .FLOAT2 || k == .FLOAT3 || k == .FLOAT4 || k == .FLOAT2X2 return k;
+    if k == .FLOAT || k == .FLOAT2 || k == .FLOAT3 || k == .FLOAT4 || k == .FLOAT2X2 || k == .FLOAT3X3 || k == .FLOAT4X4 return k;
   }
 
   if st.fields.count == 2 {
@@ -5118,6 +5157,16 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         add_op(s, result_id, "OpMatrixTimesVector", s.id_float2, left_id, right_id);
         return result_id, .FLOAT2, true, diag;
       }
+      if left_type == .FLOAT3X3 && right_type == .FLOAT3 && op == "*" {
+        result_id := new_id(s);
+        add_op(s, result_id, "OpMatrixTimesVector", s.id_float3, left_id, right_id);
+        return result_id, .FLOAT3, true, diag;
+      }
+      if left_type == .FLOAT4X4 && right_type == .FLOAT4 && op == "*" {
+        result_id := new_id(s);
+        add_op(s, result_id, "OpMatrixTimesVector", s.id_float4, left_id, right_id);
+        return result_id, .FLOAT4, true, diag;
+      }
       if left_type == .FLOAT3 && right_type == .FLOAT3 {
         result_id, result_type, result_ok, result_diag := emit_float3_binary_op(s, op, left_id, right_id);
         return result_id, result_type, result_ok, result_diag;
@@ -5748,6 +5797,22 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           add_op(s, out, "OpMatrixTimesVector", s.id_float2, a_id, b_id);
           return out, .FLOAT2, true, diag;
         }
+        if a_type == .FLOAT3 && b_type == .FLOAT3X3 {
+          add_op(s, out, "OpMatrixTimesVector", s.id_float3, b_id, a_id);
+          return out, .FLOAT3, true, diag;
+        }
+        if a_type == .FLOAT3X3 && b_type == .FLOAT3 {
+          add_op(s, out, "OpMatrixTimesVector", s.id_float3, a_id, b_id);
+          return out, .FLOAT3, true, diag;
+        }
+        if a_type == .FLOAT4 && b_type == .FLOAT4X4 {
+          add_op(s, out, "OpMatrixTimesVector", s.id_float4, b_id, a_id);
+          return out, .FLOAT4, true, diag;
+        }
+        if a_type == .FLOAT4X4 && b_type == .FLOAT4 {
+          add_op(s, out, "OpMatrixTimesVector", s.id_float4, a_id, b_id);
+          return out, .FLOAT4, true, diag;
+        }
         return_err("unsupported mul argument types (%, %).", a_type, b_type);
       }
       if builtin_kind == .FLOOR || builtin_kind == .MIN || builtin_kind == .MAX ||
@@ -5828,34 +5893,43 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         spv_emit_composite_construct(s, out, s.id_float4, .[components[0], components[1], components[2], components[3]]);
         return out, .FLOAT4, true, diag;
       }
-      if ctor_type == .FLOAT2X2 {
-        if expr.args.count != 4 return_err("float2x2 constructor expects 4 scalar args, got %.", expr.args.count);
-        a0_id, a0_type, a0_ok, a0_diag := emit_expr(s, expr.args[0]);
-        if !a0_ok return 0, .UNKNOWN, false, a0_diag;
-        a1_id, a1_type, a1_ok, a1_diag := emit_expr(s, expr.args[1]);
-        if !a1_ok return 0, .UNKNOWN, false, a1_diag;
-        a2_id, a2_type, a2_ok, a2_diag := emit_expr(s, expr.args[2]);
-        if !a2_ok return 0, .UNKNOWN, false, a2_diag;
-        a3_id, a3_type, a3_ok, a3_diag := emit_expr(s, expr.args[3]);
-        if !a3_ok return 0, .UNKNOWN, false, a3_diag;
+      cols, rows, is_matrix_ctor := spv_float_matrix_dims(ctor_type);
+      if is_matrix_ctor {
+        expected_args := cols * rows;
+        if expr.args.count != expected_args return_err("% constructor expects % scalar args, got %.", expr.text, expected_args, expr.args.count);
 
-        f0, f0_ok, f0_diag := coerce_to_float(s, a0_id, a0_type);
-        if !f0_ok return 0, .UNKNOWN, false, f0_diag;
-        f1, f1_ok, f1_diag := coerce_to_float(s, a1_id, a1_type);
-        if !f1_ok return 0, .UNKNOWN, false, f1_diag;
-        f2, f2_ok, f2_diag := coerce_to_float(s, a2_id, a2_type);
-        if !f2_ok return 0, .UNKNOWN, false, f2_diag;
-        f3, f3_ok, f3_diag := coerce_to_float(s, a3_id, a3_type);
-        if !f3_ok return 0, .UNKNOWN, false, f3_diag;
+        scalar_ids: [16]s64;
+        for 0..expected_args-1 {
+          arg_id, arg_type, arg_ok, arg_diag := emit_expr(s, expr.args[it]);
+          if !arg_ok return 0, .UNKNOWN, false, arg_diag;
+          scalar_id, scalar_ok, scalar_diag := coerce_to_float(s, arg_id, arg_type);
+          if !scalar_ok return 0, .UNKNOWN, false, scalar_diag;
+          scalar_ids[it] = scalar_id;
+        }
 
-        // Jai Matrix2.{a,b,c,d} maps to columns (a,c) and (b,d) in float2x2.
-        col0 := new_id(s);
-        add_op(s, col0, "OpCompositeConstruct", s.id_float2, f0, f2);
-        col1 := new_id(s);
-        add_op(s, col1, "OpCompositeConstruct", s.id_float2, f1, f3);
+        column_type_id := spv_matrix_column_type_id(s, ctor_type);
+        matrix_type_id := type_id_from_kind(s, ctor_type);
+        if column_type_id == 0 || matrix_type_id == 0 return_err("missing SPIR-V ids for matrix constructor type %.", ctor_type);
+
+        cols_ids: [4]s64;
+        for c: 0..cols-1 {
+          column_components: [4]s64;
+          for r: 0..rows-1 {
+            // Jai MatrixN literals are row-major: _11, _12, _13, ...
+            column_components[r] = scalar_ids[r * cols + c];
+          }
+          col_id := new_id(s);
+          if rows == 2 add_op(s, col_id, "OpCompositeConstruct", column_type_id, column_components[0], column_components[1]);
+          if rows == 3 add_op(s, col_id, "OpCompositeConstruct", column_type_id, column_components[0], column_components[1], column_components[2]);
+          if rows == 4 add_op(s, col_id, "OpCompositeConstruct", column_type_id, column_components[0], column_components[1], column_components[2], column_components[3]);
+          cols_ids[c] = col_id;
+        }
+
         out := new_id(s);
-        add_op(s, out, "OpCompositeConstruct", s.id_float2x2, col0, col1);
-        return out, .FLOAT2X2, true, diag;
+        if cols == 2 add_op(s, out, "OpCompositeConstruct", matrix_type_id, cols_ids[0], cols_ids[1]);
+        if cols == 3 add_op(s, out, "OpCompositeConstruct", matrix_type_id, cols_ids[0], cols_ids[1], cols_ids[2]);
+        if cols == 4 add_op(s, out, "OpCompositeConstruct", matrix_type_id, cols_ids[0], cols_ids[1], cols_ids[2], cols_ids[3]);
+        return out, ctor_type, true, diag;
       }
       return_err("unsupported constructor type '%'.", expr.text);
     }
@@ -5891,7 +5965,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
     case .DECL; {
       decl_type := spv_kind_from_ir_type(stmt.decl_type);
       if decl_type == .INT || decl_type == .UINT || decl_type == .INT64 || decl_type == .UINT64 ||
-         decl_type == .BOOL || decl_type == .FLOAT16 || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT3 || decl_type == .FLOAT4 || decl_type == .FLOAT2X2 {
+         decl_type == .BOOL || decl_type == .FLOAT16 || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT3 || decl_type == .FLOAT4 ||
+         decl_type == .FLOAT2X2 || decl_type == .FLOAT3X3 || decl_type == .FLOAT4X4 {
         ptr_id := new_id(s);
         ptr_type_id := func_ptr_type_id_from_kind(s, decl_type);
         assert(ptr_type_id != 0);
@@ -6799,6 +6874,11 @@ spv_append_buffer_layout_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_Sta
         a(sb, "               OpDecorate % ArrayStride %", id_text(it.array_type_id), it.array_stride);
       }
       a(sb, "               OpMemberDecorate % % Offset %", id_text(layout.type_id), it.index, it.offset);
+      matrix_stride := spv_matrix_stride_for_kind(it.type);
+      if matrix_stride > 0 {
+        a(sb, "               OpMemberDecorate % % RowMajor", id_text(layout.type_id), it.index);
+        a(sb, "               OpMemberDecorate % % MatrixStride %", id_text(layout.type_id), it.index, matrix_stride);
+      }
     }
   }
 
@@ -6812,6 +6892,11 @@ spv_append_buffer_layout_decorations :: (sb: *String_Builder, s: *IR_SPV_Gen_Sta
           a(sb, "               OpDecorate % ArrayStride %", id_text(it.array_type_id), it.array_stride);
         }
         a(sb, "               OpMemberDecorate % % Offset %", id_text(buffer.element_type_id), it.index, it.offset);
+        matrix_stride := spv_matrix_stride_for_kind(it.type);
+        if matrix_stride > 0 {
+          a(sb, "               OpMemberDecorate % % RowMajor", id_text(buffer.element_type_id), it.index);
+          a(sb, "               OpMemberDecorate % % MatrixStride %", id_text(buffer.element_type_id), it.index, matrix_stride);
+        }
       }
     }
     a(sb, "               OpDecorate % Block", id_text(buffer.wrapper_struct_type_id));
@@ -6906,6 +6991,11 @@ spv_module_append_buffer_layout_decorations_binary :: (m: *SPV_Module, s: *IR_SP
         spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.array_type_id, SPV_DECORATION_ARRAY_STRIDE, cast(u32) it.array_stride);
       }
       spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) layout.type_id, cast(u32) it.index, SPV_DECORATION_OFFSET, cast(u32) it.offset);
+      matrix_stride := spv_matrix_stride_for_kind(it.type);
+      if matrix_stride > 0 {
+        spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) layout.type_id, cast(u32) it.index, SPV_DECORATION_ROW_MAJOR);
+        spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) layout.type_id, cast(u32) it.index, SPV_DECORATION_MATRIX_STRIDE, cast(u32) matrix_stride);
+      }
     }
   }
 
@@ -6919,6 +7009,11 @@ spv_module_append_buffer_layout_decorations_binary :: (m: *SPV_Module, s: *IR_SP
           spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.array_type_id, SPV_DECORATION_ARRAY_STRIDE, cast(u32) it.array_stride);
         }
         spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) buffer.element_type_id, cast(u32) it.index, SPV_DECORATION_OFFSET, cast(u32) it.offset);
+        matrix_stride := spv_matrix_stride_for_kind(it.type);
+        if matrix_stride > 0 {
+          spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) buffer.element_type_id, cast(u32) it.index, SPV_DECORATION_ROW_MAJOR);
+          spv_module_append_words(m, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) buffer.element_type_id, cast(u32) it.index, SPV_DECORATION_MATRIX_STRIDE, cast(u32) matrix_stride);
+        }
       }
     }
     spv_module_append_words(m, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) buffer.wrapper_struct_type_id, SPV_DECORATION_BLOCK);

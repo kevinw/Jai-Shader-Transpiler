@@ -117,6 +117,8 @@ ir_type_kind_from_slang_name :: (name: string) -> IR_Type_Kind {
   if name == "float3" return .F32x3;
   if name == "float4" return .F32x4;
   if name == "float2x2" return .F32x2x2;
+  if name == "float3x3" return .F32x3x3;
+  if name == "float4x4" return .F32x4x4;
   return .UNKNOWN;
 }
 
@@ -997,6 +999,10 @@ ir_lower_expr :: (node: *Code_Node,
             out.result_type.kind = .F32x4;
           } else if constructor_name == "float2x2" {
             out.result_type.kind = .F32x2x2;
+          } else if constructor_name == "float3x3" {
+            out.result_type.kind = .F32x3x3;
+          } else if constructor_name == "float4x4" {
+            out.result_type.kind = .F32x4x4;
           }
           if out.result_type.kind != .UNKNOWN {
             out.result_type.display_name = constructor_name;

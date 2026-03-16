@@ -602,11 +602,24 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     offset: s64 = 0;
     for st.fields {
       field := it;
+      if field.type.kind == .POINTER {
+        offset = align_up(offset, 8);
+      } else {
+        kind := spv_kind_from_ir_type(field.type);
+        field_align := host_blit_align_for_kind(kind);
+        if field_align <= 0 field_align = 4;
+        offset = align_up(offset, field_align);
+      }
       append(*sb, tprint("               OpMemberDecorate % % NonWritable\n", id_text(ps_info.type_id), it_index));
       append(*sb, tprint("               OpMemberDecorate % % Offset %\n", id_text(ps_info.type_id), it_index, offset));
+      kind := spv_kind_from_ir_type(field.type);
+      matrix_stride := spv_matrix_stride_for_kind(kind);
+      if matrix_stride > 0 {
+        append(*sb, tprint("               OpMemberDecorate % % RowMajor\n", id_text(ps_info.type_id), it_index));
+        append(*sb, tprint("               OpMemberDecorate % % MatrixStride %\n", id_text(ps_info.type_id), it_index, matrix_stride));
+      }
       if field.type.kind == .POINTER offset += 8;
       else {
-        kind := spv_kind_from_ir_type(field.type);
         size := byte_size_of_kind(kind);
         if size <= 0 size = 4;
         offset += size;
@@ -940,11 +953,23 @@ emit_graphics_physical_pointer_abi_binary :: (stage: IR_SPV_Gen_Stage,
     offset: s64 = 0;
     for st.fields {
       field := it;
+      kind := spv_kind_from_ir_type(field.type);
+      if field.type.kind == .POINTER {
+        offset = align_up(offset, 8);
+      } else {
+        field_align := host_blit_align_for_kind(kind);
+        if field_align <= 0 field_align = 4;
+        offset = align_up(offset, field_align);
+      }
       spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) ps_info.type_id, cast(u32) it_index, SPV_DECORATION_NON_WRITABLE);
       spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) ps_info.type_id, cast(u32) it_index, SPV_DECORATION_OFFSET, cast(u32) offset);
+      matrix_stride := spv_matrix_stride_for_kind(kind);
+      if matrix_stride > 0 {
+        spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) ps_info.type_id, cast(u32) it_index, SPV_DECORATION_ROW_MAJOR);
+        spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) ps_info.type_id, cast(u32) it_index, SPV_DECORATION_MATRIX_STRIDE, cast(u32) matrix_stride);
+      }
       if field.type.kind == .POINTER offset += 8;
       else {
-        kind := spv_kind_from_ir_type(field.type);
         size := byte_size_of_kind(kind);
         if size <= 0 size = 4;
         offset += size;
@@ -1130,9 +1155,14 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
         field_type_id = type_id_from_kind(*state, field_type);
         if field_type_id == 0 return_err("SPIR-V backend: missing type id for uniform field '%.%'.", struct_name, field.name);
         field_align = 4;
-        if field_type == .FLOAT2 field_align = 8;
-        if field_type == .FLOAT3 field_align = 16;
-        if field_type == .FLOAT4 field_align = 16;
+        if field_type == {
+        case .FLOAT2; field_align = 8;
+        case .FLOAT3; #through;
+        case .FLOAT4; #through;
+        case .FLOAT2X2; #through;
+        case .FLOAT3X3; #through;
+        case .FLOAT4X4; field_align = 16;
+        }
         field_size = byte_size_of_kind(field_type);
         if field_type == .FLOAT3 field_size = 16;
       }
@@ -1266,6 +1296,11 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     for uniform.fields {
       if it.is_array append(*sb, tprint("               OpDecorate % ArrayStride %\n", id_text(it.array_type_id), it.array_stride));
       append(*sb, tprint("               OpMemberDecorate % % Offset %\n", id_text(uniform.struct_type_id), it.index, it.offset));
+      matrix_stride := spv_matrix_stride_for_kind(it.type);
+      if matrix_stride > 0 {
+        append(*sb, tprint("               OpMemberDecorate % % RowMajor\n", id_text(uniform.struct_type_id), it.index));
+        append(*sb, tprint("               OpMemberDecorate % % MatrixStride %\n", id_text(uniform.struct_type_id), it.index, matrix_stride));
+      }
     }
   }
 
@@ -1454,9 +1489,14 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
         field_type_id = type_id_from_kind(*state, field_type);
         if field_type_id == 0 return_err("SPIR-V backend: missing type id for uniform field '%.%'.", struct_name, field.name);
         field_align = 4;
-        if field_type == .FLOAT2 field_align = 8;
-        if field_type == .FLOAT3 field_align = 16;
-        if field_type == .FLOAT4 field_align = 16;
+        if field_type == {
+        case .FLOAT2; field_align = 8;
+        case .FLOAT3; #through;
+        case .FLOAT4; #through;
+        case .FLOAT2X2; #through;
+        case .FLOAT3X3; #through;
+        case .FLOAT4X4; field_align = 16;
+        }
         field_size = byte_size_of_kind(field_type);
         if field_type == .FLOAT3 field_size = 16;
       }
@@ -1598,6 +1638,11 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
     for uniform.fields {
       if it.is_array spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.array_type_id, SPV_DECORATION_ARRAY_STRIDE, cast(u32) it.array_stride);
       spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) uniform.struct_type_id, cast(u32) it.index, SPV_DECORATION_OFFSET, cast(u32) it.offset);
+      matrix_stride := spv_matrix_stride_for_kind(it.type);
+      if matrix_stride > 0 {
+        spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) uniform.struct_type_id, cast(u32) it.index, SPV_DECORATION_ROW_MAJOR);
+        spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_MEMBER_DECORATE, cast(u32) uniform.struct_type_id, cast(u32) it.index, SPV_DECORATION_MATRIX_STRIDE, cast(u32) matrix_stride);
+      }
     }
   }
 

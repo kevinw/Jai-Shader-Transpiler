@@ -24,6 +24,30 @@ Graphics_Test_Fragment_Out :: struct {
   out_color: Vector4; @semantic_SV_Target0
 }
 
+Graphics_Matrix_Params :: struct {
+  transform: Matrix4;
+}
+
+Graphics_Matrix_Pair_Params :: struct {
+  transform: Matrix4;
+  values: *u32;
+}
+
+Graphics_Matrix_Pair_Direct_Params :: struct {
+  values: *u32;
+  transform: Matrix4;
+}
+
+Graphics_Matrix_Nested_Instance :: struct {
+  world: Matrix4;
+  meta: Vector4;
+}
+
+Graphics_Matrix_Nested_Params :: struct {
+  instances: *Graphics_Matrix_Nested_Instance;
+  view_proj: Matrix4;
+}
+
 sample_2d :: (texture_index: u32, sampler_index: u32, uv: Vector2) -> Vector4 {
   _ = texture_index;
   _ = sampler_index;
@@ -47,6 +71,59 @@ graphics_test_red_triangle_fragment :: (using input: Graphics_Test_Vertex_Out) -
 graphics_test_return_note_fragment :: (using input: Graphics_Test_Vertex_Out) -> Vector4 @SV_Target {
   _ = input;
   return Vector4.{1.0, 0.0, 0.0, 1.0};
+} @fragment_shader
+
+graphics_test_matrix_params_vertex :: (using input: Graphics_Test_Vertex_In, params: Graphics_Matrix_Params) -> Graphics_Test_Vertex_Out {
+  using out: Graphics_Test_Vertex_Out;
+  local := Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
+  position = params.transform * local;
+  return out;
+} @vertex_shader
+
+graphics_test_matrix_pair_vertex :: (using input: Graphics_Test_Vertex_In, params: Graphics_Matrix_Pair_Params) -> Graphics_Test_Vertex_Out {
+  using out: Graphics_Test_Vertex_Out;
+  local := Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
+  position = params.transform * local;
+  return out;
+} @vertex_shader
+
+graphics_test_matrix_pair_fragment :: (using input: Graphics_Test_Vertex_Out, params: Graphics_Matrix_Pair_Params) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  v := params.values[0] & 1;
+  if v == 0 out_color = Vector4.{1.0, 0.0, 0.0, 1.0};
+  else out_color = Vector4.{0.0, 1.0, 0.0, 1.0};
+  return out;
+} @fragment_shader
+
+graphics_test_matrix_direct_pair_vertex :: (using input: Graphics_Test_Vertex_In, params: *Graphics_Matrix_Pair_Direct_Params) -> Graphics_Test_Vertex_Out {
+  using out: Graphics_Test_Vertex_Out;
+  local := Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
+  position = params.transform * local;
+  return out;
+} @vertex_shader
+
+graphics_test_matrix_direct_pair_fragment :: (using input: Graphics_Test_Vertex_Out, params: *Graphics_Matrix_Pair_Direct_Params) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  v := params.values[0] & 1;
+  if v == 0 out_color = Vector4.{1.0, 0.0, 0.0, 1.0};
+  else out_color = Vector4.{0.0, 1.0, 0.0, 1.0};
+  return out;
+} @fragment_shader
+
+graphics_test_matrix_nested_pair_vertex :: (using input: Graphics_Test_Vertex_In, params: *Graphics_Matrix_Nested_Params) -> Graphics_Test_Vertex_Out {
+  using out: Graphics_Test_Vertex_Out;
+  local := Vector4.{a_pos.x, a_pos.y, 0.0, 1.0};
+  _ = params;
+  position = local;
+  return out;
+} @vertex_shader
+
+graphics_test_matrix_nested_pair_fragment :: (using input: Graphics_Test_Vertex_Out, params: *Graphics_Matrix_Nested_Params) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  v := params.instances[0].meta.x;
+  if v > 0.5 out_color = Vector4.{1.0, 0.0, 0.0, 1.0};
+  else out_color = Vector4.{0.0, 1.0, 0.0, 1.0};
+  return out;
 } @fragment_shader
 
 Graphics_Bindless_Vertex_Out :: struct {
@@ -235,6 +312,43 @@ build_cpu_reference_red_triangle :: (pixels: [] u8, width: s32, height: s32) -> 
   a := Vector2.{-0.80, -0.75};
   b := Vector2.{ 0.80, -0.75};
   c := Vector2.{ 0.00,  0.80};
+
+  red_count: s64 = 0;
+  inv_w := 1.0 / cast(float) width;
+  inv_h := 1.0 / cast(float) height;
+  for y: 0..height-1 {
+    for x: 0..width-1 {
+      p := Vector2.{
+        x = (cast(float) x + 0.5) * inv_w * 2.0 - 1.0,
+        y = (cast(float) y + 0.5) * inv_h * 2.0 - 1.0,
+      };
+      if !point_in_triangle(p, a, b, c) continue;
+      idx := pixel_index(x, y, width);
+      pixels[idx + 0] = 255;
+      pixels[idx + 1] = 0;
+      pixels[idx + 2] = 0;
+      pixels[idx + 3] = 255;
+      red_count += 1;
+    }
+  }
+
+  return red_count;
+}
+
+build_cpu_reference_transformed_triangle :: (pixels: [] u8, width: s32, height: s32, tx: float, ty: float) -> s64 {
+  for y: 0..height-1 {
+    for x: 0..width-1 {
+      idx := pixel_index(x, y, width);
+      pixels[idx + 0] = 0;
+      pixels[idx + 1] = 0;
+      pixels[idx + 2] = 0;
+      pixels[idx + 3] = 255;
+    }
+  }
+
+  a := Vector2.{-0.80 + tx, -0.75 + ty};
+  b := Vector2.{ 0.80 + tx, -0.75 + ty};
+  c := Vector2.{ 0.00 + tx,  0.80 + ty};
 
   red_count: s64 = 0;
   inv_w := 1.0 / cast(float) width;
@@ -510,6 +624,147 @@ run_return_note_fragment_case_metal :: () {
   defer release(fn_fragment);
 
   log("[OK] graphics_return_note_fragment");
+}
+
+run_matrix_params_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_matrix_params_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_red_triangle_fragment);
+  check_contains(vertex_source, "float4x4", "matrix-params vertex metal");
+  check_contains(fragment_source, "fragment", "matrix-params fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  queue := MTLDevice.newCommandQueue(device);
+  if !queue fail("Failed to create Metal command queue");
+  defer release(queue);
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile matrix-params vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile matrix-params vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile matrix-params fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile matrix-params fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find matrix-params vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find matrix-params fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  vertex_desc := MTLVertexDescriptor.vertexDescriptor();
+  defer release(vertex_desc);
+  attr0 := MTLVertexAttributeDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.attributes(vertex_desc), 0);
+  MTLVertexAttributeDescriptor.setFormat(attr0, .MTLVertexFormatFloat2);
+  MTLVertexAttributeDescriptor.setOffset(attr0, 0);
+  MTLVertexAttributeDescriptor.setBufferIndex(attr0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLVertexBufferLayoutDescriptor.setStride(layout0, size_of(Vector2));
+  MTLVertexBufferLayoutDescriptor.setStepFunction(layout0, .MTLVertexStepFunctionPerVertex);
+  MTLVertexBufferLayoutDescriptor.setStepRate(layout0, 1);
+
+  pipeline_desc := objc_init(objc_alloc(MTLRenderPipelineDescriptor));
+  defer release(pipeline_desc);
+  MTLRenderPipelineDescriptor.setVertexFunction(pipeline_desc, xx fn_vertex);
+  MTLRenderPipelineDescriptor.setFragmentFunction(pipeline_desc, xx fn_fragment);
+  MTLRenderPipelineDescriptor.setVertexDescriptor(pipeline_desc, vertex_desc);
+  color_attachment_desc := MTLRenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPipelineDescriptor.colorAttachments(pipeline_desc), 0);
+  MTLRenderPipelineColorAttachmentDescriptor.setPixelFormat(color_attachment_desc, .MTLPixelFormatRGBA8Unorm);
+
+  error = null;
+  pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
+  if log_nserror("Failed to create matrix-params render pipeline", error) || !pipeline {
+    fail("Failed to create matrix-params render pipeline");
+  }
+  defer release(pipeline);
+
+  texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm,
+                                                                                                  cast(NSUInteger) WINDOW_W,
+                                                                                                  cast(NSUInteger) WINDOW_H,
+                                                                                                  NO);
+  defer release(texture_desc);
+  MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
+  MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
+  color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
+  if !color_tex fail("Failed to create matrix-params render target texture");
+  defer release(color_tex);
+
+  verts := Vector2.[
+    Vector2.{-0.80, -0.75},
+    Vector2.{ 0.80, -0.75},
+    Vector2.{ 0.00,  0.80},
+  ];
+  vertex_buffer := MTLDevice.newBufferWithBytes_length_options(device, *verts, verts.count * size_of(Vector2), .MTLResourceStorageModeShared);
+  if !vertex_buffer fail("Failed to create matrix-params vertex buffer");
+  defer release(vertex_buffer);
+
+  tx :: 0.34;
+  ty :: 0.12;
+  params := Graphics_Matrix_Params.{transform = Matrix4.{
+    1.0, 0.0, 0.0, tx,
+    0.0, 1.0, 0.0, ty,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+  }};
+
+  pass := MTLRenderPassDescriptor.renderPassDescriptor();
+  color_attachment := MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPassDescriptor.colorAttachments(pass), 0);
+  MTLRenderPassColorAttachmentDescriptor.setTexture(color_attachment, xx color_tex);
+  MTLRenderPassColorAttachmentDescriptor.setLoadAction(color_attachment, .MTLLoadActionClear);
+  MTLRenderPassColorAttachmentDescriptor.setStoreAction(color_attachment, .MTLStoreActionStore);
+  MTLRenderPassColorAttachmentDescriptor.setClearColor(color_attachment, MTLClearColorMake(0.0, 0.0, 0.0, 1.0));
+
+  command_buffer := MTLCommandQueue.commandBuffer(queue);
+  if !command_buffer fail("Failed to create matrix-params command buffer");
+
+  encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+  if !encoder fail("Failed to create matrix-params render command encoder");
+  MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
+  MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLRenderCommandEncoder.setVertexBytes_length_atIndex(encoder, *params, size_of(Graphics_Matrix_Params), VERTEX_UNIFORM_BUFFER_INDEX);
+  MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 3);
+  MTLRenderCommandEncoder.endEncoding(encoder);
+
+  MTLCommandBuffer.commit(command_buffer);
+  MTLCommandBuffer.waitUntilCompleted(command_buffer);
+
+  bytes_per_row := cast(NSUInteger) WINDOW_W * 4;
+  gpu_pixels := NewArray(cast(s64) (bytes_per_row * WINDOW_H), u8);
+  defer array_free(gpu_pixels);
+  region := MTLRegionMake2D(0, 0, cast(NSUInteger) WINDOW_W, cast(NSUInteger) WINDOW_H);
+  MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(color_tex, gpu_pixels.data, bytes_per_row, region, 0);
+
+  cpu_pixels := NewArray(cast(s64) (WINDOW_W * WINDOW_H * 4), u8);
+  defer array_free(cpu_pixels);
+  cpu_red_count := build_cpu_reference_transformed_triangle(cpu_pixels, WINDOW_W, WINDOW_H, tx, ty);
+  gpu_red_count := count_gpu_red_pixels(gpu_pixels, WINDOW_W, WINDOW_H);
+
+  diff := gpu_red_count - cpu_red_count;
+  if diff < 0 diff = -diff;
+  if diff > 220 {
+    fail("Matrix-params triangle coverage mismatch: cpu=% gpu=% diff=%", cpu_red_count, gpu_red_count, diff);
+  }
+
+  validate_sample(gpu_pixels, 86, 56, WINDOW_W, true);
+  validate_sample(gpu_pixels, 18, 18, WINDOW_W, false);
+
+  log("[OK] graphics_matrix_params (gpu_red=% cpu_red=%)", gpu_red_count, cpu_red_count);
 }
 
 build_cpu_reference_instance_id_pair :: (pixels: [] u8, width: s32, height: s32) -> (red_count: s64, green_count: s64) {
@@ -1093,6 +1348,80 @@ run_nested_resource_pair_case_metal :: () {
   log("[OK] graphics_nested_resource_pair");
 }
 
+run_matrix_pointer_pair_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  pair_source := get_transpiled(.METAL, graphics_test_matrix_direct_pair_vertex, graphics_test_matrix_direct_pair_fragment);
+  check_contains(pair_source, "vertex", "matrix-pointer pair metal");
+  check_contains(pair_source, "fragment", "matrix-pointer pair metal");
+  check_contains(pair_source, "packed_rm_float4x4", "matrix-pointer pair metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  pair_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(pair_source), compile_options, *error);
+  if log_nserror("Failed to compile matrix-pointer pair metal source", error) || !pair_lib {
+    fail("Failed to compile matrix-pointer pair metal source");
+  }
+  defer release(pair_lib);
+
+  vertex_entry := extract_stage_entry_name(pair_source, "vertex");
+  fragment_entry := extract_stage_entry_name(pair_source, "fragment");
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(vertex_entry));
+  if !fn_vertex fail("Failed to find matrix-pointer pair vertex entry point '%'", vertex_entry);
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(fragment_entry));
+  if !fn_fragment fail("Failed to find matrix-pointer pair fragment entry point '%'", fragment_entry);
+  defer release(fn_fragment);
+
+  log("[OK] graphics_matrix_pointer_pair");
+}
+
+run_matrix_nested_pair_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  pair_source := get_transpiled(.METAL, graphics_test_matrix_nested_pair_vertex, graphics_test_matrix_nested_pair_fragment);
+  check_contains(pair_source, "vertex", "matrix-nested pair metal");
+  check_contains(pair_source, "fragment", "matrix-nested pair metal");
+  check_contains(pair_source, "packed_rm_float4x4", "matrix-nested pair metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  pair_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(pair_source), compile_options, *error);
+  if log_nserror("Failed to compile matrix-nested pair metal source", error) || !pair_lib {
+    fail("Failed to compile matrix-nested pair metal source");
+  }
+  defer release(pair_lib);
+
+  vertex_entry := extract_stage_entry_name(pair_source, "vertex");
+  fragment_entry := extract_stage_entry_name(pair_source, "fragment");
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(vertex_entry));
+  if !fn_vertex fail("Failed to find matrix-nested pair vertex entry point '%'", vertex_entry);
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(fragment_entry));
+  if !fn_fragment fail("Failed to find matrix-nested pair fragment entry point '%'", fragment_entry);
+  defer release(fn_fragment);
+
+  log("[OK] graphics_matrix_nested_pair");
+}
+
 main :: () {
   #if OS != .MACOS {
     log("Skipping graphics semantics runner on % (Metal-only test).", OS);
@@ -1101,6 +1430,7 @@ main :: () {
 
   run_red_triangle_case_metal();
   run_return_note_fragment_case_metal();
+  run_matrix_params_case_metal();
   run_instance_id_case_metal();
   run_bindless_sample_case_metal();
   run_nested_return_pair_case_metal();
@@ -1108,7 +1438,9 @@ main :: () {
   run_mixed_resource_container_case_metal();
   run_nested_resource_pair_case_metal();
   run_mixed_resource_vec3_container_case_metal();
-  log("Passed 9 graphics semantics cases.");
+  run_matrix_pointer_pair_case_metal();
+  run_matrix_nested_pair_case_metal();
+  log("Passed 12 graphics semantics cases.");
 }
 
 #scope_file

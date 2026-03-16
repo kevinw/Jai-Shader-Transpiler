@@ -131,7 +131,8 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
   for decls_v ir_metal_append_pair_decl(*selected_decls, *seen_exact, *identity_to_index, it);
   for decls_f ir_metal_append_pair_decl(*selected_decls, *seen_exact, *identity_to_index, it);
 
-  for selected_decls a(*sb, it);
+  for selected_decls if ir_metal_is_typedef_decl(it) a(*sb, it);
+  for selected_decls if !ir_metal_is_typedef_decl(it) a(*sb, it);
   return builder_to_string(*sb);
 } @jdll_export 
 
@@ -318,6 +319,12 @@ ir_metal_is_forward_type_decl :: (decl: string) -> bool {
   if find_index_from_left(text, "{") != -1 return false;
   if !ends_with(text, ";") return false;
   return ir_metal_is_type_decl(text);
+}
+
+ir_metal_is_typedef_decl :: (decl: string) -> bool {
+  text := trim_ascii_whitespace(decl);
+  if text.count == 0 return false;
+  return begins_with(text, "typedef ");
 }
 
 trim_ascii_whitespace :: (in: string) -> string {

@@ -12,6 +12,8 @@ IR_SPV_Id_Slot :: enum {
   TYPE_FLOAT3;
   TYPE_FLOAT4;
   TYPE_FLOAT2X2;
+  TYPE_FLOAT3X3;
+  TYPE_FLOAT4X4;
   TYPE_BOOL;
 
   PTR_STORAGE_INT;
@@ -23,6 +25,9 @@ IR_SPV_Id_Slot :: enum {
   PTR_STORAGE_FLOAT2;
   PTR_STORAGE_FLOAT3;
   PTR_STORAGE_FLOAT4;
+  PTR_STORAGE_FLOAT2X2;
+  PTR_STORAGE_FLOAT3X3;
+  PTR_STORAGE_FLOAT4X4;
 
   PTR_INPUT_UINT;
   PTR_INPUT_FLOAT16;
@@ -45,6 +50,9 @@ IR_SPV_Id_Slot :: enum {
   PTR_UNIFORM_FLOAT2;
   PTR_UNIFORM_FLOAT3;
   PTR_UNIFORM_FLOAT4;
+  PTR_UNIFORM_FLOAT2X2;
+  PTR_UNIFORM_FLOAT3X3;
+  PTR_UNIFORM_FLOAT4X4;
 
   PTR_FUNC_INT;
   PTR_FUNC_UINT;
@@ -56,6 +64,8 @@ IR_SPV_Id_Slot :: enum {
   PTR_FUNC_FLOAT3;
   PTR_FUNC_FLOAT4;
   PTR_FUNC_FLOAT2X2;
+  PTR_FUNC_FLOAT3X3;
+  PTR_FUNC_FLOAT4X4;
   PTR_FUNC_BOOL;
 }
 
@@ -82,7 +92,9 @@ SPV_KIND_INFO :: IR_SPV_Kind_Info.[
   .{kind=.FLOAT2, type_slot=.TYPE_FLOAT2, storage_ptr_slot=.PTR_STORAGE_FLOAT2, input_ptr_slot=.PTR_INPUT_FLOAT2, output_ptr_slot=.PTR_OUTPUT_FLOAT2, uniform_ptr_slot=.PTR_UNIFORM_FLOAT2, func_ptr_slot=.PTR_FUNC_FLOAT2, byte_size=8,  is_integral=false, is_signed=false},
   .{kind=.FLOAT3, type_slot=.TYPE_FLOAT3, storage_ptr_slot=.PTR_STORAGE_FLOAT3, input_ptr_slot=.PTR_INPUT_FLOAT3, output_ptr_slot=.PTR_OUTPUT_FLOAT3, uniform_ptr_slot=.PTR_UNIFORM_FLOAT3, func_ptr_slot=.PTR_FUNC_FLOAT3, byte_size=12, is_integral=false, is_signed=false},
   .{kind=.FLOAT4, type_slot=.TYPE_FLOAT4, storage_ptr_slot=.PTR_STORAGE_FLOAT4, input_ptr_slot=.PTR_INPUT_FLOAT4, output_ptr_slot=.PTR_OUTPUT_FLOAT4, uniform_ptr_slot=.PTR_UNIFORM_FLOAT4, func_ptr_slot=.PTR_FUNC_FLOAT4, byte_size=16, is_integral=false, is_signed=false},
-  .{kind=.FLOAT2X2, type_slot=.TYPE_FLOAT2X2, storage_ptr_slot=.NONE,           input_ptr_slot=.NONE,             output_ptr_slot=.NONE,               uniform_ptr_slot=.NONE,               func_ptr_slot=.PTR_FUNC_FLOAT2X2, byte_size=0, is_integral=false, is_signed=false},
+  .{kind=.FLOAT2X2, type_slot=.TYPE_FLOAT2X2, storage_ptr_slot=.PTR_STORAGE_FLOAT2X2, input_ptr_slot=.NONE, output_ptr_slot=.NONE, uniform_ptr_slot=.PTR_UNIFORM_FLOAT2X2, func_ptr_slot=.PTR_FUNC_FLOAT2X2, byte_size=16, is_integral=false, is_signed=false},
+  .{kind=.FLOAT3X3, type_slot=.TYPE_FLOAT3X3, storage_ptr_slot=.PTR_STORAGE_FLOAT3X3, input_ptr_slot=.NONE, output_ptr_slot=.NONE, uniform_ptr_slot=.PTR_UNIFORM_FLOAT3X3, func_ptr_slot=.PTR_FUNC_FLOAT3X3, byte_size=48, is_integral=false, is_signed=false},
+  .{kind=.FLOAT4X4, type_slot=.TYPE_FLOAT4X4, storage_ptr_slot=.PTR_STORAGE_FLOAT4X4, input_ptr_slot=.NONE, output_ptr_slot=.NONE, uniform_ptr_slot=.PTR_UNIFORM_FLOAT4X4, func_ptr_slot=.PTR_FUNC_FLOAT4X4, byte_size=64, is_integral=false, is_signed=false},
   .{kind=.BOOL,   type_slot=.TYPE_BOOL,   storage_ptr_slot=.NONE,               input_ptr_slot=.NONE,             output_ptr_slot=.NONE,               uniform_ptr_slot=.NONE,               func_ptr_slot=.PTR_FUNC_BOOL,   byte_size=0,  is_integral=false, is_signed=false},
 ];
 
@@ -104,6 +116,8 @@ state_id_from_slot :: (s: *IR_SPV_Gen_State, slot: IR_SPV_Id_Slot) -> s64 {
     case .TYPE_FLOAT3; return s.id_float3;
     case .TYPE_FLOAT4; return s.id_float4;
     case .TYPE_FLOAT2X2; return s.id_float2x2;
+    case .TYPE_FLOAT3X3; return s.id_float3x3;
+    case .TYPE_FLOAT4X4; return s.id_float4x4;
     case .TYPE_BOOL; return s.id_bool;
     case .PTR_STORAGE_INT; return s.id_ptr_storage_int;
     case .PTR_STORAGE_UINT; return s.id_ptr_storage_uint;
@@ -114,6 +128,9 @@ state_id_from_slot :: (s: *IR_SPV_Gen_State, slot: IR_SPV_Id_Slot) -> s64 {
     case .PTR_STORAGE_FLOAT2; return s.id_ptr_storage_float2;
     case .PTR_STORAGE_FLOAT3; return s.id_ptr_storage_float3;
     case .PTR_STORAGE_FLOAT4; return s.id_ptr_storage_float4;
+    case .PTR_STORAGE_FLOAT2X2; return s.id_ptr_storage_float2x2;
+    case .PTR_STORAGE_FLOAT3X3; return s.id_ptr_storage_float3x3;
+    case .PTR_STORAGE_FLOAT4X4; return s.id_ptr_storage_float4x4;
     case .PTR_INPUT_UINT; return s.id_ptr_input_uint;
     case .PTR_INPUT_FLOAT16; return s.id_ptr_input_half;
     case .PTR_INPUT_FLOAT; return s.id_ptr_input_float;
@@ -133,6 +150,9 @@ state_id_from_slot :: (s: *IR_SPV_Gen_State, slot: IR_SPV_Id_Slot) -> s64 {
     case .PTR_UNIFORM_FLOAT2; return s.id_ptr_uniform_float2;
     case .PTR_UNIFORM_FLOAT3; return s.id_ptr_uniform_float3;
     case .PTR_UNIFORM_FLOAT4; return s.id_ptr_uniform_float4;
+    case .PTR_UNIFORM_FLOAT2X2; return s.id_ptr_uniform_float2x2;
+    case .PTR_UNIFORM_FLOAT3X3; return s.id_ptr_uniform_float3x3;
+    case .PTR_UNIFORM_FLOAT4X4; return s.id_ptr_uniform_float4x4;
     case .PTR_FUNC_INT; return s.id_ptr_func_int;
     case .PTR_FUNC_UINT; return s.id_ptr_func_uint;
     case .PTR_FUNC_INT64; return s.id_ptr_func_int64;
@@ -143,6 +163,8 @@ state_id_from_slot :: (s: *IR_SPV_Gen_State, slot: IR_SPV_Id_Slot) -> s64 {
     case .PTR_FUNC_FLOAT3; return s.id_ptr_func_float3;
     case .PTR_FUNC_FLOAT4; return s.id_ptr_func_float4;
     case .PTR_FUNC_FLOAT2X2; return s.id_ptr_func_float2x2;
+    case .PTR_FUNC_FLOAT3X3; return s.id_ptr_func_float3x3;
+    case .PTR_FUNC_FLOAT4X4; return s.id_ptr_func_float4x4;
     case .PTR_FUNC_BOOL; return s.id_ptr_func_bool;
   }
   return 0;
@@ -258,6 +280,8 @@ spv_append_common_type_decls :: (sb: *String_Builder, state: *IR_SPV_Gen_State, 
   print_to_builder(sb, "% = OpTypeVector % 3\n", id_text(state.id_float3), id_text(state.id_float));
   print_to_builder(sb, "% = OpTypeVector % 4\n", id_text(state.id_float4), id_text(state.id_float));
   print_to_builder(sb, "% = OpTypeMatrix % 2\n", id_text(state.id_float2x2), id_text(state.id_float2));
+  print_to_builder(sb, "% = OpTypeMatrix % 3\n", id_text(state.id_float3x3), id_text(state.id_float3));
+  print_to_builder(sb, "% = OpTypeMatrix % 4\n", id_text(state.id_float4x4), id_text(state.id_float4));
   print_to_builder(sb, "% = OpTypeBool\n", id_text(state.id_bool));
   print_to_builder(sb, "% = OpConstantTrue %\n", id_text(state.id_bool_true), id_text(state.id_bool));
   print_to_builder(sb, "% = OpConstantFalse %\n", id_text(state.id_bool_false), id_text(state.id_bool));
@@ -283,6 +307,9 @@ spv_append_common_type_decls :: (sb: *String_Builder, state: *IR_SPV_Gen_State, 
   print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float2), id_text(state.id_float2));
   print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float3), id_text(state.id_float3));
   print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float4), id_text(state.id_float4));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float2x2), id_text(state.id_float2x2));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float3x3), id_text(state.id_float3x3));
+  print_to_builder(sb, "% = OpTypePointer Uniform %\n", id_text(state.id_ptr_uniform_float4x4), id_text(state.id_float4x4));
   print_to_builder(sb, "% = OpTypeRuntimeArray %\n", id_text(state.id_runtimearr_uint), id_text(state.id_uint));
   print_to_builder(sb, "% = OpTypeStruct %\n", id_text(state.id_buffer_struct), id_text(state.id_runtimearr_uint));
   print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_buffer_struct), storage_class, id_text(state.id_buffer_struct));
@@ -295,6 +322,9 @@ spv_append_common_type_decls :: (sb: *String_Builder, state: *IR_SPV_Gen_State, 
   print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float2), storage_class, id_text(state.id_float2));
   print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float3), storage_class, id_text(state.id_float3));
   print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float4), storage_class, id_text(state.id_float4));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float2x2), storage_class, id_text(state.id_float2x2));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float3x3), storage_class, id_text(state.id_float3x3));
+  print_to_builder(sb, "% = OpTypePointer % %\n", id_text(state.id_ptr_storage_float4x4), storage_class, id_text(state.id_float4x4));
   print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int), id_text(state.id_int));
   print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_uint), id_text(state.id_uint));
   print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_int64), id_text(state.id_int64));
@@ -305,6 +335,8 @@ spv_append_common_type_decls :: (sb: *String_Builder, state: *IR_SPV_Gen_State, 
   print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float3), id_text(state.id_float3));
   print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float4), id_text(state.id_float4));
   print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float2x2), id_text(state.id_float2x2));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float3x3), id_text(state.id_float3x3));
+  print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_float4x4), id_text(state.id_float4x4));
   print_to_builder(sb, "% = OpTypePointer Function %\n", id_text(state.id_ptr_func_bool), id_text(state.id_bool));
 }
 
@@ -351,6 +383,8 @@ spv_module_append_common_type_decls_binary :: (m: *SPV_Module, state: *IR_SPV_Ge
   spv_module_append_words(m, section, SPV_OP_TYPE_VECTOR, cast(u32) state.id_float3, cast(u32) state.id_float, 3);
   spv_module_append_words(m, section, SPV_OP_TYPE_VECTOR, cast(u32) state.id_float4, cast(u32) state.id_float, 4);
   spv_module_append_words(m, section, SPV_OP_TYPE_MATRIX, cast(u32) state.id_float2x2, cast(u32) state.id_float2, 2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_MATRIX, cast(u32) state.id_float3x3, cast(u32) state.id_float3, 3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_MATRIX, cast(u32) state.id_float4x4, cast(u32) state.id_float4, 4);
   spv_module_append_words(m, section, SPV_OP_TYPE_BOOL, cast(u32) state.id_bool);
   spv_module_append_words(m, section, SPV_OP_CONSTANT_TRUE, cast(u32) state.id_bool, cast(u32) state.id_bool_true);
   spv_module_append_words(m, section, SPV_OP_CONSTANT_FALSE, cast(u32) state.id_bool, cast(u32) state.id_bool_false);
@@ -376,6 +410,9 @@ spv_module_append_common_type_decls_binary :: (m: *SPV_Module, state: *IR_SPV_Ge
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float2, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float2);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float3, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float3);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float4, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float4);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float2x2, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float2x2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float3x3, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float3x3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_uniform_float4x4, SPV_STORAGE_CLASS_UNIFORM, cast(u32) state.id_float4x4);
   spv_module_append_words(m, section, SPV_OP_TYPE_RUNTIME_ARRAY, cast(u32) state.id_runtimearr_uint, cast(u32) state.id_uint);
   spv_module_append_words(m, section, SPV_OP_TYPE_STRUCT, cast(u32) state.id_buffer_struct, cast(u32) state.id_runtimearr_uint);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_buffer_struct, storage_class, cast(u32) state.id_buffer_struct);
@@ -388,6 +425,9 @@ spv_module_append_common_type_decls_binary :: (m: *SPV_Module, state: *IR_SPV_Ge
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float2, storage_class, cast(u32) state.id_float2);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float3, storage_class, cast(u32) state.id_float3);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float4, storage_class, cast(u32) state.id_float4);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float2x2, storage_class, cast(u32) state.id_float2x2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float3x3, storage_class, cast(u32) state.id_float3x3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_storage_float4x4, storage_class, cast(u32) state.id_float4x4);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_int, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_int);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_uint, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_uint);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_int64, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_int64);
@@ -398,6 +438,8 @@ spv_module_append_common_type_decls_binary :: (m: *SPV_Module, state: *IR_SPV_Ge
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float3, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float3);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float4, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float4);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float2x2, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float2x2);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float3x3, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float3x3);
+  spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_float4x4, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_float4x4);
   spv_module_append_words(m, section, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_func_bool, SPV_STORAGE_CLASS_FUNCTION, cast(u32) state.id_bool);
 }
 

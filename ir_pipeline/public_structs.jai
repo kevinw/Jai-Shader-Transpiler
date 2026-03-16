@@ -22,6 +22,8 @@ IR_Type_Kind :: enum {
   F32x3;
   F32x4;
   F32x2x2;
+  F32x3x3;
+  F32x4x4;
   STRUCT;
   POINTER;
   FIXED_ARRAY;

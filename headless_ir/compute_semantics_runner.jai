@@ -20,6 +20,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"defer_continue", .Bare},
   {"defer_switch_through", .Bare},
   {"matrix_math", .Bare},
+  {"matrix4_params_mul", .Bare},
   {"intrinsics", .Bare},
   {"float4_component_lvalue", .Bare},
   {"local_array_literal_read", .Bare},
@@ -602,6 +603,20 @@ matrix_math :: (using in: Compute_Semantics_In, values: *u32) {
     r := m * v;
     values[idx] = cast(u32) (r.x * 4.0 + r.y * 2.0 + 17.0);
   }
+} @compute_shader
+
+matrix4_params_mul :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  m := Matrix4.{
+    1.0, 0.0, 0.0, cast(float) (idx % 5),
+    0.0, 1.0, 0.0, cast(float) (idx % 7),
+    0.0, 0.0, 1.0, cast(float) (idx % 3),
+    0.0, 0.0, 0.0, 1.0,
+  };
+  v := Vector4.{cast(float) (idx % 4), cast(float) ((idx * 2) % 5), cast(float) ((idx * 3) % 6), 1.0};
+  r := m * v;
+  values[idx] = cast(u32) floor(r.x * 3.0 + r.y * 5.0 + r.z * 7.0 + r.w * 11.0);
 } @compute_shader
 
 intrinsics :: (using in: Compute_Semantics_In, values: *u32) {

@@ -930,6 +930,7 @@ spv_lookup_decoration :: (name: string) -> (u32, bool) {
   case "Binding";      return SPV_DECORATION_BINDING, true;
   case "DescriptorSet"; return SPV_DECORATION_DESCRIPTOR_SET, true;
   case "SpecId";       return SPV_DECORATION_SPEC_ID, true;
+  case "RowMajor";     return SPV_DECORATION_ROW_MAJOR, true;
   case "ColMajor";     return SPV_DECORATION_COL_MAJOR, true;
   case "ArrayStride";  return SPV_DECORATION_ARRAY_STRIDE, true;
   case "MatrixStride"; return SPV_DECORATION_MATRIX_STRIDE, true;
@@ -1145,6 +1146,7 @@ SPV_SOURCE_LANGUAGE_UNKNOWN                    :: 0;
 
 SPV_DECORATION_SPEC_ID                         :: 1;
 SPV_DECORATION_BLOCK                           :: 2;
+SPV_DECORATION_ROW_MAJOR                       :: 4;
 SPV_DECORATION_COL_MAJOR                       :: 5;
 SPV_DECORATION_ARRAY_STRIDE                    :: 6;
 SPV_DECORATION_MATRIX_STRIDE                   :: 7;
