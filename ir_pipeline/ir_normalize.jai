@@ -1,4 +1,7 @@
-// Canonicalize IR into a smaller set of control-flow shapes so backends need fewer special cases.
+// Canonicalize IR into a smaller set of control-flow shapes so helper lowering
+// needs fewer special cases. Avoid rewriting the top-level shader body, though:
+// synthetic `else` blocks there can make fragment tail code harder for
+// downstream backends to preserve.
 #scope_export
 
 normalize_shader :: (shader: *IR_Shader) {
@@ -13,7 +16,6 @@ normalize_shader :: (shader: *IR_Shader) {
     // again to catch newly multi-statement returning branches.
     normalize_value_return_if_chains_in_block(*it.body);
   }
-  normalize_value_return_if_chains_in_block(*shader.body);
 } @jdll_export
 
 

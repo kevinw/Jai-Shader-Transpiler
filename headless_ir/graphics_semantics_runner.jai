@@ -164,6 +164,57 @@ graphics_test_nested_return_fragment :: (using input: Graphics_Bindless_Vertex_O
   return out;
 } @fragment_shader
 
+graphics_test_if_return_tail_fragment :: (using input: Graphics_Bindless_Vertex_Out) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  if input.uv.x < 0.5 {
+    out_color = Vector4.{1.0, 0.0, 0.0, 1.0};
+    return out;
+  }
+
+  accum := 0.0;
+  for 0..3 {
+    accum += 0.1 + cast(float) it * 0.05;
+  }
+  out_color = Vector4.{0.0, accum, 0.2, 1.0};
+  return out;
+} @fragment_shader
+
+graphics_test_switch_return_tail_fragment :: (using input: Graphics_Bindless_Vertex_Out) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  bucket := cast(u32) floor(input.uv.x * 3.0);
+  if bucket == {
+  case 0;
+    out_color = Vector4.{1.0, 0.0, 0.0, 1.0};
+    return out;
+  case 1;
+    out_color = Vector4.{0.0, 0.0, 1.0, 1.0};
+    return out;
+  }
+
+  accum := 0.0;
+  for 0..3 {
+    accum += 0.1 + cast(float) it * 0.05;
+  }
+  out_color = Vector4.{0.0, accum, 0.2, 1.0};
+  return out;
+} @fragment_shader
+
+discard :: () {}
+
+graphics_test_discard_tail_fragment :: (using input: Graphics_Bindless_Vertex_Out) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  if input.uv.x < 0.5 {
+    discard();
+  }
+
+  accum := 0.0;
+  for 0..3 {
+    accum += 0.1 + cast(float) it * 0.05;
+  }
+  out_color = Vector4.{0.0, accum, 0.2, 1.0};
+  return out;
+} @fragment_shader
+
 Graphics_Nested_Resource_Leaf :: struct {
   values: *u32;
 }
@@ -435,6 +486,16 @@ validate_sample_blue :: (pixels: [] u8, x: s32, y: s32, width: s32) {
   b := pixels[idx + 2];
   if !(b >= 220 && r <= 40 && g <= 40) {
     fail("Expected blue pixel at (%,%) but got rgb=(%,%,%)", x, y, r, g, b);
+  }
+}
+
+validate_sample_greenish :: (pixels: [] u8, x: s32, y: s32, width: s32) {
+  idx := pixel_index(x, y, width);
+  r := pixels[idx + 0];
+  g := pixels[idx + 1];
+  b := pixels[idx + 2];
+  if !(g >= 150 && r <= 40 && b >= 35 && b <= 80) {
+    fail("Expected greenish pixel at (%,%) but got rgb=(%,%,%)", x, y, r, g, b);
   }
 }
 
@@ -1191,6 +1252,364 @@ run_nested_return_pair_case_metal :: () {
   log("[OK] graphics_nested_return_pair");
 }
 
+run_if_return_tail_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_bindless_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_if_return_tail_fragment);
+  check_contains(vertex_source, "vertex", "if-return-tail vertex metal");
+  check_contains(fragment_source, "fragment", "if-return-tail fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  queue := MTLDevice.newCommandQueue(device);
+  if !queue fail("Failed to create if-return-tail Metal command queue");
+  defer release(queue);
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile if-return-tail vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile if-return-tail vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile if-return-tail fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile if-return-tail fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find if-return-tail vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find if-return-tail fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  vertex_desc := MTLVertexDescriptor.vertexDescriptor();
+  defer release(vertex_desc);
+  attr0 := MTLVertexAttributeDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.attributes(vertex_desc), 0);
+  MTLVertexAttributeDescriptor.setFormat(attr0, .MTLVertexFormatFloat2);
+  MTLVertexAttributeDescriptor.setOffset(attr0, 0);
+  MTLVertexAttributeDescriptor.setBufferIndex(attr0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLVertexBufferLayoutDescriptor.setStride(layout0, size_of(Vector2));
+  MTLVertexBufferLayoutDescriptor.setStepFunction(layout0, .MTLVertexStepFunctionPerVertex);
+  MTLVertexBufferLayoutDescriptor.setStepRate(layout0, 1);
+
+  pipeline_desc := objc_init(objc_alloc(MTLRenderPipelineDescriptor));
+  defer release(pipeline_desc);
+  MTLRenderPipelineDescriptor.setVertexFunction(pipeline_desc, xx fn_vertex);
+  MTLRenderPipelineDescriptor.setFragmentFunction(pipeline_desc, xx fn_fragment);
+  MTLRenderPipelineDescriptor.setVertexDescriptor(pipeline_desc, vertex_desc);
+  color_attachment_desc := MTLRenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPipelineDescriptor.colorAttachments(pipeline_desc), 0);
+  MTLRenderPipelineColorAttachmentDescriptor.setPixelFormat(color_attachment_desc, .MTLPixelFormatRGBA8Unorm);
+
+  error = null;
+  pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
+  if log_nserror("Failed to create if-return-tail render pipeline", error) || !pipeline {
+    fail("Failed to create if-return-tail render pipeline");
+  }
+  defer release(pipeline);
+
+  texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm,
+                                                                                                  cast(NSUInteger) WINDOW_W,
+                                                                                                  cast(NSUInteger) WINDOW_H,
+                                                                                                  NO);
+  defer release(texture_desc);
+  MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
+  MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
+  color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
+  if !color_tex fail("Failed to create if-return-tail render target texture");
+  defer release(color_tex);
+
+  verts := Vector2.[
+    Vector2.{-1.0, -1.0},
+    Vector2.{ 3.0, -1.0},
+    Vector2.{-1.0,  3.0},
+  ];
+  vertex_buffer := MTLDevice.newBufferWithBytes_length_options(device, *verts, verts.count * size_of(Vector2), .MTLResourceStorageModeShared);
+  if !vertex_buffer fail("Failed to create if-return-tail vertex buffer");
+  defer release(vertex_buffer);
+
+  pass := MTLRenderPassDescriptor.renderPassDescriptor();
+  color_attachment := MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPassDescriptor.colorAttachments(pass), 0);
+  MTLRenderPassColorAttachmentDescriptor.setTexture(color_attachment, xx color_tex);
+  MTLRenderPassColorAttachmentDescriptor.setLoadAction(color_attachment, .MTLLoadActionClear);
+  MTLRenderPassColorAttachmentDescriptor.setStoreAction(color_attachment, .MTLStoreActionStore);
+  MTLRenderPassColorAttachmentDescriptor.setClearColor(color_attachment, MTLClearColorMake(0.0, 0.0, 0.0, 1.0));
+
+  command_buffer := MTLCommandQueue.commandBuffer(queue);
+  if !command_buffer fail("Failed to create if-return-tail command buffer");
+  encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+  if !encoder fail("Failed to create if-return-tail render encoder");
+  MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
+  MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 3);
+  MTLRenderCommandEncoder.endEncoding(encoder);
+
+  MTLCommandBuffer.commit(command_buffer);
+  MTLCommandBuffer.waitUntilCompleted(command_buffer);
+
+  bytes_per_row := cast(NSUInteger) WINDOW_W * 4;
+  gpu_pixels := NewArray(cast(s64) (bytes_per_row * WINDOW_H), u8);
+  defer array_free(gpu_pixels);
+  region := MTLRegionMake2D(0, 0, cast(NSUInteger) WINDOW_W, cast(NSUInteger) WINDOW_H);
+  MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(color_tex, gpu_pixels.data, bytes_per_row, region, 0);
+
+  validate_sample(gpu_pixels, 24, 64, WINDOW_W, true);
+  validate_sample_greenish(gpu_pixels, 96, 64, WINDOW_W);
+
+  log("[OK] graphics_if_return_tail");
+}
+
+run_switch_return_tail_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_bindless_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_switch_return_tail_fragment);
+  check_contains(vertex_source, "vertex", "switch-return-tail vertex metal");
+  check_contains(fragment_source, "fragment", "switch-return-tail fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  queue := MTLDevice.newCommandQueue(device);
+  if !queue fail("Failed to create switch-return-tail Metal command queue");
+  defer release(queue);
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile switch-return-tail vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile switch-return-tail vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile switch-return-tail fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile switch-return-tail fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find switch-return-tail vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find switch-return-tail fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  vertex_desc := MTLVertexDescriptor.vertexDescriptor();
+  defer release(vertex_desc);
+  attr0 := MTLVertexAttributeDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.attributes(vertex_desc), 0);
+  MTLVertexAttributeDescriptor.setFormat(attr0, .MTLVertexFormatFloat2);
+  MTLVertexAttributeDescriptor.setOffset(attr0, 0);
+  MTLVertexAttributeDescriptor.setBufferIndex(attr0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLVertexBufferLayoutDescriptor.setStride(layout0, size_of(Vector2));
+  MTLVertexBufferLayoutDescriptor.setStepFunction(layout0, .MTLVertexStepFunctionPerVertex);
+  MTLVertexBufferLayoutDescriptor.setStepRate(layout0, 1);
+
+  pipeline_desc := objc_init(objc_alloc(MTLRenderPipelineDescriptor));
+  defer release(pipeline_desc);
+  MTLRenderPipelineDescriptor.setVertexFunction(pipeline_desc, xx fn_vertex);
+  MTLRenderPipelineDescriptor.setFragmentFunction(pipeline_desc, xx fn_fragment);
+  MTLRenderPipelineDescriptor.setVertexDescriptor(pipeline_desc, vertex_desc);
+  color_attachment_desc := MTLRenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPipelineDescriptor.colorAttachments(pipeline_desc), 0);
+  MTLRenderPipelineColorAttachmentDescriptor.setPixelFormat(color_attachment_desc, .MTLPixelFormatRGBA8Unorm);
+
+  error = null;
+  pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
+  if log_nserror("Failed to create switch-return-tail render pipeline", error) || !pipeline {
+    fail("Failed to create switch-return-tail render pipeline");
+  }
+  defer release(pipeline);
+
+  texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm,
+                                                                                                  cast(NSUInteger) WINDOW_W,
+                                                                                                  cast(NSUInteger) WINDOW_H,
+                                                                                                  NO);
+  defer release(texture_desc);
+  MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
+  MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
+  color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
+  if !color_tex fail("Failed to create switch-return-tail render target texture");
+  defer release(color_tex);
+
+  verts := Vector2.[
+    Vector2.{-1.0, -1.0},
+    Vector2.{ 3.0, -1.0},
+    Vector2.{-1.0,  3.0},
+  ];
+  vertex_buffer := MTLDevice.newBufferWithBytes_length_options(device, *verts, verts.count * size_of(Vector2), .MTLResourceStorageModeShared);
+  if !vertex_buffer fail("Failed to create switch-return-tail vertex buffer");
+  defer release(vertex_buffer);
+
+  pass := MTLRenderPassDescriptor.renderPassDescriptor();
+  color_attachment := MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPassDescriptor.colorAttachments(pass), 0);
+  MTLRenderPassColorAttachmentDescriptor.setTexture(color_attachment, xx color_tex);
+  MTLRenderPassColorAttachmentDescriptor.setLoadAction(color_attachment, .MTLLoadActionClear);
+  MTLRenderPassColorAttachmentDescriptor.setStoreAction(color_attachment, .MTLStoreActionStore);
+  MTLRenderPassColorAttachmentDescriptor.setClearColor(color_attachment, MTLClearColorMake(0.0, 0.0, 0.0, 1.0));
+
+  command_buffer := MTLCommandQueue.commandBuffer(queue);
+  if !command_buffer fail("Failed to create switch-return-tail command buffer");
+  encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+  if !encoder fail("Failed to create switch-return-tail render encoder");
+  MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
+  MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 3);
+  MTLRenderCommandEncoder.endEncoding(encoder);
+
+  MTLCommandBuffer.commit(command_buffer);
+  MTLCommandBuffer.waitUntilCompleted(command_buffer);
+
+  bytes_per_row := cast(NSUInteger) WINDOW_W * 4;
+  gpu_pixels := NewArray(cast(s64) (bytes_per_row * WINDOW_H), u8);
+  defer array_free(gpu_pixels);
+  region := MTLRegionMake2D(0, 0, cast(NSUInteger) WINDOW_W, cast(NSUInteger) WINDOW_H);
+  MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(color_tex, gpu_pixels.data, bytes_per_row, region, 0);
+
+  validate_sample(gpu_pixels, 20, 64, WINDOW_W, true);
+  validate_sample_blue(gpu_pixels, 64, 64, WINDOW_W);
+  validate_sample_greenish(gpu_pixels, 108, 64, WINDOW_W);
+
+  log("[OK] graphics_switch_return_tail");
+}
+
+run_discard_tail_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_bindless_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_discard_tail_fragment);
+  check_contains(vertex_source, "vertex", "discard-tail vertex metal");
+  check_contains(fragment_source, "fragment", "discard-tail fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  queue := MTLDevice.newCommandQueue(device);
+  if !queue fail("Failed to create discard-tail Metal command queue");
+  defer release(queue);
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile discard-tail vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile discard-tail vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile discard-tail fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile discard-tail fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find discard-tail vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find discard-tail fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  vertex_desc := MTLVertexDescriptor.vertexDescriptor();
+  defer release(vertex_desc);
+  attr0 := MTLVertexAttributeDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.attributes(vertex_desc), 0);
+  MTLVertexAttributeDescriptor.setFormat(attr0, .MTLVertexFormatFloat2);
+  MTLVertexAttributeDescriptor.setOffset(attr0, 0);
+  MTLVertexAttributeDescriptor.setBufferIndex(attr0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLVertexBufferLayoutDescriptor.setStride(layout0, size_of(Vector2));
+  MTLVertexBufferLayoutDescriptor.setStepFunction(layout0, .MTLVertexStepFunctionPerVertex);
+  MTLVertexBufferLayoutDescriptor.setStepRate(layout0, 1);
+
+  pipeline_desc := objc_init(objc_alloc(MTLRenderPipelineDescriptor));
+  defer release(pipeline_desc);
+  MTLRenderPipelineDescriptor.setVertexFunction(pipeline_desc, xx fn_vertex);
+  MTLRenderPipelineDescriptor.setFragmentFunction(pipeline_desc, xx fn_fragment);
+  MTLRenderPipelineDescriptor.setVertexDescriptor(pipeline_desc, vertex_desc);
+  color_attachment_desc := MTLRenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPipelineDescriptor.colorAttachments(pipeline_desc), 0);
+  MTLRenderPipelineColorAttachmentDescriptor.setPixelFormat(color_attachment_desc, .MTLPixelFormatRGBA8Unorm);
+
+  error = null;
+  pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
+  if log_nserror("Failed to create discard-tail render pipeline", error) || !pipeline {
+    fail("Failed to create discard-tail render pipeline");
+  }
+  defer release(pipeline);
+
+  texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm,
+                                                                                                  cast(NSUInteger) WINDOW_W,
+                                                                                                  cast(NSUInteger) WINDOW_H,
+                                                                                                  NO);
+  defer release(texture_desc);
+  MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
+  MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
+  color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
+  if !color_tex fail("Failed to create discard-tail render target texture");
+  defer release(color_tex);
+
+  verts := Vector2.[
+    Vector2.{-1.0, -1.0},
+    Vector2.{ 3.0, -1.0},
+    Vector2.{-1.0,  3.0},
+  ];
+  vertex_buffer := MTLDevice.newBufferWithBytes_length_options(device, *verts, verts.count * size_of(Vector2), .MTLResourceStorageModeShared);
+  if !vertex_buffer fail("Failed to create discard-tail vertex buffer");
+  defer release(vertex_buffer);
+
+  pass := MTLRenderPassDescriptor.renderPassDescriptor();
+  color_attachment := MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPassDescriptor.colorAttachments(pass), 0);
+  MTLRenderPassColorAttachmentDescriptor.setTexture(color_attachment, xx color_tex);
+  MTLRenderPassColorAttachmentDescriptor.setLoadAction(color_attachment, .MTLLoadActionClear);
+  MTLRenderPassColorAttachmentDescriptor.setStoreAction(color_attachment, .MTLStoreActionStore);
+  MTLRenderPassColorAttachmentDescriptor.setClearColor(color_attachment, MTLClearColorMake(0.0, 0.0, 0.0, 1.0));
+
+  command_buffer := MTLCommandQueue.commandBuffer(queue);
+  if !command_buffer fail("Failed to create discard-tail command buffer");
+  encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+  if !encoder fail("Failed to create discard-tail render encoder");
+  MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
+  MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 3);
+  MTLRenderCommandEncoder.endEncoding(encoder);
+
+  MTLCommandBuffer.commit(command_buffer);
+  MTLCommandBuffer.waitUntilCompleted(command_buffer);
+
+  bytes_per_row := cast(NSUInteger) WINDOW_W * 4;
+  gpu_pixels := NewArray(cast(s64) (bytes_per_row * WINDOW_H), u8);
+  defer array_free(gpu_pixels);
+  region := MTLRegionMake2D(0, 0, cast(NSUInteger) WINDOW_W, cast(NSUInteger) WINDOW_H);
+  MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(color_tex, gpu_pixels.data, bytes_per_row, region, 0);
+
+  validate_sample(gpu_pixels, 24, 64, WINDOW_W, false);
+  validate_sample_greenish(gpu_pixels, 96, 64, WINDOW_W);
+
+  log("[OK] graphics_discard_tail");
+}
+
 run_nested_resource_container_case_metal :: () {
   init_objective_c();
   init_metal();
@@ -1434,13 +1853,16 @@ main :: () {
   run_instance_id_case_metal();
   run_bindless_sample_case_metal();
   run_nested_return_pair_case_metal();
+  run_if_return_tail_case_metal();
+  run_switch_return_tail_case_metal();
+  run_discard_tail_case_metal();
   run_nested_resource_container_case_metal();
   run_mixed_resource_container_case_metal();
   run_nested_resource_pair_case_metal();
   run_mixed_resource_vec3_container_case_metal();
   run_matrix_pointer_pair_case_metal();
   run_matrix_nested_pair_case_metal();
-  log("Passed 12 graphics semantics cases.");
+  log("Passed 15 graphics semantics cases.");
 }
 
 #scope_file
