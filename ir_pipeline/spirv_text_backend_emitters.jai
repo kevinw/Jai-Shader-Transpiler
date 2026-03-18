@@ -141,8 +141,8 @@ spv_append_sample_2d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   append(sb, tprint("% = OpTypeImage % 2D 0 0 0 1 Unknown\n", id_text(s.id_image2d), id_text(s.id_float)));
   append(sb, tprint("% = OpTypeSampler\n", id_text(s.id_sampler)));
   append(sb, tprint("% = OpTypeSampledImage %\n", id_text(s.id_sampled_image2d), id_text(s.id_image2d)));
-  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_image2d_array), id_text(s.id_image2d), id_text(s.id_sample_2d_array_len_const)));
-  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_sampler_array), id_text(s.id_sampler), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_image2d_array), id_text(s.id_image2d), id_text(s.id_sampled_texture_array_len_const)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_sampler_array), id_text(s.id_sampler), id_text(s.id_sampler_array_len_const)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_image2d_array), id_text(s.id_image2d_array)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_sampler_array), id_text(s.id_sampler_array)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_image2d), id_text(s.id_image2d)));
@@ -160,8 +160,8 @@ spv_append_sample_3d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   append(sb, tprint("% = OpTypeImage % 3D 0 0 0 1 Unknown\n", id_text(s.id_image3d), id_text(s.id_float)));
   append(sb, tprint("% = OpTypeSampler\n", id_text(s.id_sampler)));
   append(sb, tprint("% = OpTypeSampledImage %\n", id_text(s.id_sampled_image3d), id_text(s.id_image3d)));
-  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_image3d_array), id_text(s.id_image3d), id_text(s.id_sample_2d_array_len_const)));
-  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_sampler_array), id_text(s.id_sampler), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_image3d_array), id_text(s.id_image3d), id_text(s.id_sampled_texture_array_len_const)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_sampler_array), id_text(s.id_sampler), id_text(s.id_sampler_array_len_const)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_image3d_array), id_text(s.id_image3d_array)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_sampler_array), id_text(s.id_sampler_array)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_image3d), id_text(s.id_image3d)));
@@ -177,7 +177,7 @@ spv_append_sample_3d_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
 spv_append_write_2d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   if !s.uses_write_2d return;
   append(sb, tprint("% = OpTypeImage % 2D 0 0 0 2 Unknown\n", id_text(s.id_storage_image2d), id_text(s.id_float)));
-  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_storage_image2d_array), id_text(s.id_storage_image2d), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_storage_image2d_array), id_text(s.id_storage_image2d), id_text(s.id_storage_texture_array_len_const)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_storage_image2d_array), id_text(s.id_storage_image2d_array)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_storage_image2d), id_text(s.id_storage_image2d)));
 }
@@ -190,7 +190,7 @@ spv_append_write_2d_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
 spv_append_write_3d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   if !s.uses_write_3d return;
   append(sb, tprint("% = OpTypeImage % 3D 0 0 0 2 Unknown\n", id_text(s.id_storage_image3d), id_text(s.id_float)));
-  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_storage_image3d_array), id_text(s.id_storage_image3d), id_text(s.id_sample_2d_array_len_const)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_storage_image3d_array), id_text(s.id_storage_image3d), id_text(s.id_storage_texture_array_len_const)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_storage_image3d_array), id_text(s.id_storage_image3d_array)));
   append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_storage_image3d), id_text(s.id_storage_image3d)));
 }
@@ -206,8 +206,8 @@ spv_module_append_sampled_image_decls_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_IMAGE, cast(u32) s.id_image2d, cast(u32) s.id_float, SPV_DIM_2D, 0, 0, 0, 1, SPV_IMAGE_FORMAT_UNKNOWN);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_SAMPLER, cast(u32) s.id_sampler);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_SAMPLED_IMAGE, cast(u32) s.id_sampled_image2d, cast(u32) s.id_image2d);
-    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_image2d_array, cast(u32) s.id_image2d, cast(u32) s.id_sample_2d_array_len_const);
-    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_sampler_array, cast(u32) s.id_sampler, cast(u32) s.id_sample_2d_array_len_const);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_image2d_array, cast(u32) s.id_image2d, cast(u32) s.id_sampled_texture_array_len_const);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_sampler_array, cast(u32) s.id_sampler, cast(u32) s.id_sampler_array_len_const);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_image2d_array, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_image2d_array);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_sampler_array, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_sampler_array);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_image2d, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_image2d);
@@ -219,9 +219,9 @@ spv_module_append_sampled_image_decls_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_SAMPLER, cast(u32) s.id_sampler);
     }
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_SAMPLED_IMAGE, cast(u32) s.id_sampled_image3d, cast(u32) s.id_image3d);
-    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_image3d_array, cast(u32) s.id_image3d, cast(u32) s.id_sample_2d_array_len_const);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_image3d_array, cast(u32) s.id_image3d, cast(u32) s.id_sampled_texture_array_len_const);
     if !s.uses_sample_2d {
-      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_sampler_array, cast(u32) s.id_sampler, cast(u32) s.id_sample_2d_array_len_const);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_sampler_array, cast(u32) s.id_sampler, cast(u32) s.id_sampler_array_len_const);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_sampler_array, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_sampler_array);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_sampler, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_sampler);
     }
@@ -234,13 +234,13 @@ spv_module_append_storage_image_decls_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_
   assert(m != null && s != null);
   if s.uses_write_2d {
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_IMAGE, cast(u32) s.id_storage_image2d, cast(u32) s.id_float, SPV_DIM_2D, 0, 0, 0, 2, SPV_IMAGE_FORMAT_UNKNOWN);
-    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_storage_image2d_array, cast(u32) s.id_storage_image2d, cast(u32) s.id_sample_2d_array_len_const);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_storage_image2d_array, cast(u32) s.id_storage_image2d, cast(u32) s.id_storage_texture_array_len_const);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_storage_image2d_array, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_storage_image2d_array);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_storage_image2d, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_storage_image2d);
   }
   if s.uses_write_3d {
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_IMAGE, cast(u32) s.id_storage_image3d, cast(u32) s.id_float, SPV_DIM_3D, 0, 0, 0, 2, SPV_IMAGE_FORMAT_UNKNOWN);
-    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_storage_image3d_array, cast(u32) s.id_storage_image3d, cast(u32) s.id_sample_2d_array_len_const);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_storage_image3d_array, cast(u32) s.id_storage_image3d, cast(u32) s.id_storage_texture_array_len_const);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_storage_image3d_array, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_storage_image3d_array);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_storage_image3d, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_storage_image3d);
   }

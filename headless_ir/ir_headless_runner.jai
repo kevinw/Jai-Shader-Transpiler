@@ -665,9 +665,9 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   vulkan_fragment_bindless := get_transpiled(.VULKAN_GLSL, ir_headless_fragment_bindless_main);
   check_contains(vulkan_fragment_bindless, "#version", "bindless fragment Vulkan GLSL output");
   check_contains(vulkan_fragment_bindless, "sampler2D", "bindless fragment Vulkan GLSL output");
-  check_contains(vulkan_fragment_bindless, "sample_2d_textures[16]", "bindless fragment Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless, "sample_2d_textures[32]", "bindless fragment Vulkan GLSL output");
   check_contains(vulkan_fragment_bindless, "sample_2d_samplers[16]", "bindless fragment Vulkan GLSL output");
-  check_contains(vulkan_fragment_bindless, "sample_2d_textures[min(params.texture_index, 15u)]", "bindless fragment Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless, "sample_2d_textures[min(params.texture_index, 31u)]", "bindless fragment Vulkan GLSL output");
   check_contains(vulkan_fragment_bindless, "sample_2d_samplers[min(params.sampler_index, 15u)]", "bindless fragment Vulkan GLSL output");
   check_contains(vulkan_fragment_bindless, "texture(", "bindless fragment Vulkan GLSL output");
   check_generated_file_contains(tprint("%/ir_headless_fragment_bindless_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
@@ -678,7 +678,7 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
                                "bindless fragment SPIR-V text output");
 
   metal_fragment_bindless := get_transpiled(.METAL, ir_headless_fragment_bindless_main);
-  check_contains(metal_fragment_bindless, "array<texture2d<float>, 16>", "bindless fragment metal output");
+  check_contains(metal_fragment_bindless, "array<texture2d<float>, 32>", "bindless fragment metal output");
   check_contains(metal_fragment_bindless, "sample_2d_textures [[texture(1)]]", "bindless fragment metal output");
   check_contains(metal_fragment_bindless, "array<sampler, 16>", "bindless fragment metal output");
   check_contains(metal_fragment_bindless, "sample_2d_samplers [[sampler(0)]]", "bindless fragment metal output");
@@ -686,7 +686,7 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   vulkan_fragment_bindless_3d := get_transpiled(.VULKAN_GLSL, ir_headless_fragment_bindless_3d_main);
   check_contains(vulkan_fragment_bindless_3d, "#version", "bindless fragment 3d Vulkan GLSL output");
   check_contains(vulkan_fragment_bindless_3d, "sampler3D", "bindless fragment 3d Vulkan GLSL output");
-  check_contains(vulkan_fragment_bindless_3d, "sample_3d_textures[16]", "bindless fragment 3d Vulkan GLSL output");
+  check_contains(vulkan_fragment_bindless_3d, "sample_3d_textures[32]", "bindless fragment 3d Vulkan GLSL output");
   check_contains(vulkan_fragment_bindless_3d, "sample_3d_samplers[16]", "bindless fragment 3d Vulkan GLSL output");
   check_generated_file_contains(tprint("%/ir_headless_fragment_bindless_3d_main_frag.spvasm", HEADLESS_IR_INTERMEDIATE_DIR),
                                "OpTypeImage",
@@ -699,7 +699,7 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
                                "bindless fragment 3d SPIR-V text output");
 
   metal_fragment_bindless_3d := get_transpiled(.METAL, ir_headless_fragment_bindless_3d_main);
-  check_contains(metal_fragment_bindless_3d, "array<texture3d<float>, 16>", "bindless fragment 3d metal output");
+  check_contains(metal_fragment_bindless_3d, "array<texture3d<float>, 32>", "bindless fragment 3d metal output");
   check_contains(metal_fragment_bindless_3d, "sample_3d_textures [[texture(1)]]", "bindless fragment 3d metal output");
   check_contains(metal_fragment_bindless_3d, "array<sampler, 16>", "bindless fragment 3d metal output");
   check_contains(metal_fragment_bindless_3d, "sample_3d_samplers [[sampler(0)]]", "bindless fragment 3d metal output");

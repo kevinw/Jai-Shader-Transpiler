@@ -741,7 +741,9 @@ IR_SPV_Gen_State :: struct {
     id_int_0: s64;
     id_int64_0: s64;
     id_uint64_0: s64;
-    id_sample_2d_array_len_const: s64;
+    id_sampled_texture_array_len_const: s64;
+    id_sampler_array_len_const: s64;
+    id_storage_texture_array_len_const: s64;
   }
   
   id_bound_const: s64;
@@ -857,6 +859,13 @@ IR_SPV_Gen_State :: struct {
   emit_text: bool;
   record_binary: bool;
 }
+
+BINDLESS_SAMPLED_TEXTURE_ARRAY_LEN :: 32;
+BINDLESS_SAMPLED_TEXTURE_MAX_INDEX :: BINDLESS_SAMPLED_TEXTURE_ARRAY_LEN - 1;
+BINDLESS_SAMPLER_ARRAY_LEN :: 16;
+BINDLESS_SAMPLER_MAX_INDEX :: BINDLESS_SAMPLER_ARRAY_LEN - 1;
+BINDLESS_STORAGE_TEXTURE_ARRAY_LEN :: 16;
+BINDLESS_STORAGE_TEXTURE_MAX_INDEX :: BINDLESS_STORAGE_TEXTURE_ARRAY_LEN - 1;
 
 // -----------------------------------------------------------------------------
 // Core State Helpers
@@ -1836,7 +1845,9 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   s.id_int_0       = get_i32_const(s, 0);
   s.id_int64_0     = get_i64_const(s, 0);
   s.id_uint64_0    = get_u64_const(s, 0);
-  s.id_sample_2d_array_len_const = get_u32_const(s, 16);
+  s.id_sampled_texture_array_len_const = get_u32_const(s, BINDLESS_SAMPLED_TEXTURE_ARRAY_LEN);
+  s.id_sampler_array_len_const = get_u32_const(s, BINDLESS_SAMPLER_ARRAY_LEN);
+  s.id_storage_texture_array_len_const = get_u32_const(s, BINDLESS_STORAGE_TEXTURE_ARRAY_LEN);
   
   s.id_bound_const = get_u32_const(s, bound_value);
   
@@ -3609,11 +3620,12 @@ emit_sample_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s
   sampler_index_id, sampler_index_ok, sampler_index_diag = coerce_to_kind(s, sampler_index_id, sampler_index_type, .UINT);
   if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
 
-  // Clamp resource indices to the declared bindless array range [0, 15] to make
+  // Clamp resource indices to the declared bindless array range to make
   // out-of-range shader behavior explicit and deterministic across backends.
-  sample_2d_max_index := get_u32_const(s, 15);
+  sample_2d_max_index := get_u32_const(s, BINDLESS_SAMPLED_TEXTURE_MAX_INDEX);
   clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, sample_2d_max_index);
-  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_2d_max_index);
+  sample_2d_max_sampler_index := get_u32_const(s, BINDLESS_SAMPLER_MAX_INDEX);
+  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_2d_max_sampler_index);
 
   uv_id, uv_type, uv_ok, uv_diag := emit_expr(s, args[2]);
   if !uv_ok return 0, .UNKNOWN, false, uv_diag;
@@ -3646,9 +3658,10 @@ emit_sample_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s
   sampler_index_id, sampler_index_ok, sampler_index_diag = coerce_to_kind(s, sampler_index_id, sampler_index_type, .UINT);
   if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
 
-  sample_3d_max_index := get_u32_const(s, 15);
+  sample_3d_max_index := get_u32_const(s, BINDLESS_SAMPLED_TEXTURE_MAX_INDEX);
   clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, sample_3d_max_index);
-  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_3d_max_index);
+  sample_3d_max_sampler_index := get_u32_const(s, BINDLESS_SAMPLER_MAX_INDEX);
+  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_3d_max_sampler_index);
 
   uvw_id, uvw_type, uvw_ok, uvw_diag := emit_expr(s, args[2]);
   if !uvw_ok return 0, .UNKNOWN, false, uvw_diag;
@@ -3692,9 +3705,9 @@ emit_write_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
   value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, .FLOAT4);
   if !value_ok return false, value_diag;
 
-  // Clamp resource indices to the declared bindless array range [0, 15] to make
+  // Clamp resource indices to the declared bindless array range to make
   // out-of-range shader behavior explicit and deterministic across backends.
-  write_2d_max_index := get_u32_const(s, 15);
+  write_2d_max_index := get_u32_const(s, BINDLESS_STORAGE_TEXTURE_MAX_INDEX);
   clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, write_2d_max_index);
 
   tex_ptr := spv_access_chain1(s, s.id_ptr_uniformconst_storage_image2d, s.id_write_2d_textures_var, clamped_texture_index);
@@ -3735,7 +3748,7 @@ emit_write_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, di
   value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, .FLOAT4);
   if !value_ok return false, value_diag;
 
-  write_3d_max_index := get_u32_const(s, 15);
+  write_3d_max_index := get_u32_const(s, BINDLESS_STORAGE_TEXTURE_MAX_INDEX);
   clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, write_3d_max_index);
 
   tex_ptr := spv_access_chain1(s, s.id_ptr_uniformconst_storage_image3d, s.id_write_3d_textures_var, clamped_texture_index);
