@@ -620,6 +620,7 @@ get_transpiled_request_info_from_call :: (call: Code, loc: Source_Code_Location)
 
 Shader_Meta :: struct {
     request_name: string;
+    function_constants_type_name: string;
 }
 
 Transpiled_Shader :: struct {
@@ -628,7 +629,7 @@ Transpiled_Shader :: struct {
 }
 
 make_constants_code_string :: (using shader_meta: Shader_Meta) -> string {
-    return tprint("%_function_constants.{};", request_name);
+    return tprint("%.{};", function_constants_type_name);
 }
 
 transpiled_shader_exprs_from_call :: (call: Code, loc: Source_Code_Location) -> (string, string, string) #compile_time {
@@ -636,7 +637,7 @@ transpiled_shader_exprs_from_call :: (call: Code, loc: Source_Code_Location) -> 
     if info.request_name.count == 0 return "", "", "";
 
     source_expr := info.source_symbol_name;
-    meta_expr := tprint("Shader_Meta.{request_name = \"%\"}", info.request_name);
+    meta_expr := tprint("Shader_Meta.{request_name = \"%\", function_constants_type_name = \"%\"}", info.request_name, info.function_constants_type_name);
     constants_expr := tprint("%.{}", info.function_constants_type_name);
     return source_expr, meta_expr, constants_expr;
 }

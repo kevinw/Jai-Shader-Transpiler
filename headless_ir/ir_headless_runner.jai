@@ -898,6 +898,15 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
                                "OpSpecConstantComposite",
                                "vector function-constant fragment SPIR-V output");
 
+  function_constant_pair_shader :: #run get_transpiled_shader(.METAL, ir_headless_vertex_main, ir_headless_function_constant_fragment_main);
+  function_constant_pair_constants_code :: #run make_constants_code_string(function_constant_pair_shader.meta);
+  check_contains(function_constant_pair_constants_code,
+                 function_constant_pair_shader.meta.function_constants_type_name,
+                 "function-constant pair constants helper output");
+  bad_pair_constants_name := tprint("%_function_constants", function_constant_pair_shader.meta.request_name);
+  bad_pair_name_present, _ := contains(function_constant_pair_constants_code, bad_pair_constants_name);
+  if bad_pair_name_present fail("Function-constant pair helper used request name instead of constants type name.");
+
   nested_params_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_nested_params_main);
   check_contains(nested_params_pair, "fragment", "nested fragment-params pair metal output");
   check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_nested_params_main_pair.spvasm",
