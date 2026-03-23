@@ -7,8 +7,17 @@ fail :: (message: string, args: .. Any) {
 }
 
 check_contains :: (source: string, pattern: string, where: string) {
+  if !source {
+      fail("Test Failure: Expected '%' but source was empty for %", pattern, where);
+      return;
+  }
+    
   ok, _ := contains(source, pattern);
-  if !ok fail("Expected '%' in %", pattern, where);
+  if !ok {
+      DEBUG_PATH :: "/tmp/test_failure_source.temp";
+      write_entire_file(DEBUG_PATH, source);
+      fail("Test Failure: Expected '%' in %\n(source at %)", pattern, where, DEBUG_PATH);
+  }
 }
 
 check_occurs_once :: (source: string, pattern: string, where: string) {
