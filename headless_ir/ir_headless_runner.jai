@@ -842,8 +842,8 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   check_occurs_once(metal_pair, "using namespace metal;", "pair metal output");
   check_occurs_once(metal_pair, "\nvertex ", "pair metal output");
   check_occurs_once(metal_pair, "\nfragment ", "pair metal output");
-  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Vertex", "generated pair SPIR-V text output");
-  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Fragment", "generated pair SPIR-V text output");
+  check_generated_file_contains(tprint("%/transpiled_pair_metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Vertex", "generated pair SPIR-V text output");
+  check_generated_file_contains(tprint("%/transpiled_pair_metal_ir_headless_vertex_main_ir_headless_fragment_main_pair.spvasm", HEADLESS_IR_INTERMEDIATE_DIR), "OpEntryPoint Fragment", "generated pair SPIR-V text output");
   pair_path := tprint("%/ir_pair.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(pair_path, metal_pair);
 
@@ -887,7 +887,7 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   write_and_compile_metal_if_macos(boids_pair_path, boids_pair);
 
   _ = get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_vec3_params_main);
-  vec3_params_pair_path := ".generated_shaders/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_vec3_params_main.metal";
+  vec3_params_pair_path := ".generated_shaders/transpiled_pair_metal_ir_headless_vertex_main_ir_headless_fragment_vec3_params_main.metal";
   check_generated_file_contains(vec3_params_pair_path, "fragment", "vec3 fragment-params pair metal output");
   #if OS == .MACOS compile_metal(vec3_params_pair_path);
 
@@ -908,7 +908,7 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
 
   bool_params_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_bool_params_main);
   check_contains(bool_params_pair, "fragment", "bool-field fragment-params pair metal output");
-  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_bool_params_main_pair.spvasm",
+  check_generated_file_contains(tprint("%/transpiled_pair_metal_ir_headless_vertex_main_ir_headless_fragment_bool_params_main_pair.spvasm",
                                        HEADLESS_IR_INTERMEDIATE_DIR),
                                "use_cache_raymarch",
                                "bool-field fragment-params pair SPIR-V output");
@@ -934,8 +934,8 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
                                "OpSpecConstantComposite",
                                "vector function-constant fragment SPIR-V output");
 
-  function_constant_pair_shader :: #run get_transpiled_shader(.METAL, ir_headless_vertex_main, ir_headless_function_constant_fragment_main);
-  function_constant_pair_constants_code :: #run make_constants_code_string(function_constant_pair_shader.meta);
+  function_constant_pair_shader := get_transpiled_shader(.METAL, ir_headless_vertex_main, ir_headless_function_constant_fragment_main);
+  function_constant_pair_constants_code := make_constants_code_string(function_constant_pair_shader.meta);
   check_contains(function_constant_pair_constants_code,
                  function_constant_pair_shader.meta.function_constants_type_name,
                  "function-constant pair constants helper output");
@@ -945,7 +945,7 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
 
   nested_params_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_nested_params_main);
   check_contains(nested_params_pair, "fragment", "nested fragment-params pair metal output");
-  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_nested_params_main_pair.spvasm",
+  check_generated_file_contains(tprint("%/transpiled_pair_metal_ir_headless_vertex_main_ir_headless_fragment_nested_params_main_pair.spvasm",
                                        HEADLESS_IR_INTERMEDIATE_DIR),
                                "OpSelect",
                                "nested fragment-params pair bool-to-u32 cast SPIR-V output");
@@ -954,7 +954,7 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
 
   enum_helper_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_enum_helper_call_main);
   check_contains(enum_helper_pair, "fragment", "enum helper-call fragment-params pair metal output");
-  check_generated_file_contains(tprint("%/transpiled_pair__metal_ir_headless_vertex_main_ir_headless_fragment_enum_helper_call_main_pair.spvasm",
+  check_generated_file_contains(tprint("%/transpiled_pair_metal_ir_headless_vertex_main_ir_headless_fragment_enum_helper_call_main_pair.spvasm",
                                        HEADLESS_IR_INTERMEDIATE_DIR),
                                "OpEntryPoint Fragment",
                                "enum helper-call fragment-params pair SPIR-V output");

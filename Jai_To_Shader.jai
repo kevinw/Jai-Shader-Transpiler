@@ -564,10 +564,17 @@ get_transpiled_request_info_from_call :: (call: Code, loc: Source_Code_Location)
   resolved_target_expr, resolved_target_ok := resolve_transpiled_target_expr_string(pc.arguments_unsorted[0].expression);
   target_parse_expr := ifx resolved_target_ok then resolved_target_expr else target_expr;
   canonical_target_expr, canonical_target_ok := canonical_transpiled_target_expr_string(target_parse_expr);
-  target_ident := sanitize_identifier_component(canonical_target_expr);
   single_note, pair_note, supports_pair, _, target_ok := transpiled_target_from_expr_string(canonical_target_expr);
   if !target_ok || !canonical_target_ok {
     return_fail("First argument to get_transpiled must resolve to .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.");
+  }
+  target_ident := "";
+  if canonical_target_expr == {
+  case ".METAL";       target_ident = "metal";
+  case ".HLSL";        target_ident = "hlsl";
+  case ".OPENGL_GLSL"; target_ident = "opengl_glsl";
+  case ".VULKAN_GLSL"; target_ident = "vulkan_glsl";
+  case; return_fail("Failed to derive canonical target identifier for get_transpiled.");
   }
 
   shader_name := shader_name_from_call_arg(pc.arguments_unsorted[1].expression);
@@ -648,7 +655,7 @@ get_transpiled :: (
     call: Code = #caller_code, 
     loc: Source_Code_Location = #caller_location
 ) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
-    #insert #run -> string {
+    #insert #run,stallable -> string {
         source_expr, meta_expr, _ := transpiled_shader_exprs_from_call(call, loc);
         return tprint(#string END
 G :: #import,file "%";
@@ -663,7 +670,7 @@ get_transpiled_shader :: (
     call: Code = #caller_code,
     loc: Source_Code_Location = #caller_location
 ) -> Transpiled_Shader #expand {
-    #insert #run -> string {
+    #insert #run,stallable -> string {
         source_expr, meta_expr, _ := transpiled_shader_exprs_from_call(call, loc);
         return tprint(#string END
 G :: #import,file "%";
@@ -678,7 +685,7 @@ get_default_function_constants :: (
     call: Code = #caller_code,
     loc: Source_Code_Location = #caller_location
 ) #expand {
-    #insert #run -> string {
+    #insert #run,stallable -> string {
         _, _, constants_expr := transpiled_shader_exprs_from_call(call, loc);
         return tprint("%;", constants_expr);
     };
@@ -1487,9 +1494,11 @@ sanitize_workspace_name_for_artifacts :: (workspace_name: string) -> string {
 
 metallib_stem_from_request_name :: (request_name: string) -> string {
   if request_name.count == 0 return "";
-  pair_prefix := "transpiled_pair__metal_";
-  if begins_with(request_name, pair_prefix) {
-    rest: string = {request_name.count - pair_prefix.count, request_name.data + pair_prefix.count};
+  pair_prefix := "transpiled_pair_metal_";
+  legacy_pair_prefix := "transpiled_pair__metal_";
+  if begins_with(request_name, pair_prefix) || begins_with(request_name, legacy_pair_prefix) {
+    prefix := ifx begins_with(request_name, pair_prefix) then pair_prefix else legacy_pair_prefix;
+    rest: string = {request_name.count - prefix.count, request_name.data + prefix.count};
     marker := "_vertex_main_";
     at, found := find_substring_index_local(rest, marker);
     if found && at > 0 {
@@ -1499,9 +1508,11 @@ metallib_stem_from_request_name :: (request_name: string) -> string {
     return copy_string(rest);
   }
 
-  single_prefix := "transpiled_single__metal_";
-  if begins_with(request_name, single_prefix) {
-    rest: string = {request_name.count - single_prefix.count, request_name.data + single_prefix.count};
+  single_prefix := "transpiled_single_metal_";
+  legacy_single_prefix := "transpiled_single__metal_";
+  if begins_with(request_name, single_prefix) || begins_with(request_name, legacy_single_prefix) {
+    prefix := ifx begins_with(request_name, single_prefix) then single_prefix else legacy_single_prefix;
+    rest: string = {request_name.count - prefix.count, request_name.data + prefix.count};
     marker := "_compute_main";
     at, found := find_substring_index_local(rest, marker);
     if found && at > 0 {
@@ -2196,6 +2207,10 @@ queue_lookup_entry :: (plugin: *Jai_To_Shader_Plugin, target_name: string, prima
     secondary_name = secondary_name,
     symbol_name = symbol_name,
   });
+  if plugin.did_emit_lookup_overloads {
+    plugin.did_emit_lookup_overloads = false;
+    emit_lookup_overloads(plugin, plugin.workspace);
+  }
 }
 
 emit_lookup_overloads :: (plugin: *Jai_To_Shader_Plugin, workspace: Workspace) {

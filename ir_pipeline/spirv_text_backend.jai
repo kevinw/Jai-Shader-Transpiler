@@ -6353,11 +6353,6 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           return_err("unsupported local array element type '%'.", array_elem_type_name);
         }
         count_const_id := get_u32_const(s, cast(u32) array_count);
-        array_type_id := new_id(s);
-        ptr_func_array_type_id := new_id(s);
-        ptr_id := new_id(s);
-        add_debug_name(s, array_type_id, tprint("%_array", stmt.decl_name));
-        add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", stmt.decl_name));
         elem_ptr_type_id := func_ptr_type_id_from_kind(s, elem_type);
         if elem_ptr_type_id == 0 {
           return_err("unsupported local array element type '%': missing element pointer type.", array_elem_type_name);
@@ -6378,6 +6373,11 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           return true, false, diag;
         }
 
+        array_type_id := new_id(s);
+        ptr_func_array_type_id := new_id(s);
+        ptr_id := new_id(s);
+        add_debug_name(s, array_type_id, tprint("%_array", stmt.decl_name));
+        add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", stmt.decl_name));
         array_zero, array_zero_ok, array_zero_diag := spv_local_decl_default_initializer(s, stmt.decl_type, .UNKNOWN, array_type_id);
         if !array_zero_ok return false, false, array_zero_diag;
         spv_emit_variable_decl(s, ptr_id, ptr_func_array_type_id, SPV_STORAGE_CLASS_FUNCTION, array_zero);
