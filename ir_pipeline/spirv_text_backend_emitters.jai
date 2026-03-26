@@ -513,6 +513,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   append(*entry_point_sb, tprint("               OpEntryPoint % % \"%\"", entry_model, id_text(state.id_main), entry_name));
   spv_append_var_ids(*entry_point_sb, state.input_vars);
   spv_append_var_ids(*entry_point_sb, state.output_vars);
+  spv_append_var_ids(*entry_point_sb, state.global_const_arrays);
   append(*entry_point_sb, " ", id_text(root_var_id));
   if state.uses_sample_2d {
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_textures_var));
@@ -660,6 +661,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   spv_append_write_3d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
   spv_append_null_constants(*sb, *state);
+  spv_append_global_const_array_decls(*sb, *state);
 
   spv_append_function_and_body(*sb, *state, entry_label, "    ", "     ");
   return builder_to_string(*sb), true, diag;
@@ -867,6 +869,7 @@ emit_graphics_physical_pointer_abi_binary :: (stage: IR_SPV_Gen_Stage,
   interface_ids: [..]u32;
   for state.input_vars array_add(*interface_ids, cast(u32) it.var_id);
   for state.output_vars array_add(*interface_ids, cast(u32) it.var_id);
+  for state.global_const_arrays array_add(*interface_ids, cast(u32) it.var_id);
   array_add(*interface_ids, cast(u32) root_var_id);
   if state.uses_sample_2d array_add(*interface_ids, cast(u32) state.id_sample_2d_textures_var, cast(u32) state.id_sample_2d_samplers_var);
   if state.uses_sample_3d array_add(*interface_ids, cast(u32) state.id_sample_3d_textures_var, cast(u32) state.id_sample_3d_samplers_var);
@@ -1002,6 +1005,7 @@ emit_graphics_physical_pointer_abi_binary :: (stage: IR_SPV_Gen_Stage,
   spv_module_append_sampled_storage_image_vars_binary(*module, *state);
   spv_module_append_local_array_type_decls_binary(*module, *state);
   spv_module_append_null_constants_binary(*module, *state);
+  spv_module_append_global_const_array_decls_binary(*module, *state);
 
   module.bound = cast(u32) state.next_id;
   spv_module_append_function_body(*module, *state, entry_label);
@@ -1222,6 +1226,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   spv_append_var_ids(*entry_point_sb, state.output_vars);
   spv_append_var_ids(*entry_point_sb, state.buffers);
   spv_append_var_ids(*entry_point_sb, state.uniform_blocks);
+  spv_append_var_ids(*entry_point_sb, state.global_const_arrays);
   if state.uses_sample_2d {
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_textures_var));
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_samplers_var));
@@ -1338,6 +1343,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   spv_append_write_3d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
   spv_append_null_constants(*sb, *state);
+  spv_append_global_const_array_decls(*sb, *state);
 
   spv_append_function_and_body(*sb, *state, entry_label, "    ", "     ");
   return builder_to_string(*sb), true, diag;
@@ -1558,6 +1564,7 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
   for state.output_vars array_add(*interface_ids, cast(u32) it.var_id);
   for state.buffers array_add(*interface_ids, cast(u32) it.var_id);
   for state.uniform_blocks array_add(*interface_ids, cast(u32) it.var_id);
+  for state.global_const_arrays array_add(*interface_ids, cast(u32) it.var_id);
   if state.uses_sample_2d {
     array_add(*interface_ids, cast(u32) state.id_sample_2d_textures_var, cast(u32) state.id_sample_2d_samplers_var);
   }
@@ -1662,6 +1669,7 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
   spv_module_append_sampled_storage_image_vars_binary(*module, *state);
   spv_module_append_local_array_type_decls_binary(*module, *state);
   spv_module_append_null_constants_binary(*module, *state);
+  spv_module_append_global_const_array_decls_binary(*module, *state);
 
   _ = sb;
   module.bound = cast(u32) state.next_id;
@@ -1915,6 +1923,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
                                  id_text(state.id_gl_workgroup_id),
                                  id_text(state.id_gl_local_invocation_index)));
   spv_append_var_ids(*entry_point_sb, state.buffers);
+  spv_append_var_ids(*entry_point_sb, state.global_const_arrays);
   if state.uses_write_2d append(*entry_point_sb, " ", id_text(state.id_write_2d_textures_var));
   if state.uses_write_3d append(*entry_point_sb, " ", id_text(state.id_write_3d_textures_var));
   append(*entry_point_sb, "\n");
@@ -1966,6 +1975,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   spv_append_write_3d_vars(*sb, *state);
   spv_append_local_array_type_decls(*sb, *state);
   spv_append_null_constants(*sb, *state);
+  spv_append_global_const_array_decls(*sb, *state);
 
   _ = body_terminated;
   spv_append_function_and_body(*sb, *state, entry_label, "      ", "         ");
@@ -2013,6 +2023,7 @@ emit_compute_generic_uint_buffer_binary :: (shader: *IR_Compute_Shader) -> (spv:
             cast(u32) state.id_gl_workgroup_id,
             cast(u32) state.id_gl_local_invocation_index);
   for state.buffers array_add(*interface_ids, cast(u32) it.var_id);
+  for state.global_const_arrays array_add(*interface_ids, cast(u32) it.var_id);
   if state.uses_write_2d array_add(*interface_ids, cast(u32) state.id_write_2d_textures_var);
   if state.uses_write_3d array_add(*interface_ids, cast(u32) state.id_write_3d_textures_var);
   spv_module_append_entry_point(*module, SPV_EXECUTION_MODEL_GLCOMPUTE, cast(u32) state.id_main, shader.entry_name, interface_ids);
@@ -2078,6 +2089,7 @@ emit_compute_generic_uint_buffer_binary :: (shader: *IR_Compute_Shader) -> (spv:
   spv_module_append_sampled_storage_image_vars_binary(*module, *state);
   spv_module_append_local_array_type_decls_binary(*module, *state);
   spv_module_append_null_constants_binary(*module, *state);
+  spv_module_append_global_const_array_decls_binary(*module, *state);
 
   _ = sb;
   module.bound = cast(u32) state.next_id;

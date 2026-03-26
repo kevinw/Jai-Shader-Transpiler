@@ -2079,6 +2079,36 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
   if !ir_shared_collect_functions_recursive(ctx.header, *seen_headers, *out.functions, ctx.header, *state) {
       return_err("failed while collecting/lowering helper functions");
   }
+  for seen_headers {
+    if it == ctx.header continue;
+    for it.arguments {
+      arg_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
+      arg_ok := ir_collect_nested_structs_for_shader_arg_type(arg_type, *out.extra_structs);
+      if !arg_ok {
+        return_err("unsupported helper argument '%'", it.name);
+      }
+    }
+    for it.returns {
+      ret_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
+      if !ret_type || ret_type.type != .STRUCT continue;
+      ret_struct_type := cast(*Type_Info_Struct) ret_type;
+      ret_struct_name := jai_to_hlsl_type_name(get_struct_type_name(ret_struct_type));
+      if ir_is_builtin_shader_type_name(ret_struct_name) continue;
+      lowered_struct, lowered_ok := ir_lower_struct_from_type(ret_struct_name, ret_type);
+      if !lowered_ok {
+        return_err("could not lower helper struct return type '%'", ret_struct_name);
+      }
+      ir_add_struct_unique_by_name(*out.extra_structs, lowered_struct);
+    }
+    if it.body_or_null && it.body_or_null.block {
+      if !ir_collect_compute_declared_structs_in_block(it.body_or_null.block, *out.extra_structs, *state) {
+        return {out, false, ir_get_diagnostic(*state)};
+      }
+    }
+  }
+  if !ir_collect_compute_declared_structs_in_block(ctx.header.body_or_null.block, *out.extra_structs, *state) {
+    return {out, false, ir_get_diagnostic(*state)};
+  }
   input_field_names: [..] string;
   output_field_names: [..] string;
   parameter_usings: [..] IR_Using_Source;
@@ -2197,6 +2227,36 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   seen_headers: [..] *Code_Procedure_Header;
   if !ir_shared_collect_functions_recursive(ctx.header, *seen_headers, *out.functions, ctx.header, *state) {
       return_err("failed while collecting/lowering helper functions");
+  }
+  for seen_headers {
+    if it == ctx.header continue;
+    for it.arguments {
+      arg_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
+      arg_ok := ir_collect_nested_structs_for_shader_arg_type(arg_type, *out.extra_structs);
+      if !arg_ok {
+        return_err("unsupported helper argument '%'", it.name);
+      }
+    }
+    for it.returns {
+      ret_type := ifx it.type_inst then it.type_inst.result else ifx it.expression then it.expression.type else null;
+      if !ret_type || ret_type.type != .STRUCT continue;
+      ret_struct_type := cast(*Type_Info_Struct) ret_type;
+      ret_struct_name := jai_to_hlsl_type_name(get_struct_type_name(ret_struct_type));
+      if ir_is_builtin_shader_type_name(ret_struct_name) continue;
+      lowered_struct, lowered_ok := ir_lower_struct_from_type(ret_struct_name, ret_type);
+      if !lowered_ok {
+        return_err("could not lower helper struct return type '%'", ret_struct_name);
+      }
+      ir_add_struct_unique_by_name(*out.extra_structs, lowered_struct);
+    }
+    if it.body_or_null && it.body_or_null.block {
+      if !ir_collect_compute_declared_structs_in_block(it.body_or_null.block, *out.extra_structs, *state) {
+        return {out, false, ir_get_diagnostic(*state)};
+      }
+    }
+  }
+  if !ir_collect_compute_declared_structs_in_block(ctx.header.body_or_null.block, *out.extra_structs, *state) {
+    return {out, false, ir_get_diagnostic(*state)};
   }
   input_field_names: [..] string;
   output_field_names: [..] string;

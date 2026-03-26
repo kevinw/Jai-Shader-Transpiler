@@ -36,6 +36,16 @@ check_occurs_once :: (source: string, pattern: string, where: string) {
   if found_count != 1 fail("Expected '%' exactly once in %, found % occurrences", pattern, where, found_count);
 }
 
+check_not_contains :: (source: string, pattern: string, where: string) {
+  if !source return;
+  ok, _ := contains(source, pattern);
+  if ok {
+    DEBUG_PATH :: "/tmp/test_failure_source.temp";
+    write_entire_file(DEBUG_PATH, source);
+    fail("Test Failure: Did not expect '%' in %\n(source at %)", pattern, where, DEBUG_PATH);
+  }
+}
+
 check_generated_file_contains :: (path: string, pattern: string, where: string) {
   if !file_exists(path) fail("Expected generated file missing: %", path);
   source, ok := read_entire_file(path);
@@ -151,6 +161,17 @@ ir_headless_function_constant_fragment_main :: (using input: IR_Headless_Vertex_
 
 ir_headless_vector_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
   return Vector4.{ir_headless_constant_color.x, ir_headless_constant_color.y, ir_headless_constant_color.z, 1.0};
+} @fragment_shader
+
+ir_headless_global_fixed_lut :: u32.[1, 3, 7, 15, 31, 63, 127, 255];
+
+ir_headless_fragment_global_fixed_lut_main :: (using input: IR_Headless_Vertex_Out) -> IR_Headless_Fragment_Out {
+  using out: IR_Headless_Fragment_Out;
+  idx := min(cast(u32) (input.color.x * 7.0), cast(u32) 7);
+  value := ir_headless_global_fixed_lut[idx];
+  tint := cast(float) value / 255.0;
+  out_color = .{tint, 0.0, 1.0 - tint, 1.0};
+  return out;
 } @fragment_shader
 
 ir_headless_project_camera_like :: (x: float, y: float, using params: *IR_Headless_Project_Params) -> Vector4 {
@@ -657,6 +678,12 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
   check_contains(metal_fragment_helpers, "0.1", "fragment helper metal output");
   helper_frag_path := tprint("%/ir_fragment_helpers.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(helper_frag_path, metal_fragment_helpers);
+
+  metal_fragment_global_fixed_lut := get_transpiled(.METAL, ir_headless_fragment_global_fixed_lut_main);
+  check_contains(metal_fragment_global_fixed_lut, "fragment", "global fixed LUT fragment metal output");
+  check_not_contains(metal_fragment_global_fixed_lut, "_array_literal_", "global fixed LUT fragment metal output");
+  global_fixed_lut_frag_path := tprint("%/ir_fragment_global_fixed_lut.metal", HEADLESS_IR_DIR);
+  write_and_compile_metal_if_macos(global_fixed_lut_frag_path, metal_fragment_global_fixed_lut);
 
   metal_fragment_call_member := get_transpiled(.METAL, ir_headless_fragment_call_member_main);
   check_contains(metal_fragment_call_member, "fragment", "fragment call-member metal output");

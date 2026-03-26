@@ -60,6 +60,23 @@ parse_u32_literal_text :: (text: string) -> (u32, bool) {
     compact.count -= 1;
   }
 
+  if compact.count >= 2 && compact[0] == #char "0" && (compact[1] == #char "x" || compact[1] == #char "X") {
+    if compact.count == 2 return 0, false;
+    value: u64 = 0;
+    for i: 2..compact.count-1 {
+      digit: u64;
+      c := compact[i];
+      if c >= #char "0" && c <= #char "9" digit = cast(u64) (c - #char "0");
+      else if c >= #char "a" && c <= #char "f" digit = cast(u64) (10 + c - #char "a");
+      else if c >= #char "A" && c <= #char "F" digit = cast(u64) (10 + c - #char "A");
+      else if c == #char "_" continue;
+      else return 0, false;
+      value = (value << 4) | digit;
+      if value > 0xFFFF_FFFF return 0, false;
+    }
+    return cast(u32) value, true;
+  }
+
   v, ok := string_to_int(compact);
   if !ok return 0, false;
   if v < 0 || v > 0xFFFF_FFFF return 0, false;
@@ -92,6 +109,38 @@ parse_i64_literal_text :: (text: string) -> (s64, bool) {
     last := compact[compact.count-1];
     if last == #char "l" || last == #char "L" || last == #char "i" || last == #char "I" {
       compact.count -= 1;
+    }
+  }
+
+  if compact.count >= 3 {
+    sign: s64 = 1;
+    start: s64 = 0;
+    if compact[0] == #char "-" {
+      sign = -1;
+      start = 1;
+    } else if compact[0] == #char "+" {
+      start = 1;
+    }
+    if compact.count >= start + 2 && compact[start] == #char "0" && (compact[start + 1] == #char "x" || compact[start + 1] == #char "X") {
+      if compact.count == start + 2 return 0, false;
+      value: u64 = 0;
+      for i: start + 2..compact.count-1 {
+        digit: u64;
+        c := compact[i];
+        if c >= #char "0" && c <= #char "9" digit = cast(u64) (c - #char "0");
+        else if c >= #char "a" && c <= #char "f" digit = cast(u64) (10 + c - #char "a");
+        else if c >= #char "A" && c <= #char "F" digit = cast(u64) (10 + c - #char "A");
+        else if c == #char "_" continue;
+        else return 0, false;
+        value = (value << 4) | digit;
+      }
+      if sign < 0 {
+        if value > cast(u64) 0x8000_0000_0000_0000 return 0, false;
+        if value == cast(u64) 0x8000_0000_0000_0000 return -9223372036854775808, true;
+        return -cast(s64) value, true;
+      }
+      if value > cast(u64) 0x7FFF_FFFF_FFFF_FFFF return 0, false;
+      return cast(s64) value, true;
     }
   }
 
@@ -514,7 +563,22 @@ IR_SPV_Gen_Local_Array :: struct {
   var_id: s64;
   array_type_id: s64;
   ptr_func_array_type_id: s64;
+  ptr_elem_type_id: s64;
   count_const_id: s64;
+  storage_class: u32;
+}
+
+IR_SPV_Gen_Global_Const_Array :: struct {
+  name: string;
+  element_type: IR_SPV_Gen_Type;
+  count: s64;
+  var_id: s64;
+  array_type_id: s64;
+  ptr_private_array_type_id: s64;
+  ptr_private_elem_type_id: s64;
+  count_const_id: s64;
+  composite_const_id: s64;
+  element_const_ids: [..] s64;
 }
 
 IR_SPV_Gen_Local_Struct_Field :: struct {
@@ -694,6 +758,7 @@ IR_SPV_Gen_State :: struct {
   locals: [..] IR_SPV_Gen_Local;
   local_arrays: [..] IR_SPV_Gen_Local_Array;
   local_array_types: [..] IR_SPV_Gen_Local_Array;
+  global_const_arrays: [..] IR_SPV_Gen_Global_Const_Array;
   local_structs: [..] IR_SPV_Gen_Local_Struct;
   const_u32: [..] IR_SPV_Gen_Const_U32;
   const_i32: [..] IR_SPV_Gen_Const_I32;
@@ -1253,6 +1318,7 @@ spv_emit_variable_decl :: (s: *IR_SPV_Gen_State, var_id: s64, ptr_type_id: s64, 
   }
   if s.emit_text {
     storage_name := ifx storage_class == SPV_STORAGE_CLASS_FUNCTION then "Function"
+                    else ifx storage_class == SPV_STORAGE_CLASS_PRIVATE then "Private"
                     else ifx storage_class == SPV_STORAGE_CLASS_INPUT then "Input"
                     else ifx storage_class == SPV_STORAGE_CLASS_OUTPUT then "Output"
                     else ifx storage_class == SPV_STORAGE_CLASS_UNIFORM then "Uniform"
@@ -2529,6 +2595,24 @@ alloc_local_struct :: (s: *IR_SPV_Gen_State, name: string, type_name: string) ->
   return out_struct, true, {};
 }
 
+alias_local_struct :: (s: *IR_SPV_Gen_State, alias_name: string, src: *IR_SPV_Gen_Local_Struct) -> (local_struct: *IR_SPV_Gen_Local_Struct, ok: bool, diag: IR_Diagnostic) {
+  if !src return null, false, make_diag("null source struct for alias '%'.", alias_name);
+
+  local_struct: IR_SPV_Gen_Local_Struct;
+  local_struct.name = alias_name;
+  local_struct.type_name = src.type_name;
+  for src.fields {
+    array_add(*local_struct.fields, it);
+  }
+
+  array_add(*s.local_structs, local_struct);
+  out_struct := find_local_struct(s, alias_name);
+  if !out_struct {
+    return null, false, make_diag("failed to register local struct alias '%'.", alias_name);
+  }
+  return out_struct, true, {};
+}
+
 copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct, src: *IR_SPV_Gen_Local_Struct) -> (ok: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
   if !dst || !src return false, make_diag("null struct while copying fields.");
@@ -2760,6 +2844,17 @@ emit_buffer_struct_field_ptr :: (s: *IR_SPV_Gen_State, subscript: *IR_Expr, fiel
   
   diag: IR_Diagnostic;
   if !subscript || subscript.kind != .SUBSCRIPT return_err("expected subscript expression for buffer struct field access.");
+
+  if subscript.left && subscript.left.kind == .IDENT {
+    local_struct := find_local_struct(s, subscript.left.text);
+    if local_struct {
+      field := find_local_struct_field(local_struct, field_name);
+      if !field return_err("unknown local struct field '%.%'.", local_struct.name, field_name);
+      if field.type == .STRUCT return_err("nested local struct field '%.%' must be accessed through a member.", local_struct.name, field_name);
+      if ir_type_is_pointer_like(field.ir_type) return_err("pointer local struct field '%.%' must be used as a buffer alias.", local_struct.name, field_name);
+      return field.ptr_id, field.type, true, diag;
+    }
+  }
 
   buffer_name: string;
   field_path := field_name;
@@ -3996,6 +4091,20 @@ bind_inline_helper_pointer_arg :: (s: *IR_SPV_Gen_State, helper_name: string, ar
 
   expected_kind := spv_kind_from_ir_type_kind(arg.type.pointee_kind);
 
+  if arg.type.pointee_kind == .STRUCT || expected_kind == .STRUCT {
+    if expr && expr.kind == .IDENT {
+      local_struct := find_local_struct(s, expr.text);
+      if local_struct {
+        if arg.type.pointee_struct_name.count != 0 && local_struct.type_name != arg.type.pointee_struct_name {
+          return true, false, make_diag("helper '%' pointer arg '%' pointee mismatch (expected '%', got '%').", helper_name, arg.name, arg.type.pointee_struct_name, local_struct.type_name);
+        }
+        _, alias_ok, alias_diag := alias_local_struct(s, arg.name, local_struct);
+        if !alias_ok return true, false, alias_diag;
+        return true, true, diag;
+      }
+    }
+  }
+
   // Local pointer args: allow lvalue addresses of locals/struct fields/components.
   if expr && !lvalue_hits_storage_buffer(s, expr) {
     ptr_id, ptr_type, ptr_ok, _ := emit_lvalue_ptr(s, expr);
@@ -4185,6 +4294,10 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
   array_zero := get_null_const(s, array_type_id);
   spv_emit_variable_decl(s, ptr_id, ptr_func_array_type_id, SPV_STORAGE_CLASS_FUNCTION, array_zero);
   add_debug_name(s, ptr_id, arg.name);
+  elem_ptr_type_id := func_ptr_type_id_from_kind(s, elem_type);
+  if elem_ptr_type_id == 0 {
+    return false, true, make_diag("helper '%' fixed array arg '%' element type '%' has no function pointer type.", function_name, arg.name, elem_type);
+  }
   array_add(*s.local_arrays, .{
     name = arg.name,
     element_type = elem_type,
@@ -4192,7 +4305,9 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
     var_id = ptr_id,
     array_type_id = array_type_id,
     ptr_func_array_type_id = ptr_func_array_type_id,
+    ptr_elem_type_id = elem_ptr_type_id,
     count_const_id = count_const_id,
+    storage_class = SPV_STORAGE_CLASS_FUNCTION,
   });
   array_add(*s.local_array_types, .{
     name = arg.name,
@@ -4201,13 +4316,10 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
     var_id = ptr_id,
     array_type_id = array_type_id,
     ptr_func_array_type_id = ptr_func_array_type_id,
+    ptr_elem_type_id = elem_ptr_type_id,
     count_const_id = count_const_id,
+    storage_class = SPV_STORAGE_CLASS_FUNCTION,
   });
-
-  elem_ptr_type_id := func_ptr_type_id_from_kind(s, elem_type);
-  if elem_ptr_type_id == 0 {
-    return false, true, make_diag("helper '%' fixed array arg '%' element type '%' has no function pointer type.", function_name, arg.name, elem_type);
-  }
 
   if arg_expr && arg_expr.kind == .IDENT {
     src_array := find_local_array(s, arg_expr.text);
@@ -4222,7 +4334,7 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
       idx_const := get_u32_const(s, cast(u32) i);
       src_ptr := new_id(s);
       dst_ptr := new_id(s);
-      add_op(s, src_ptr, "OpAccessChain", elem_ptr_type_id, src_array.var_id, idx_const);
+      add_op(s, src_ptr, "OpAccessChain", src_array.ptr_elem_type_id, src_array.var_id, idx_const);
       add_op(s, dst_ptr, "OpAccessChain", elem_ptr_type_id, ptr_id, idx_const);
       src_value := new_id(s);
       add_op(s, src_value, "OpLoad", type_id, src_ptr);
@@ -4249,6 +4361,212 @@ bind_inline_function_fixed_array_arg :: (s: *IR_SPV_Gen_State, function_name: st
   }
 
   return false, true, make_diag("helper '%' fixed array arg '%' must be passed as local array identifier or array literal.", function_name, arg.name);
+}
+
+materialize_array_literal_to_local_array :: (s: *IR_SPV_Gen_State, literal: *IR_Expr) -> (local_array: IR_SPV_Gen_Local_Array, ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if !literal return .{}, false, make_diag("null array literal.");
+  if literal.kind != .ARRAY_LITERAL return .{}, false, make_diag("expected array literal, got '%'.", literal.kind);
+
+  array_elem_type_name, array_count, elem_type, is_fixed_array := spv_fixed_array_info_from_ir_type(literal.result_type);
+  if !is_fixed_array {
+    array_count = literal.args.count;
+    if array_count <= 0 return .{}, false, make_diag("array literal must have at least one element.");
+    elem_type = spv_kind_from_ir_type(literal.args[0].result_type);
+    array_elem_type_name = ir_string_first_non_empty(literal.args[0].result_type.display_name,
+                                                     literal.args[0].result_type.struct_name,
+                                                     ir_string_first_non_empty(literal.args[0].result_type.element_display_name,
+                                                                              literal.args[0].result_type.element_struct_name,
+                                                                              "<unknown>"));
+    if elem_type == .UNKNOWN {
+      _, inferred_elem_type, inferred_ok, inferred_diag := emit_expr(s, literal.args[0]);
+      if !inferred_ok return .{}, false, inferred_diag;
+      elem_type = inferred_elem_type;
+    }
+  }
+  if elem_type == .UNKNOWN || elem_type == .STRUCT {
+    return .{}, false, make_diag("unsupported array literal element type '%'.", array_elem_type_name);
+  }
+  if literal.args.count != array_count {
+    return .{}, false, make_diag("array literal count mismatch (expected %, got %).", array_count, literal.args.count);
+  }
+
+  count_const_id := get_u32_const(s, cast(u32) array_count);
+  array_type_id := new_id(s);
+  ptr_func_array_type_id := new_id(s);
+  ptr_id := new_id(s);
+  debug_name := tprint("__array_literal_%", s.local_arrays.count);
+  add_debug_name(s, array_type_id, tprint("%_array", debug_name));
+  add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", debug_name));
+  array_zero := get_null_const(s, array_type_id);
+  spv_emit_variable_decl(s, ptr_id, ptr_func_array_type_id, SPV_STORAGE_CLASS_FUNCTION, array_zero);
+  add_debug_name(s, ptr_id, debug_name);
+
+  elem_ptr_type_id := func_ptr_type_id_from_kind(s, elem_type);
+  if elem_ptr_type_id == 0 {
+    return .{}, false, make_diag("array literal element type '%' has no function pointer type.", elem_type);
+  }
+
+  new_local_array := IR_SPV_Gen_Local_Array.{
+    name = debug_name,
+    element_type = elem_type,
+    count = array_count,
+    var_id = ptr_id,
+    array_type_id = array_type_id,
+    ptr_func_array_type_id = ptr_func_array_type_id,
+    ptr_elem_type_id = elem_ptr_type_id,
+    count_const_id = count_const_id,
+    storage_class = SPV_STORAGE_CLASS_FUNCTION,
+  };
+  array_add(*s.local_arrays, new_local_array);
+  array_add(*s.local_array_types, new_local_array);
+
+  for literal.args {
+    value_id, value_type, value_ok, value_diag := emit_expr(s, it);
+    if !value_ok return .{}, false, value_diag;
+    value_id, value_ok, value_diag = coerce_to_kind(s, value_id, value_type, elem_type);
+    if !value_ok return .{}, false, value_diag;
+    idx_const := get_u32_const(s, cast(u32) it_index);
+    dst_ptr := new_id(s);
+    add_op(s, dst_ptr, "OpAccessChain", elem_ptr_type_id, ptr_id, idx_const);
+    add_op(s, "OpStore", dst_ptr, value_id);
+  }
+
+  return new_local_array, true, diag;
+}
+
+spv_get_scalar_const_id_from_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr, expected_type: IR_SPV_Gen_Type) -> (const_id: s64, ok: bool) {
+  if !expr return 0, false;
+  if expr.kind == .CAST && expr.left {
+    cast_const_id, cast_ok := spv_get_scalar_const_id_from_expr(s, expr.left, expected_type);
+    return cast_const_id, cast_ok;
+  }
+  if expr.kind != .LITERAL return 0, false;
+
+  if expected_type == {
+  case .BOOL;
+    text := compact_text(expr.text);
+    if text == "true" return s.id_bool_true, true;
+    if text == "false" return s.id_bool_false, true;
+    return 0, false;
+  case .UINT;
+    value, value_ok := parse_u32_literal_expr(expr);
+    if !value_ok return 0, false;
+    return get_u32_const(s, value), true;
+  case .INT;
+    value, value_ok := parse_i64_literal_expr(expr);
+    if !value_ok return 0, false;
+    if value < -2147483648 || value > 2147483647 return 0, false;
+    return get_i32_const(s, cast(s32) value), true;
+  case .INT64;
+    value, value_ok := parse_i64_literal_expr(expr);
+    if !value_ok return 0, false;
+    return get_i64_const(s, value), true;
+  case .UINT64;
+    value, value_ok := parse_i64_literal_expr(expr);
+    if !value_ok || value < 0 return 0, false;
+    return get_u64_const(s, cast(u64) value), true;
+  case .FLOAT;
+    value_text, value_ok := parse_f32_literal_text(expr.text);
+    if !value_ok return 0, false;
+    return get_f32_const(s, value_text), true;
+  case .FLOAT16;
+    value_text, value_ok := parse_f32_literal_text(expr.text);
+    if !value_ok return 0, false;
+    return get_f16_const(s, value_text), true;
+  }
+
+  return 0, false;
+}
+
+global_const_array_matches :: (existing: *IR_SPV_Gen_Global_Const_Array, element_type: IR_SPV_Gen_Type, element_const_ids: [] s64) -> bool {
+  if !existing return false;
+  if existing.element_type != element_type return false;
+  if existing.element_const_ids.count != element_const_ids.count return false;
+  for element_const_ids if existing.element_const_ids[it_index] != it return false;
+  return true;
+}
+
+materialize_array_literal_to_global_const_array :: (s: *IR_SPV_Gen_State, literal: *IR_Expr, dedupe: bool = true) -> (global_array: IR_SPV_Gen_Global_Const_Array, ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if !literal return .{}, false, make_diag("null array literal.");
+  if literal.kind != .ARRAY_LITERAL return .{}, false, make_diag("expected array literal, got '%'.", literal.kind);
+
+  array_elem_type_name: string;
+  _, array_count, elem_type, is_fixed_array := spv_fixed_array_info_from_ir_type(literal.result_type);
+  if !is_fixed_array {
+    array_count = literal.args.count;
+    if array_count <= 0 return .{}, false, make_diag("array literal must have at least one element.");
+    elem_type = spv_kind_from_ir_type(literal.args[0].result_type);
+    array_elem_type_name = ir_string_first_non_empty(literal.args[0].result_type.display_name,
+                                                     literal.args[0].result_type.struct_name,
+                                                     ir_string_first_non_empty(literal.args[0].result_type.element_display_name,
+                                                                              literal.args[0].result_type.element_struct_name,
+                                                                              "<unknown>"));
+    if elem_type == .UNKNOWN {
+      _, inferred_elem_type, inferred_ok, inferred_diag := emit_expr(s, literal.args[0]);
+      if !inferred_ok return .{}, false, inferred_diag;
+      elem_type = inferred_elem_type;
+    }
+  }
+  if elem_type == .UNKNOWN || elem_type == .STRUCT return .{}, false, make_diag("array literal element type '%' is unsupported for global constant arrays.", array_elem_type_name);
+  if literal.args.count != array_count return .{}, false, make_diag("array literal count mismatch (expected %, got %).", array_count, literal.args.count);
+
+  element_const_ids: [..] s64;
+  for literal.args {
+    const_id, const_ok := spv_get_scalar_const_id_from_expr(s, it, elem_type);
+    if !const_ok return .{}, false, make_diag("array literal contains non-constant or unsupported element for global constant lowering.");
+    array_add(*element_const_ids, const_id);
+  }
+
+  if dedupe {
+    for *s.global_const_arrays {
+      if global_const_array_matches(it, elem_type, element_const_ids) return it.*, true, diag;
+    }
+  }
+
+  count_const_id := get_u32_const(s, cast(u32) array_count);
+  array_type_id := new_id(s);
+  ptr_private_array_type_id := new_id(s);
+  ptr_private_elem_type_id := new_id(s);
+  composite_const_id := new_id(s);
+  var_id := new_id(s);
+  debug_name := tprint("__global_const_array_%", s.global_const_arrays.count);
+  add_debug_name(s, array_type_id, tprint("%_array", debug_name));
+  add_debug_name(s, ptr_private_array_type_id, tprint("%_array_ptr", debug_name));
+  add_debug_name(s, ptr_private_elem_type_id, tprint("%_elem_ptr", debug_name));
+  add_debug_name(s, composite_const_id, tprint("%_const", debug_name));
+  add_debug_name(s, var_id, debug_name);
+
+  new_global_array := IR_SPV_Gen_Global_Const_Array.{
+    name = debug_name,
+    element_type = elem_type,
+    count = array_count,
+    var_id = var_id,
+    array_type_id = array_type_id,
+    ptr_private_array_type_id = ptr_private_array_type_id,
+    ptr_private_elem_type_id = ptr_private_elem_type_id,
+    count_const_id = count_const_id,
+    composite_const_id = composite_const_id,
+  };
+  for element_const_ids array_add(*new_global_array.element_const_ids, it);
+  array_add(*s.global_const_arrays, new_global_array);
+  return new_global_array, true, diag;
+}
+
+bind_local_array_to_global_const_array :: (s: *IR_SPV_Gen_State, name: string, global_array: IR_SPV_Gen_Global_Const_Array) -> IR_SPV_Gen_Local_Array {
+  bound := IR_SPV_Gen_Local_Array.{
+    name = name,
+    element_type = global_array.element_type,
+    count = global_array.count,
+    var_id = global_array.var_id,
+    array_type_id = global_array.array_type_id,
+    ptr_elem_type_id = global_array.ptr_private_elem_type_id,
+    count_const_id = global_array.count_const_id,
+    storage_class = SPV_STORAGE_CLASS_PRIVATE,
+  };
+  array_add(*s.local_arrays, bound);
+  return bound;
 }
 
 bind_inline_function_args :: (s: *IR_SPV_Gen_State, ir_function: *IR_Function, call_args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
@@ -5033,13 +5351,44 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
           if !idx_ok return 0, .UNKNOWN, false, idx_diag;
           elem_ptr := new_id(s);
-          elem_ptr_type_id := func_ptr_type_id_from_kind(s, local_array.element_type);
+          elem_ptr_type_id := local_array.ptr_elem_type_id;
+          if elem_ptr_type_id == 0 elem_ptr_type_id = func_ptr_type_id_from_kind(s, local_array.element_type);
           add_op(s, elem_ptr, "OpAccessChain", elem_ptr_type_id, local_array.var_id, idx);
           value_id := new_id(s);
           value_type_id := type_id_from_kind(s, local_array.element_type);
           add_op(s, value_id, "OpLoad", value_type_id, elem_ptr);
           return value_id, local_array.element_type, true, diag;
         }
+      }
+
+      if expr.left && expr.left.kind == .ARRAY_LITERAL {
+        global_array, global_array_ok, _ := materialize_array_literal_to_global_const_array(s, expr.left);
+        if global_array_ok {
+          idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
+          if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+          idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
+          if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+          elem_ptr := new_id(s);
+          add_op(s, elem_ptr, "OpAccessChain", global_array.ptr_private_elem_type_id, global_array.var_id, idx);
+          value_id := new_id(s);
+          value_type_id := type_id_from_kind(s, global_array.element_type);
+          add_op(s, value_id, "OpLoad", value_type_id, elem_ptr);
+          return value_id, global_array.element_type, true, diag;
+        }
+
+        local_array, local_array_ok, local_array_diag := materialize_array_literal_to_local_array(s, expr.left);
+        if !local_array_ok return 0, .UNKNOWN, false, local_array_diag;
+        idx, idx_type, idx_ok, idx_diag := emit_expr(s, expr.right);
+        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+        idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
+        if !idx_ok return 0, .UNKNOWN, false, idx_diag;
+        elem_ptr := new_id(s);
+        elem_ptr_type_id := func_ptr_type_id_from_kind(s, local_array.element_type);
+        add_op(s, elem_ptr, "OpAccessChain", elem_ptr_type_id, local_array.var_id, idx);
+        value_id := new_id(s);
+        value_type_id := type_id_from_kind(s, local_array.element_type);
+        add_op(s, value_id, "OpLoad", value_type_id, elem_ptr);
+        return value_id, local_array.element_type, true, diag;
       }
 
       buffer_alias, buffer_name, base_ok, base_diag := resolve_buffer_alias_from_expr(s, expr.left);
@@ -6009,6 +6358,26 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         ptr_id := new_id(s);
         add_debug_name(s, array_type_id, tprint("%_array", stmt.decl_name));
         add_debug_name(s, ptr_func_array_type_id, tprint("%_array_ptr", stmt.decl_name));
+        elem_ptr_type_id := func_ptr_type_id_from_kind(s, elem_type);
+        if elem_ptr_type_id == 0 {
+          return_err("unsupported local array element type '%': missing element pointer type.", array_elem_type_name);
+        }
+
+        global_init_array: IR_SPV_Gen_Global_Const_Array;
+        use_global_init_array := false;
+        if stmt.decl_init && stmt.decl_init.kind == .ARRAY_LITERAL {
+          candidate_global_array, candidate_global_ok, _ := materialize_array_literal_to_global_const_array(s, stmt.decl_init, dedupe=false);
+          if candidate_global_ok {
+            global_init_array = candidate_global_array;
+            use_global_init_array = true;
+          }
+        }
+
+        if use_global_init_array {
+          bind_local_array_to_global_const_array(s, stmt.decl_name, global_init_array);
+          return true, false, diag;
+        }
+
         array_zero, array_zero_ok, array_zero_diag := spv_local_decl_default_initializer(s, stmt.decl_type, .UNKNOWN, array_type_id);
         if !array_zero_ok return false, false, array_zero_diag;
         spv_emit_variable_decl(s, ptr_id, ptr_func_array_type_id, SPV_STORAGE_CLASS_FUNCTION, array_zero);
@@ -6020,7 +6389,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           var_id = ptr_id,
           array_type_id = array_type_id,
           ptr_func_array_type_id = ptr_func_array_type_id,
+          ptr_elem_type_id = elem_ptr_type_id,
           count_const_id = count_const_id,
+          storage_class = SPV_STORAGE_CLASS_FUNCTION,
         });
         array_add(*s.local_array_types, .{
           name = stmt.decl_name,
@@ -6029,7 +6400,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           var_id = ptr_id,
           array_type_id = array_type_id,
           ptr_func_array_type_id = ptr_func_array_type_id,
+          ptr_elem_type_id = elem_ptr_type_id,
           count_const_id = count_const_id,
+          storage_class = SPV_STORAGE_CLASS_FUNCTION,
         });
 
         if stmt.decl_init {
@@ -6040,7 +6413,6 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             return_err("local array '%' initializer count mismatch (expected %, got %).",
                        stmt.decl_name, array_count, stmt.decl_init.args.count);
           }
-          elem_ptr_type_id := func_ptr_type_id_from_kind(s, elem_type);
           for stmt.decl_init.args {
             value_id, value_type, value_ok, value_diag := emit_expr(s, it);
             if !value_ok return false, false, value_diag;

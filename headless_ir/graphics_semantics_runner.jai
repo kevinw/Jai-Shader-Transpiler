@@ -266,6 +266,10 @@ Graphics_Mixed_Resource_Vec3_Root :: struct {
   params: Graphics_Mixed_Resource_Vec3_Params;
 }
 
+Graphics_Local_Helper_State :: struct {
+  tint: Vector4;
+}
+
 graphics_test_bindless_ptrroot_vertex :: (using input: Graphics_Test_Vertex_In, resources: *Graphics_Mixed_Resource_Vec3_Root) -> Graphics_Bindless_Vertex_Out {
   using out: Graphics_Bindless_Vertex_Out;
   _ = resources;
@@ -284,6 +288,39 @@ graphics_test_mixed_resource_vec3_fragment :: (using input: Graphics_Bindless_Ve
     out_color = Vector4.{gain + offset.x, offset.y, offset.z, 1.0};
   } else {
     out_color = Vector4.{offset.z, gain + offset.y, offset.x, 1.0};
+  }
+  return out;
+} @fragment_shader
+
+graphics_fill_local_helper_state :: (ctx: *Graphics_Local_Helper_State, uv: Vector2) {
+  ctx.tint = Vector4.{uv.x, uv.y, 0.2, 1.0};
+}
+
+graphics_test_local_struct_pointer_fragment :: (using input: Graphics_Bindless_Vertex_Out) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  ctx := Graphics_Local_Helper_State.{};
+  graphics_fill_local_helper_state(*ctx, input.uv);
+  out_color = ctx.tint;
+  return out;
+} @fragment_shader
+
+graphics_test_global_fixed_array_lut :: u32.[2, 4, 8, 16];
+
+graphics_test_global_fixed_array_fragment :: (using input: Graphics_Bindless_Vertex_Out) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  idx := cast(u32) floor(input.uv.x * 4.0);
+  if idx > 3 idx = 3;
+  value := graphics_test_global_fixed_array_lut[idx];
+  out_color = Vector4.{1.0, 0.0, 1.0, 1.0};
+  if value == {
+  case 2;
+    out_color = Vector4.{1.0, 0.0, 0.0, 1.0};
+  case 4;
+    out_color = Vector4.{0.0, 1.0, 0.0, 1.0};
+  case 8;
+    out_color = Vector4.{0.0, 0.0, 1.0, 1.0};
+  case 16;
+    out_color = Vector4.{1.0, 1.0, 0.0, 1.0};
   }
   return out;
 } @fragment_shader
@@ -1841,6 +1878,271 @@ run_matrix_nested_pair_case_metal :: () {
   log("[OK] graphics_matrix_nested_pair");
 }
 
+run_local_struct_pointer_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_bindless_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_local_struct_pointer_fragment);
+  check_contains(fragment_source, "Graphics_Local_Helper_State", "local-struct-pointer fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  queue := MTLDevice.newCommandQueue(device);
+  if !queue fail("Failed to create Metal command queue");
+  defer release(queue);
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile local-struct-pointer vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile local-struct-pointer vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile local-struct-pointer fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile local-struct-pointer fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find local-struct-pointer vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find local-struct-pointer fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  vertex_desc := MTLVertexDescriptor.vertexDescriptor();
+  defer release(vertex_desc);
+  attr0 := MTLVertexAttributeDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.attributes(vertex_desc), 0);
+  MTLVertexAttributeDescriptor.setFormat(attr0, .MTLVertexFormatFloat2);
+  MTLVertexAttributeDescriptor.setOffset(attr0, 0);
+  MTLVertexAttributeDescriptor.setBufferIndex(attr0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLVertexBufferLayoutDescriptor.setStride(layout0, size_of(Vector2));
+  MTLVertexBufferLayoutDescriptor.setStepFunction(layout0, .MTLVertexStepFunctionPerVertex);
+  MTLVertexBufferLayoutDescriptor.setStepRate(layout0, 1);
+
+  pipeline_desc := objc_init(objc_alloc(MTLRenderPipelineDescriptor));
+  defer release(pipeline_desc);
+  MTLRenderPipelineDescriptor.setVertexFunction(pipeline_desc, xx fn_vertex);
+  MTLRenderPipelineDescriptor.setFragmentFunction(pipeline_desc, xx fn_fragment);
+  MTLRenderPipelineDescriptor.setVertexDescriptor(pipeline_desc, vertex_desc);
+  color_attachment_desc := MTLRenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPipelineDescriptor.colorAttachments(pipeline_desc), 0);
+  MTLRenderPipelineColorAttachmentDescriptor.setPixelFormat(color_attachment_desc, .MTLPixelFormatRGBA8Unorm);
+
+  error = null;
+  pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
+  if log_nserror("Failed to create local-struct-pointer render pipeline", error) || !pipeline {
+    fail("Failed to create local-struct-pointer render pipeline");
+  }
+  defer release(pipeline);
+
+  texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm,
+                                                                                                  cast(NSUInteger) WINDOW_W,
+                                                                                                  cast(NSUInteger) WINDOW_H,
+                                                                                                  NO);
+  defer release(texture_desc);
+  MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
+  MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
+  color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
+  if !color_tex fail("Failed to create local-struct-pointer render target texture");
+  defer release(color_tex);
+
+  verts := Vector2.[
+    Vector2.{-1.0, -1.0},
+    Vector2.{ 3.0, -1.0},
+    Vector2.{-1.0,  3.0},
+  ];
+  vertex_buffer := MTLDevice.newBufferWithBytes_length_options(device, *verts, verts.count * size_of(Vector2), .MTLResourceStorageModeShared);
+  if !vertex_buffer fail("Failed to create local-struct-pointer vertex buffer");
+  defer release(vertex_buffer);
+
+  pass := MTLRenderPassDescriptor.renderPassDescriptor();
+  color_attachment := MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPassDescriptor.colorAttachments(pass), 0);
+  MTLRenderPassColorAttachmentDescriptor.setTexture(color_attachment, xx color_tex);
+  MTLRenderPassColorAttachmentDescriptor.setLoadAction(color_attachment, .MTLLoadActionClear);
+  MTLRenderPassColorAttachmentDescriptor.setStoreAction(color_attachment, .MTLStoreActionStore);
+  MTLRenderPassColorAttachmentDescriptor.setClearColor(color_attachment, MTLClearColorMake(0.0, 0.0, 0.0, 1.0));
+
+  command_buffer := MTLCommandQueue.commandBuffer(queue);
+  if !command_buffer fail("Failed to create local-struct-pointer command buffer");
+
+  encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+  if !encoder fail("Failed to create local-struct-pointer render command encoder");
+  MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
+  MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  dummy_uniform: u8 = 0;
+  MTLRenderCommandEncoder.setVertexBytes_length_atIndex(encoder, *dummy_uniform, 1, VERTEX_UNIFORM_BUFFER_INDEX);
+  MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 3);
+  MTLRenderCommandEncoder.endEncoding(encoder);
+
+  MTLCommandBuffer.commit(command_buffer);
+  MTLCommandBuffer.waitUntilCompleted(command_buffer);
+
+  bytes_per_row := cast(NSUInteger) WINDOW_W * 4;
+  gpu_pixels := NewArray(cast(s64) (bytes_per_row * WINDOW_H), u8);
+  defer array_free(gpu_pixels);
+  region := MTLRegionMake2D(0, 0, cast(NSUInteger) WINDOW_W, cast(NSUInteger) WINDOW_H);
+  MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(color_tex, gpu_pixels.data, bytes_per_row, region, 0);
+
+  idx := pixel_index(96, 96, WINDOW_W);
+  r := gpu_pixels[idx + 0];
+  g := gpu_pixels[idx + 1];
+  b := gpu_pixels[idx + 2];
+  if !(r >= 160 && g >= 160 && b >= 35 && b <= 80) {
+    fail("Expected local-struct-pointer helper color near uv=(0.75,0.75), got rgb=(%,%,%)", r, g, b);
+  }
+
+  log("[OK] graphics_local_struct_pointer");
+}
+
+run_global_fixed_array_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  vertex_source := get_transpiled(.METAL, graphics_test_bindless_vertex);
+  fragment_source := get_transpiled(.METAL, graphics_test_global_fixed_array_fragment);
+  check_contains(fragment_source, "graphics_test_global_fixed_array_lut", "global-fixed-array fragment metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  queue := MTLDevice.newCommandQueue(device);
+  if !queue fail("Failed to create Metal command queue");
+  defer release(queue);
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  vertex_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(vertex_source), compile_options, *error);
+  if log_nserror("Failed to compile global-fixed-array vertex metal source", error) || !vertex_lib {
+    fail("Failed to compile global-fixed-array vertex metal source");
+  }
+  defer release(vertex_lib);
+
+  error = null;
+  fragment_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(fragment_source), compile_options, *error);
+  if log_nserror("Failed to compile global-fixed-array fragment metal source", error) || !fragment_lib {
+    fail("Failed to compile global-fixed-array fragment metal source");
+  }
+  defer release(fragment_lib);
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(vertex_lib, NSString.getTempString("VertexMain"));
+  if !fn_vertex fail("Failed to find global-fixed-array vertex entry point 'VertexMain'");
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(fragment_lib, NSString.getTempString("FragmentMain"));
+  if !fn_fragment fail("Failed to find global-fixed-array fragment entry point 'FragmentMain'");
+  defer release(fn_fragment);
+
+  vertex_desc := MTLVertexDescriptor.vertexDescriptor();
+  defer release(vertex_desc);
+  attr0 := MTLVertexAttributeDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.attributes(vertex_desc), 0);
+  MTLVertexAttributeDescriptor.setFormat(attr0, .MTLVertexFormatFloat2);
+  MTLVertexAttributeDescriptor.setOffset(attr0, 0);
+  MTLVertexAttributeDescriptor.setBufferIndex(attr0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  layout0 := MTLVertexBufferLayoutDescriptorArray.objectAtIndexedSubscript(MTLVertexDescriptor.layouts(vertex_desc), VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  MTLVertexBufferLayoutDescriptor.setStride(layout0, size_of(Vector2));
+  MTLVertexBufferLayoutDescriptor.setStepFunction(layout0, .MTLVertexStepFunctionPerVertex);
+  MTLVertexBufferLayoutDescriptor.setStepRate(layout0, 1);
+
+  pipeline_desc := objc_init(objc_alloc(MTLRenderPipelineDescriptor));
+  defer release(pipeline_desc);
+  MTLRenderPipelineDescriptor.setVertexFunction(pipeline_desc, xx fn_vertex);
+  MTLRenderPipelineDescriptor.setFragmentFunction(pipeline_desc, xx fn_fragment);
+  MTLRenderPipelineDescriptor.setVertexDescriptor(pipeline_desc, vertex_desc);
+  color_attachment_desc := MTLRenderPipelineColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPipelineDescriptor.colorAttachments(pipeline_desc), 0);
+  MTLRenderPipelineColorAttachmentDescriptor.setPixelFormat(color_attachment_desc, .MTLPixelFormatRGBA8Unorm);
+
+  error = null;
+  pipeline := MTLDevice.newRenderPipelineStateWithDescriptor_error(device, pipeline_desc, *error);
+  if log_nserror("Failed to create global-fixed-array render pipeline", error) || !pipeline {
+    fail("Failed to create global-fixed-array render pipeline");
+  }
+  defer release(pipeline);
+
+  texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm,
+                                                                                                  cast(NSUInteger) WINDOW_W,
+                                                                                                  cast(NSUInteger) WINDOW_H,
+                                                                                                  NO);
+  defer release(texture_desc);
+  MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
+  MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
+  color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
+  if !color_tex fail("Failed to create global-fixed-array render target texture");
+  defer release(color_tex);
+
+  verts := Vector2.[
+    Vector2.{-1.0, -1.0},
+    Vector2.{ 3.0, -1.0},
+    Vector2.{-1.0,  3.0},
+  ];
+  vertex_buffer := MTLDevice.newBufferWithBytes_length_options(device, *verts, verts.count * size_of(Vector2), .MTLResourceStorageModeShared);
+  if !vertex_buffer fail("Failed to create global-fixed-array vertex buffer");
+  defer release(vertex_buffer);
+
+  pass := MTLRenderPassDescriptor.renderPassDescriptor();
+  color_attachment := MTLRenderPassColorAttachmentDescriptorArray.objectAtIndexedSubscript(MTLRenderPassDescriptor.colorAttachments(pass), 0);
+  MTLRenderPassColorAttachmentDescriptor.setTexture(color_attachment, xx color_tex);
+  MTLRenderPassColorAttachmentDescriptor.setLoadAction(color_attachment, .MTLLoadActionClear);
+  MTLRenderPassColorAttachmentDescriptor.setStoreAction(color_attachment, .MTLStoreActionStore);
+  MTLRenderPassColorAttachmentDescriptor.setClearColor(color_attachment, MTLClearColorMake(0.0, 0.0, 0.0, 1.0));
+
+  command_buffer := MTLCommandQueue.commandBuffer(queue);
+  if !command_buffer fail("Failed to create global-fixed-array command buffer");
+
+  encoder := MTLCommandBuffer.renderCommandEncoderWithDescriptor(command_buffer, pass);
+  if !encoder fail("Failed to create global-fixed-array render command encoder");
+  MTLRenderCommandEncoder.setRenderPipelineState(encoder, xx pipeline);
+  MTLRenderCommandEncoder.setVertexBuffer_offset_atIndex(encoder, xx vertex_buffer, 0, VERTEX_ATTRIBUTE_BUFFER_INDEX);
+  dummy_uniform: u8 = 0;
+  MTLRenderCommandEncoder.setVertexBytes_length_atIndex(encoder, *dummy_uniform, 1, VERTEX_UNIFORM_BUFFER_INDEX);
+  MTLRenderCommandEncoder.drawPrimitives_vertexStart_vertexCount(encoder, .MTLPrimitiveTypeTriangle, 0, 3);
+  MTLRenderCommandEncoder.endEncoding(encoder);
+
+  MTLCommandBuffer.commit(command_buffer);
+  MTLCommandBuffer.waitUntilCompleted(command_buffer);
+
+  bytes_per_row := cast(NSUInteger) WINDOW_W * 4;
+  gpu_pixels := NewArray(cast(s64) (bytes_per_row * WINDOW_H), u8);
+  defer array_free(gpu_pixels);
+  region := MTLRegionMake2D(0, 0, cast(NSUInteger) WINDOW_W, cast(NSUInteger) WINDOW_H);
+  MTLTexture.getBytes_bytesPerRow_fromRegion_mipmapLevel(color_tex, gpu_pixels.data, bytes_per_row, region, 0);
+
+  test_pixel :: (x: s32, expected_r: bool, expected_g: bool, expected_b: bool) #expand {
+    idx := pixel_index(x, 64, WINDOW_W);
+    r := gpu_pixels[idx + 0];
+    g := gpu_pixels[idx + 1];
+    b := gpu_pixels[idx + 2];
+    if expected_r {
+      if r < 200 fail("Expected strong red at x=%, got rgb=(%,%,%)", x, r, g, b);
+    } else if r > 80 fail("Expected weak red at x=%, got rgb=(%,%,%)", x, r, g, b);
+    if expected_g {
+      if g < 200 fail("Expected strong green at x=%, got rgb=(%,%,%)", x, r, g, b);
+    } else if g > 80 fail("Expected weak green at x=%, got rgb=(%,%,%)", x, r, g, b);
+    if expected_b {
+      if b < 200 fail("Expected strong blue at x=%, got rgb=(%,%,%)", x, r, g, b);
+    } else if b > 80 fail("Expected weak blue at x=%, got rgb=(%,%,%)", x, r, g, b);
+  }
+
+  test_pixel(16, true, false, false);
+  test_pixel(48, false, true, false);
+  test_pixel(80, false, false, true);
+  test_pixel(112, true, true, false);
+
+  log("[OK] graphics_global_fixed_array");
+}
+
 main :: () {
   #if OS != .MACOS {
     log("Skipping graphics semantics runner on % (Metal-only test).", OS);
@@ -1862,7 +2164,9 @@ main :: () {
   run_mixed_resource_vec3_container_case_metal();
   run_matrix_pointer_pair_case_metal();
   run_matrix_nested_pair_case_metal();
-  log("Passed 15 graphics semantics cases.");
+  run_local_struct_pointer_case_metal();
+  run_global_fixed_array_case_metal();
+  log("Passed 17 graphics semantics cases.");
 }
 
 #scope_file

@@ -1,5 +1,8 @@
 #scope_module
 
+SPV_STORAGE_CLASS_PRIVATE :: 6;
+SPV_OP_CONSTANT_COMPOSITE :: 44;
+
 IR_SPV_Id_Slot :: enum {
   NONE;
   TYPE_INT;
@@ -234,6 +237,7 @@ state_uses_int64 :: (s: *IR_SPV_Gen_State) -> bool {
   if s.const_i64.count > 0 || s.const_u64.count > 0 return true;
   for s.locals if kind_uses_int64(it.type) return true;
   for s.local_arrays if kind_uses_int64(it.element_type) return true;
+  for s.global_const_arrays if kind_uses_int64(it.element_type) return true;
   for s.buffers {
     if kind_uses_int64(it.element_kind) return true;
     for it.fields if kind_uses_int64(it.type) return true;
@@ -351,6 +355,21 @@ spv_append_numeric_constants :: (sb: *String_Builder, state: *IR_SPV_Gen_State) 
 
 spv_append_null_constants :: (sb: *String_Builder, state: *IR_SPV_Gen_State) {
   for state.const_null print_to_builder(sb, "% = OpConstantNull %\n", id_text(it.id), id_text(it.type_id));
+}
+
+spv_append_global_const_array_decls :: (sb: *String_Builder, state: *IR_SPV_Gen_State) {
+  for state.global_const_arrays {
+    elem_type_id := type_id_from_kind(state, it.element_type);
+    print_to_builder(sb, "% = OpTypeArray % %\n", id_text(it.array_type_id), id_text(elem_type_id), id_text(it.count_const_id));
+    print_to_builder(sb, "% = OpTypePointer Private %\n", id_text(it.ptr_private_array_type_id), id_text(it.array_type_id));
+    print_to_builder(sb, "% = OpTypePointer Private %\n", id_text(it.ptr_private_elem_type_id), id_text(elem_type_id));
+  }
+  for state.global_const_arrays {
+    print_to_builder(sb, "% = OpConstantComposite %", id_text(it.composite_const_id), id_text(it.array_type_id));
+    for it.element_const_ids append(sb, tprint(" %", id_text(it)));
+    append(sb, "\n");
+    print_to_builder(sb, "% = OpVariable % Private %\n", id_text(it.var_id), id_text(it.ptr_private_array_type_id), id_text(it.composite_const_id));
+  }
 }
 
 spv_module_append_capabilities_binary :: (m: *SPV_Module, state: *IR_SPV_Gen_State, use_physical_storage := false) {
@@ -492,5 +511,24 @@ spv_module_append_numeric_constants_binary :: (m: *SPV_Module, state: *IR_SPV_Ge
     assert(value_ok && remainder.count == 0);
     bits := (.*) cast(*u32) *value;
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_CONSTANT, cast(u32) state.id_float, cast(u32) it.id, bits);
+  }
+}
+
+spv_module_append_global_const_array_decls_binary :: (m: *SPV_Module, state: *IR_SPV_Gen_State) {
+  assert(m != null);
+  assert(state != null);
+  for state.global_const_arrays {
+    elem_type_id := cast(u32) type_id_from_kind(state, it.element_type);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) it.array_type_id, elem_type_id, cast(u32) it.count_const_id);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) it.ptr_private_array_type_id, SPV_STORAGE_CLASS_PRIVATE, cast(u32) it.array_type_id);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) it.ptr_private_elem_type_id, SPV_STORAGE_CLASS_PRIVATE, elem_type_id);
+  }
+  for state.global_const_arrays {
+    inst: SPV_Inst;
+    inst.opcode = SPV_OP_CONSTANT_COMPOSITE;
+    array_add(*inst.words, cast(u32) it.array_type_id, cast(u32) it.composite_const_id);
+    for it.element_const_ids array_add(*inst.words, cast(u32) it);
+    spv_module_append_inst(m, .TYPES_CONSTANTS_GLOBALS, inst);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) it.ptr_private_array_type_id, cast(u32) it.var_id, SPV_STORAGE_CLASS_PRIVATE, cast(u32) it.composite_const_id);
   }
 }

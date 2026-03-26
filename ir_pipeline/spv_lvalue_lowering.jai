@@ -43,7 +43,8 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
         idx, idx_ok, idx_diag = coerce_to_kind(s, idx, idx_type, .UINT);
         if !idx_ok return 0, .UNKNOWN, false, idx_diag;
         elem_ptr := new_id(s);
-        elem_ptr_type_id := func_ptr_type_id_from_kind(s, local_array.element_type);
+        elem_ptr_type_id := local_array.ptr_elem_type_id;
+        if elem_ptr_type_id == 0 elem_ptr_type_id = func_ptr_type_id_from_kind(s, local_array.element_type);
         add_op(s, elem_ptr, "OpAccessChain", elem_ptr_type_id, local_array.var_id, idx);
         return elem_ptr, local_array.element_type, true, diag;
       }
@@ -82,6 +83,9 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
   }
   if expr.kind == .MEMBER {
     if expr.left && expr.left.kind == .SUBSCRIPT {
+      local_field_ptr, local_field_type, local_field_ok, _ := emit_local_struct_field_ptr(s, expr);
+      if local_field_ok return local_field_ptr, local_field_type, true, diag;
+
       array_field_ptr, array_field_type, array_field_ok, _ := emit_buffer_struct_array_element_field_ptr(s, expr.left, expr.text);
       if array_field_ok return array_field_ptr, array_field_type, true, diag;
 
@@ -113,6 +117,18 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
       return ptr_id, ptr_type, false, ptr_diag;
     }
     if expr.left && expr.left.kind == .MEMBER && expr.left.left && expr.left.left.kind == .SUBSCRIPT {
+      local_vec_ptr, local_vec_type, local_vec_ok, _ := emit_local_struct_field_ptr(s, expr.left);
+      if local_vec_ok {
+        if local_vec_type != .FLOAT2 && local_vec_type != .FLOAT3 && local_vec_type != .FLOAT4 return_err("component lvalue requires float2/float3/float4 field, got %.", local_vec_type);
+        comp_index, comp_ok := spv_member_component_index_u32(expr.member_access);
+        if !comp_ok return_err("unsupported vector component '%' for lvalue.", expr.text);
+        if !spv_vector_component_in_range(local_vec_type, cast(s64) comp_index) return_err("vector component '%' out of range for type % lvalue.", expr.text, local_vec_type);
+        comp_index_id := get_u32_const(s, comp_index);
+        ptr := new_id(s);
+        add_op(s, ptr, "OpAccessChain", s.id_ptr_func_float, local_vec_ptr, comp_index_id);
+        return ptr, .FLOAT, true, diag;
+      }
+
       field_ptr, field_type, field_ok, field_diag := emit_buffer_struct_array_element_field_ptr(s, expr.left.left, expr.left.text);
       if !field_ok {
         field_ptr, field_type, field_ok, field_diag = emit_buffer_struct_field_ptr(s, expr.left.left, expr.left.text);
