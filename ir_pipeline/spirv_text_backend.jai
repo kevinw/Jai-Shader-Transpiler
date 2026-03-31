@@ -371,101 +371,20 @@ expr_text :: (expr: *IR_Expr) -> string {
   return text;
 }
 
-canonical_callee_name :: (name: string) -> string {
-  if name.count == 0 return name;
-  i := name.count - 1;
-  while i >= 0 {
-    if name[i] == #char "." {
-      out: string;
-      out.data = name.data + i + 1;
-      out.count = name.count - i - 1;
-      return out;
-    }
-    if i == 0 break;
-    i -= 1;
-  }
-  return name;
-}
-
-callee_matches_builtin :: (callee: string, builtin: string) -> bool {
-  if callee == builtin return true;
-  if callee.count <= builtin.count return false;
-  if !begins_with(callee, builtin) return false;
-  next := callee[builtin.count];
-  is_digit := next >= #char "0" && next <= #char "9";
-  is_alpha := (next >= #char "a" && next <= #char "z") || (next >= #char "A" && next <= #char "Z");
-  return !is_alpha || is_digit;
-}
-
-call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
-  if callee_matches_builtin(callee, "sample_2d") return .SAMPLE_2D;
-  if callee_matches_builtin(callee, "sample_3d") return .SAMPLE_3D;
-  if callee_matches_builtin(callee, "write_2d") return .WRITE_2D;
-  if callee_matches_builtin(callee, "write_3d") return .WRITE_3D;
-  if callee_matches_builtin(callee, "discard") return .DISCARD;
-  if callee_matches_builtin(callee, "task_set_mesh_groups") return .TASK_SET_MESH_GROUPS;
-  if callee_matches_builtin(callee, "task_group_id_x") return .TASK_GROUP_ID_X;
-  if callee_matches_builtin(callee, "task_payload_ptr") return .TASK_PAYLOAD_PTR;
-  if callee_matches_builtin(callee, "mesh_set_max_output_counts") return .MESH_SET_MAX_OUTPUT_COUNTS;
-  if callee_matches_builtin(callee, "mesh_set_output_counts") return .MESH_SET_OUTPUT_COUNTS;
-  if callee_matches_builtin(callee, "mesh_group_id_x") return .MESH_GROUP_ID_X;
-  if callee_matches_builtin(callee, "mesh_group_id_y") return .MESH_GROUP_ID_Y;
-  if callee_matches_builtin(callee, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
-  if callee_matches_builtin(callee, "mesh_set_vertex") return .MESH_SET_VERTEX;
-  if callee_matches_builtin(callee, "mesh_set_triangle") return .MESH_SET_TRIANGLE;
-  if callee_matches_builtin(callee, "saturate") return .SATURATE;
-  if callee_matches_builtin(callee, "mix") return .MIX;
-  if callee_matches_builtin(callee, "lerp") return .LERP;
-  if callee_matches_builtin(callee, "reflect") return .REFLECT;
-  if callee == "clamp" return .CLAMP;
-  if callee == "step" return .STEP;
-  if callee == "pow" return .POW;
-  if callee == "smoothstep" return .SMOOTHSTEP;
-  if callee == "mod" return .MOD;
-  if callee == "fmod_cycling" return .FMOD_CYCLING;
-  if callee == "mul" return .MUL;
-  if callee == "floor" return .FLOOR;
-  if callee == "min" return .MIN;
-  if callee == "max" return .MAX;
-  if callee == "abs" return .ABS;
-  if callee == "sqrt" return .SQRT;
-  if callee == "exp" return .EXP;
-  if callee == "sin" return .SIN;
-  if callee == "cos" return .COS;
-  if callee == "fract" return .FRACT;
-  if callee == "length" return .LENGTH;
-  if callee == "normalize" return .NORMALIZE;
-  if callee == "radians" return .RADIANS;
-  if callee == "degrees" return .DEGREES;
-  if callee == "atomic_add_u32" return .ATOMIC_ADD_U32;
-  if callee == "atomic_sub_u32" return .ATOMIC_SUB_U32;
-  if callee == "atomic_exchange_u32" return .ATOMIC_EXCHANGE_U32;
-  if callee == "atomic_compare_exchange_u32" return .ATOMIC_COMPARE_EXCHANGE_U32;
-  if callee == "atomic_min_u32" return .ATOMIC_MIN_U32;
-  if callee == "atomic_max_u32" return .ATOMIC_MAX_U32;
-  return .NONE;
-}
-
 call_builtin_kind_for_expr :: (expr: *IR_Expr) -> IR_Call_Builtin_Kind {
   if !expr return .NONE;
-  if expr.call_builtin_kind != .NONE return expr.call_builtin_kind;
-  if expr.call_resolved_name.count != 0 return call_builtin_kind_from_callee_name(canonical_callee_name(expr.call_resolved_name));
-  if !expr.left return .NONE;
-  callee := "";
-  if expr.left.kind == .IDENT || expr.left.kind == .MEMBER callee = expr.left.text;
-  if callee.count == 0 return .NONE;
-  return call_builtin_kind_from_callee_name(canonical_callee_name(callee));
+  return expr.call_builtin_kind;
 }
 
 call_helper_name_for_expr :: (expr: *IR_Expr) -> (string, bool) {
   if !expr return "", false;
-  if expr.call_resolved_name.count != 0 return canonical_callee_name(expr.call_resolved_name), true;
+  if expr.call_resolved_name.count != 0 return ir_canonical_callee_name(expr.call_resolved_name), true;
   if !expr.left return "", false;
   if expr.call_target_kind == .HELPER && (expr.left.kind == .IDENT || expr.left.kind == .MEMBER) {
-    return canonical_callee_name(expr.left.text), true;
+    return ir_canonical_callee_name(expr.left.text), true;
   }
   if expr.left.kind == .IDENT || expr.left.kind == .MEMBER {
-    return canonical_callee_name(expr.left.text), true;
+    return ir_canonical_callee_name(expr.left.text), true;
   }
   return "", false;
 }
@@ -1727,14 +1646,19 @@ find_function :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Function {
   found := find_by_name(*s.functions, name);
   if found return found;
 
-  target := canonical_callee_name(name);
+  target := ir_canonical_callee_name(name);
   for 0..s.functions.count-1 {
     candidate := s.functions.data + it;
-    if canonical_callee_name(candidate.name) == target return candidate;
+    if ir_canonical_callee_name(candidate.name) == target return candidate;
   }
   return null;
 }
-find_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Struct { return find_by_name(*s.extra_structs, name); }
+find_struct :: (s: *IR_SPV_Gen_State, name: string, origin: *Type_Info_Struct = null) -> *IR_Struct {
+  if origin {
+    for *s.extra_structs if it.origin && it.origin == origin return it;
+  }
+  return find_by_name(*s.extra_structs, name);
+}
 
 find_struct_field_by_name :: (st: *IR_Struct, name: string) -> (*IR_Field, s64) {
   if !st return null, -1;
@@ -1749,16 +1673,6 @@ payload_builtin_kind_from_call :: (call_expr: *IR_Expr) -> IR_Call_Builtin_Kind 
   builtin_kind := call_builtin_kind_for_expr(call_expr);
   if builtin_kind == .TASK_PAYLOAD_PTR return .TASK_PAYLOAD_PTR;
   if builtin_kind == .MESH_PAYLOAD_PTR return .MESH_PAYLOAD_PTR;
-  callee_name := "";
-  if call_expr.call_resolved_name.count != 0 callee_name = canonical_callee_name(call_expr.call_resolved_name);
-  else if call_expr.left && (call_expr.left.kind == .IDENT || call_expr.left.kind == .MEMBER) callee_name = canonical_callee_name(call_expr.left.text);
-  if callee_name.count == 0 {
-    call_text := canonical_callee_name(expr_text(call_expr));
-    if contains(call_text, "task_payload_ptr()") return .TASK_PAYLOAD_PTR;
-    if contains(call_text, "mesh_payload_ptr()") return .MESH_PAYLOAD_PTR;
-  }
-  if callee_matches_builtin(callee_name, "task_payload_ptr") return .TASK_PAYLOAD_PTR;
-  if callee_matches_builtin(callee_name, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
   return .NONE;
 }
 
@@ -1809,7 +1723,7 @@ payload_fallback_struct_name :: (s: *IR_SPV_Gen_State) -> string {
 }
 
 payload_subscript_has_builtin_base :: (expr: *IR_Expr) -> bool {
-  text := canonical_callee_name(expr_text(expr));
+  text := ir_canonical_callee_name(expr_text(expr));
   if contains(text, "task_payload_ptr()") return true;
   if contains(text, "mesh_payload_ptr()") return true;
   cursor := expr;
@@ -1835,6 +1749,7 @@ payload_field_ptr_from_struct_name :: (s: *IR_SPV_Gen_State, struct_name: string
   if !st return_err("payload struct '%' was not collected into IR.", struct_name);
   field, field_index := find_struct_field_by_name(st, field_name);
   if !field return_err("payload struct '%' has no field '%'.", struct_name, field_name);
+  assert(field.source_member_index < 0 || field.source_member_index == cast(s32) field_index, "payload: field index mismatch for '%.%' (name lookup %, source_member_index %)", struct_name, field_name, field_index, field.source_member_index);
 
   field_kind := spv_kind_from_ir_type(field.type);
   if field_kind == .UNKNOWN || field_kind == .STRUCT return_err("payload field '%.%' type '%' is not yet supported.", struct_name, field_name, field.type.display_name);
@@ -2500,6 +2415,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       }
 
       field_index := buffer_info.fields.count;
+      assert(field_index == it_index, "buffer field collection order diverged from IR_Struct iteration order for '%' field '%'", struct_def.name, it.name);
       array_add(*buffer_info.fields, .{
         name = it.name,
         index = field_index,
@@ -3355,6 +3271,7 @@ emit_physical_root_pod_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, memb
     field_index := find_field_index_by_name(current_struct, segments[i]);
     if field_index < 0 return_err("field '%' not found in '%' while resolving '%'.", segments[i], current_struct_name, full_path);
     field := current_struct.fields[field_index];
+    assert(field.source_member_index < 0 || field.source_member_index == cast(s32) field_index, "physical-root POD: field index mismatch for '%.%' (name lookup %, source_member_index %)", current_struct_name, segments[i], field_index, field.source_member_index);
     is_last := i == segments.count-1;
     field_index_id := get_i32_const(s, cast(s32) field_index);
 
@@ -3408,6 +3325,7 @@ emit_physical_root_pod_field_value_from_member_expr :: (s: *IR_SPV_Gen_State, me
     field_index := find_field_index_by_name(current_struct, segments[i]);
     if field_index < 0 return_err("field '%' not found in '%' while resolving '%'.", segments[i], current_struct_name, full_path);
     field := current_struct.fields[field_index];
+    assert(field.source_member_index < 0 || field.source_member_index == cast(s32) field_index, "physical-root POD value: field index mismatch for '%.%' (name lookup %, source_member_index %)", current_struct_name, segments[i], field_index, field.source_member_index);
     is_last := i == segments.count-1;
     field_index_id := get_i32_const(s, cast(s32) field_index);
 
@@ -5410,7 +5328,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
         call_builtin := call_builtin_kind_for_expr(expr.left);
         if call_builtin == .NONE {
-          call_builtin = call_builtin_kind_from_callee_name(expr.left.left.text);
+          call_builtin = ir_builtin_call_kind_from_callee(expr.left.left.text);
           if call_builtin == .NONE {
             has_sample_3d, _ := contains(expr.left.left.text, "sample_3d");
             has_write_3d, _ := contains(expr.left.left.text, "write_3d");
@@ -5590,6 +5508,13 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       }
       local_field_ptr, local_field_type, local_field_ok, _ := emit_local_struct_field_ptr(s, expr);
       if local_field_ok {
+        // Cross-check: if IR lowering resolved a field index, verify the local struct agrees.
+        if expr.resolved_field_index >= 0 && expr.left && expr.left.kind == .IDENT {
+          cross_local := find_local_struct(s, expr.left.text);
+          if cross_local && expr.resolved_field_index < cast(s32) cross_local.fields.count {
+            assert(cross_local.fields[expr.resolved_field_index].name == expr.text, "emit_expr MEMBER: resolved_field_index % points to '%' but expected '%' in local struct '%'", expr.resolved_field_index, cross_local.fields[expr.resolved_field_index].name, expr.text, cross_local.name);
+          }
+        }
         result_type_id := type_id_from_kind(s, local_field_type);
         if result_type_id == 0 return_err("unsupported local struct field type for '%'.", path);
         value_id := new_id(s);
@@ -6038,7 +5963,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       builtin_kind := call_builtin_kind_for_expr(expr);
       helper_name, helper_name_ok := call_helper_name_for_expr(expr);
       if builtin_kind == .NONE && helper_name_ok {
-        builtin_kind = call_builtin_kind_from_callee_name(helper_name);
+        builtin_kind = ir_builtin_call_kind_from_callee(helper_name);
         if builtin_kind == .NONE {
           has_sample_3d, _ := contains(helper_name, "sample_3d");
           has_write_3d, _ := contains(helper_name, "write_3d");
@@ -7361,7 +7286,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       builtin_kind := call_builtin_kind_for_expr(stmt.call_expr);
       helper_name, helper_name_ok := call_helper_name_for_expr(stmt.call_expr);
       if builtin_kind == .NONE && helper_name_ok {
-        builtin_kind = call_builtin_kind_from_callee_name(helper_name);
+        builtin_kind = ir_builtin_call_kind_from_callee(helper_name);
         if builtin_kind == .NONE {
           has_sample_3d, _ := contains(helper_name, "sample_3d");
           has_write_3d, _ := contains(helper_name, "write_3d");
@@ -7905,13 +7830,13 @@ ps_assign_struct_info :: (s: *IR_SPV_Gen_State, infos: *[..] IR_SPV_PS_Struct_In
     if type.kind == .POINTER {
       if type.pointee_kind != .STRUCT continue;
       if type.pointee_struct_name.count == 0 continue;
-      if !struct_has_pointer_fields_recursive(s.extra_structs, type.pointee_struct_name, depth + 1) continue;
+      if !struct_has_pointer_fields_recursive(s.extra_structs, type.pointee_struct_name, type.origin, depth + 1) continue;
       next_prefix := tprint("%.%", prefix, name);
       if !ps_assign_struct_info(s, infos, type.pointee_struct_name, next_prefix, depth + 1) return false;
       continue;
     }
     if type.kind == .STRUCT && type.struct_name.count != 0 &&
-       struct_has_pointer_fields_recursive(s.extra_structs, type.struct_name, depth + 1) {
+       struct_has_pointer_fields_recursive(s.extra_structs, type.struct_name, type.origin, depth + 1) {
       next_prefix := tprint("%.%", prefix, name);
       if !ps_assign_struct_info(s, infos, type.struct_name, next_prefix, depth + 1) return false;
     }

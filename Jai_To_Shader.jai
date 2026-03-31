@@ -1564,19 +1564,19 @@ ir_source_file_from_mesh_context :: (mesh_ctx: *Shader_Write_Mesh_Context) -> st
   return tprint("% | %", mesh_file, fragment_file);
 }
 
-mesh_payload_builtin_from_expr :: (expr: *IR_Expr) -> IR_Call_Builtin_Kind {
-  if !expr || expr.kind != .CALL return .NONE;
-  if expr.call_builtin_kind == .TASK_PAYLOAD_PTR return .TASK_PAYLOAD_PTR;
-  if expr.call_builtin_kind == .MESH_PAYLOAD_PTR return .MESH_PAYLOAD_PTR;
-  callee_name := expr.call_resolved_name;
-  if callee_name.count == 0 && expr.left && (expr.left.kind == .IDENT || expr.left.kind == .MEMBER) callee_name = expr.left.text;
+mesh_payload_builtin_from_expr :: (using expr: *IR_Expr) -> IR_Call_Builtin_Kind {
+  if !expr || kind != .CALL return .NONE;
+  if call_builtin_kind == .TASK_PAYLOAD_PTR return .TASK_PAYLOAD_PTR;
+  if call_builtin_kind == .MESH_PAYLOAD_PTR return .MESH_PAYLOAD_PTR;
+  callee_name := call_resolved_name;
+  if callee_name.count == 0 && left && (left.kind == .IDENT || left.kind == .MEMBER) callee_name = left.text;
   if callee_name.count == 0 {
-    call_text := canonical_callee_name(expr_text(expr));
+    call_text := ir_canonical_callee_name(expr_text(expr));
     if contains(call_text, "task_payload_ptr()") return .TASK_PAYLOAD_PTR;
     if contains(call_text, "mesh_payload_ptr()") return .MESH_PAYLOAD_PTR;
   }
-  if canonical_callee_name(callee_name) == "task_payload_ptr" return .TASK_PAYLOAD_PTR;
-  if canonical_callee_name(callee_name) == "mesh_payload_ptr" return .MESH_PAYLOAD_PTR;
+  if ir_canonical_callee_name(callee_name) == "task_payload_ptr" return .TASK_PAYLOAD_PTR;
+  if ir_canonical_callee_name(callee_name) == "mesh_payload_ptr" return .MESH_PAYLOAD_PTR;
   return .NONE;
 }
 

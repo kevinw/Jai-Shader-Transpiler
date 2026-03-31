@@ -199,15 +199,13 @@ ir_shared_proc_has_expand_note :: (header: *Code_Procedure_Header) -> bool {
 
 ir_shared_lower_stmt :: (stmt: *Code_Node,
                          out_block: *IR_Block,
-                         input_fields: [] string,
-                         output_fields: [] string,
+                         using ctx: IR_Lowering_Context,
                          allow_return_value: bool,
                          active_usings: *[..] IR_Using_Source,
                          active_aliases: *[..] IR_Decl_Alias,
                          active_defer_entries: *[..] IR_Active_Defer,
                          scope_depth: s64,
-                         nearest_loop_scope_depth: s64,
-                         state: *IR_Lowering_State) -> bool {
+                         nearest_loop_scope_depth: s64) -> bool {
   return_err :: (message: string, node: *Code_Node) #expand {
     ir_set_diagnostic(state, message, node);
     `return false;
@@ -270,7 +268,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         }
       }
       if decl.expression {
-        init_expr, init_ok := ir_lower_expr(decl.expression, input_fields, output_fields, active_usings.*, active_aliases.*, state, decl_type);
+        init_expr, init_ok := ir_lower_expr(decl.expression, ctx, active_usings.*, active_aliases.*, decl_type);
         if !init_ok return false;
 
         if should_alias_struct_resource_local {
@@ -314,7 +312,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
             }
 
             expected_rhs_type := ir_shared_find_struct_member_type_by_name(decl_type, field_name);
-            lowered_value, lowered_ok := ir_lower_expr(value_node, input_fields, output_fields, active_usings.*, active_aliases.*, state, expected_rhs_type);
+            lowered_value, lowered_ok := ir_lower_expr(value_node, ctx, active_usings.*, active_aliases.*, expected_rhs_type);
             if !lowered_ok return false;
 
             replacement_text, replacement_ok := ir_expr_to_slang_from_ir(lowered_value);
@@ -366,7 +364,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           already := false;
           for lowered_resolved_decls if it == decl { already = true; break; }
           if !already array_add(*lowered_resolved_decls, decl);
-          if !ir_shared_lower_stmt(arg_node, out_block, input_fields, output_fields, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth, state) return false;
+          if !ir_shared_lower_stmt(arg_node, out_block, ctx, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth) return false;
           continue;
         }
 
@@ -378,13 +376,13 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
             for lowered_resolved_decls if it == decl { already = true; break; }
             if !already {
               array_add(*lowered_resolved_decls, decl);
-              if !ir_shared_lower_stmt(cast(*Code_Node) decl, out_block, input_fields, output_fields, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth, state) return false;
+              if !ir_shared_lower_stmt(cast(*Code_Node) decl, out_block, ctx, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth) return false;
             }
             continue;
           }
         }
 
-        if !ir_shared_lower_stmt(arg_node, out_block, input_fields, output_fields, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth, state) {
+        if !ir_shared_lower_stmt(arg_node, out_block, ctx, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth, nearest_loop_scope_depth) {
           return_err(tprint("IR lowering: unsupported compound declaration argument kind (%)", arg_node.kind), arg_node);
         }
       }
@@ -398,10 +396,10 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         lhs := cast(*Code_Ident) bn.left;
         if lhs.name == "_" return true; // discard assignment
       }
-      left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+      left, left_ok := ir_lower_expr(bn.left, ctx, active_usings.*, active_aliases.*);
       if !left_ok return false;
       right_expected_type := ifx bn.left then bn.left.type else null;
-      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings.*, active_aliases.*, state, right_expected_type);
+      right, right_ok := ir_lower_expr(bn.right, ctx, active_usings.*, active_aliases.*, right_expected_type);
       if !right_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .BINARY;
@@ -416,7 +414,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
     case .IF; {
       op := cast(*Code_If) stmt;
       if op.if_flags & .IS_SWITCH_STATEMENT {
-        cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        cond, cond_ok := ir_lower_expr(op.condition, ctx, active_usings.*, active_aliases.*);
         if !cond_ok return false;
         if !op.then_block {
           ir_set_diagnostic(state, "IR lowering: switch statement missing body", stmt);
@@ -438,11 +436,11 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           sw_case.falls_through = case_node.marked_as_fallthrough;
           sw_case.body = New(IR_Block);
           if case_node.condition {
-            lowered_case_cond, case_cond_ok := ir_lower_expr(case_node.condition, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+            lowered_case_cond, case_cond_ok := ir_lower_expr(case_node.condition, ctx, active_usings.*, active_aliases.*);
             if !case_cond_ok return false;
             sw_case.condition = lowered_case_cond;
           }
-          if !ir_shared_lower_block(case_node.then_block, sw_case.body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
+          if !ir_shared_lower_block(case_node.then_block, sw_case.body, ctx, allow_return_value, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
           array_add(*out_stmt.switch_cases, sw_case);
         }
 
@@ -454,17 +452,17 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         return true;
       }
 
-      cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+      cond, cond_ok := ir_lower_expr(op.condition, ctx, active_usings.*, active_aliases.*);
       if !cond_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .IF;
       out_stmt.origin_node = stmt;
       out_stmt.if_condition = cond;
       out_stmt.if_then = New(IR_Block);
-      if !ir_shared_lower_block(op.then_block, out_stmt.if_then, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
+      if !ir_shared_lower_block(op.then_block, out_stmt.if_then, ctx, allow_return_value, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
       if op.else_block {
         out_stmt.if_else = New(IR_Block);
-        if !ir_shared_lower_block(op.else_block, out_stmt.if_else, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
+        if !ir_shared_lower_block(op.else_block, out_stmt.if_else, ctx, allow_return_value, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
       }
       array_add(*out_block.statements, out_stmt);
       return true;
@@ -488,9 +486,9 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         if op.macro_expansion_procedure_call {
           return_err("IR lowering: unsupported for-loop expansion with numeric range", stmt);
         }
-        start_expr, start_ok := ir_lower_expr(op.iteration_expression, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        start_expr, start_ok := ir_lower_expr(op.iteration_expression, ctx, active_usings.*, active_aliases.*);
         if !start_ok return false;
-        end_expr, end_ok := ir_lower_expr(op.iteration_expression_right, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        end_expr, end_ok := ir_lower_expr(op.iteration_expression_right, ctx, active_usings.*, active_aliases.*);
         if !end_ok return false;
 
         if !op.ident_decl || op.ident_decl.name.count == 0 {
@@ -548,7 +546,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt.for_body = New(IR_Block);
 
       if !op.iteration_expression_right {
-        iter_source, iter_source_ok := ir_lower_expr(op.iteration_expression, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+        iter_source, iter_source_ok := ir_lower_expr(op.iteration_expression, ctx, active_usings.*, active_aliases.*);
         if !iter_source_ok return false;
         if iter_source.kind != .IDENT && iter_source.kind != .MEMBER {
           if !iterable_source_type {
@@ -596,21 +594,21 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         });
       }
 
-      if !ir_shared_lower_block(op.block, out_stmt.for_body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, scope_depth + 1) return false;
+      if !ir_shared_lower_block(op.block, out_stmt.for_body, ctx, allow_return_value, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, scope_depth + 1) return false;
       array_add(*out_block.statements, out_stmt);
       return true;
     }
 
     case .WHILE; {
       op := cast(*Code_While) stmt;
-      cond, cond_ok := ir_lower_expr(op.condition, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+      cond, cond_ok := ir_lower_expr(op.condition, ctx, active_usings.*, active_aliases.*);
       if !cond_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .WHILE;
       out_stmt.origin_node = stmt;
       out_stmt.while_condition = cond;
       out_stmt.while_body = New(IR_Block);
-      if !ir_shared_lower_block(op.block, out_stmt.while_body, input_fields, output_fields, allow_return_value, state, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, scope_depth + 1) return false;
+      if !ir_shared_lower_block(op.block, out_stmt.while_body, ctx, allow_return_value, active_usings.*, active_aliases.*, active_defer_entries.*, scope_depth + 1, scope_depth + 1) return false;
       array_add(*out_block.statements, out_stmt);
       return true;
     }
@@ -633,7 +631,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
     }
 
     case .PROCEDURE_CALL; {
-      call_expr, call_ok := ir_lower_expr(stmt, input_fields, output_fields, active_usings.*, active_aliases.*, state);
+      call_expr, call_ok := ir_lower_expr(stmt, ctx, active_usings.*, active_aliases.*);
       if !call_ok return false;
       out_stmt: IR_Stmt;
       out_stmt.kind = .CALL;
@@ -649,7 +647,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       scoped_aliases: [..] IR_Decl_Alias;
       for active_usings.* array_add(*scoped_usings, it);
       for active_aliases.* array_add(*scoped_aliases, it);
-      if !ir_shared_lower_block(nested_block, out_block, input_fields, output_fields, allow_return_value, state, scoped_usings, scoped_aliases, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
+      if !ir_shared_lower_block(nested_block, out_block, ctx, allow_return_value, scoped_usings, scoped_aliases, active_defer_entries.*, scope_depth + 1, nearest_loop_scope_depth) return false;
       return true;
     }
 
@@ -697,7 +695,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
                 expected_rhs_type = ir_shared_find_struct_member_type_by_index(ret_type, positional_index - 1);
               }
 
-              rhs, rhs_ok := ir_lower_expr(value_node, input_fields, output_fields, active_usings.*, active_aliases.*, state, expected_rhs_type);
+              rhs, rhs_ok := ir_lower_expr(value_node, ctx, active_usings.*, active_aliases.*, expected_rhs_type);
               if !rhs_ok return false;
 
               lhs_base := ir_expr_new(.IDENT);
@@ -723,7 +721,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
           }
         }
 
-        ret_expr, ret_ok := ir_lower_expr(ret_node, input_fields, output_fields, active_usings.*, active_aliases.*, state, ret_type);
+        ret_expr, ret_ok := ir_lower_expr(ret_node, ctx, active_usings.*, active_aliases.*, ret_type);
         if !ret_ok return false;
         out_stmt.return_expr = ret_expr;
       } else if op.arguments_sorted.count > 1 {
@@ -816,22 +814,20 @@ ir_shared_emit_deferred_for_exit :: (out_block: *IR_Block, active_defer_entries:
 
 ir_shared_lower_block :: (block: *Code_Block,
                           out_block: *IR_Block,
-                          input_fields: [] string,
-                          output_fields: [] string,
+                          ctx: IR_Lowering_Context,
                           allow_return_value: bool,
-                          state: *IR_Lowering_State,
                           incoming_usings: [] IR_Using_Source = .[],
                           incoming_aliases: [] IR_Decl_Alias = .[],
                           incoming_defer_entries: [] IR_Active_Defer = .[],
                           scope_depth: s64 = 0,
                           nearest_loop_scope_depth: s64 = -1) -> bool {
   return_err :: (message: string, node: *Code_Node = null) #expand {
-    ir_set_diagnostic(state, message, node);
+    ir_set_diagnostic(ctx.state, message, node);
     `return false;
   }
 
   assert(out_block != null);
-  assert(state != null);
+  assert(ctx.state != null);
   if !block return true;
   active_usings: [..] IR_Using_Source;
   for incoming_usings array_add(*active_usings, it);
@@ -847,13 +843,13 @@ ir_shared_lower_block :: (block: *Code_Block,
         return_err("IR lowering: malformed defer statement (missing block).", it);
       }
       defer_block: IR_Block;
-      if !ir_shared_lower_block(defer_node.block, *defer_block, input_fields, output_fields, allow_return_value, state, active_usings, active_aliases, active_defer_entries, scope_depth + 1, nearest_loop_scope_depth) return false;
+      if !ir_shared_lower_block(defer_node.block, *defer_block, ctx, allow_return_value, active_usings, active_aliases, active_defer_entries, scope_depth + 1, nearest_loop_scope_depth) return false;
       array_add(*active_defer_entries, .{scope_depth = scope_depth, block = defer_block});
       array_add(*local_defer_blocks, defer_block);
       continue;
     }
 
-    if !ir_shared_lower_stmt(it, out_block, input_fields, output_fields, allow_return_value, *active_usings, *active_aliases, *active_defer_entries, scope_depth, nearest_loop_scope_depth, state) return false;
+    if !ir_shared_lower_stmt(it, out_block, ctx, allow_return_value, *active_usings, *active_aliases, *active_defer_entries, scope_depth, nearest_loop_scope_depth) return false;
   }
   ir_shared_append_deferred_statements(out_block, local_defer_blocks);
   return true;
@@ -1099,7 +1095,9 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
 
   parameter_usings: [..] IR_Using_Source;
   ir_collect_parameter_using_sources(header, *parameter_usings);
-  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], header.returns.count == 1, state, parameter_usings, .[]) return out, false;
+  helper_ctx: IR_Lowering_Context;
+  helper_ctx.state = state;
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, helper_ctx, header.returns.count == 1, parameter_usings) return out, false;
   return out, true;
 }
 

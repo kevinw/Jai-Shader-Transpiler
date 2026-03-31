@@ -29,6 +29,19 @@ ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic {
     return state.first_error;
 } @jdll_export
 
+ir_canonical_callee_name :: (name: string) -> string {
+  if name.count == 0 return name;
+  i := name.count - 1;
+  while i >= 0 {
+    if name[i] == #char "." {
+      return string.{ name.count - i - 1, name.data + i + 1 };
+    }
+    if i == 0 break;
+    i -= 1;
+  }
+  return name;
+} @jdll_export
+
 #scope_module
 
 PP :: #import "Program_Print";
@@ -181,6 +194,7 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
     }
     out.kind = .STRUCT;
     out.struct_name = lowered_name;
+    out.origin = st;
     return out, true;
   }
 
@@ -196,6 +210,7 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
   if !type || type.type != .STRUCT return out, false;
 
   struct_type := cast(*Type_Info_Struct) type;
+  out.origin = struct_type;
   for *struct_type.members {
     ir_type, ir_type_ok := ir_type_from_type_info(it.type);
     if !ir_type_ok return out, false;
@@ -204,6 +219,7 @@ ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, boo
       name = it.name,
       type = ir_type,
       semantic = field_semantic,
+      source_member_index = cast(s32) it_index,
     });
   }
 
@@ -277,6 +293,7 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
   if !type || type.type != .STRUCT return out, false;
 
   st := cast(*Type_Info_Struct) type;
+  out.origin = st;
   for *st.members {
     ir_type, ir_type_ok := ir_type_from_type_info(it.type);
     if !ir_type_ok return out, false;
@@ -287,6 +304,7 @@ ir_lower_struct_with_pointer_members_from_type :: (name: string, type: *Type_Inf
       name = it.name,
       type = ir_type,
       semantic = field_semantic,
+      source_member_index = cast(s32) it_index,
     });
   }
 
@@ -298,7 +316,16 @@ ir_struct_has_field :: (s: *IR_Struct, name: string) -> bool {
   return false;
 }
 
+ir_find_field_index_in_struct :: (st: *IR_Struct, name: string) -> s32 {
+  if !st return -1;
+  for st.fields if it.name == name return cast(s32) it_index;
+  return -1;
+}
+
 ir_add_struct_unique_by_name :: (structs: *[..] IR_Struct, s: IR_Struct) {
+  if s.origin {
+    for structs.* if it.origin && it.origin == s.origin return;
+  }
   for structs.* if it.name == s.name return;
   array_add(structs, s);
 }
@@ -857,11 +884,9 @@ ir_extract_ifx_branch_expr :: (branch: *Code_Block, branch_label: string, state:
 }
 
 ir_lower_expr :: (node: *Code_Node,
-                  input_fields: [] string,
-                  output_fields: [] string,
+                  using ctx: IR_Lowering_Context,
                   active_usings: [] IR_Using_Source = .[],
                   active_aliases: [] IR_Decl_Alias = .[],
-                  state: *IR_Lowering_State = null,
                   expected_type: *Type_Info = null) -> (*IR_Expr, bool) {
   assert(node != null);
 
@@ -878,7 +903,7 @@ ir_lower_expr :: (node: *Code_Node,
         }
 
         if ir_decl_is_compile_constant(ident.resolved_declaration) && !ir_decl_is_function_constant(ident.resolved_declaration) {
-          inlined, inlined_ok := ir_lower_expr(ident.resolved_declaration.expression, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
+          inlined, inlined_ok := ir_lower_expr(ident.resolved_declaration.expression, ctx, active_usings, active_aliases, expected_type);
           if inlined_ok return inlined, true;
         }
 
@@ -895,6 +920,7 @@ ir_lower_expr :: (node: *Code_Node,
         out.left = ir_expr_new(.IDENT);
         out.left.text = "input";
         out.text = ident.name;
+        out.resolved_field_index = ir_find_field_index_in_struct(input_struct, ident.name);
         builtin_ref, builtin_ok := ir_lookup_input_builtin_ref(state, ident.name);
         if builtin_ok out.builtin_ref = builtin_ref;
         return out, true;
@@ -905,6 +931,7 @@ ir_lower_expr :: (node: *Code_Node,
         out.left = ir_expr_new(.IDENT);
         out.left.text = "o";
         out.text = ident.name;
+        out.resolved_field_index = ir_find_field_index_in_struct(output_struct, ident.name);
         return out, true;
       }
 
@@ -919,7 +946,7 @@ ir_lower_expr :: (node: *Code_Node,
           base = ir_expr_new(.IDENT);
           base.text = using_source_text;
         } else {
-          lowered_base, ok := ir_lower_expr(using_source_node, input_fields, output_fields, active_usings, active_aliases, state);
+          lowered_base, ok := ir_lower_expr(using_source_node, ctx, active_usings, active_aliases);
           if !ok return null, false;
           base = lowered_base;
         }
@@ -1024,7 +1051,7 @@ ir_lower_expr :: (node: *Code_Node,
               field_name := (cast(*Code_Ident) named.left).name;
               arg_expected_type = field_expected_type(struct_type_info, field_name);
 
-              lowered_right, right_ok := ir_lower_expr(named.right, input_fields, output_fields, active_usings, active_aliases, state, arg_expected_type);
+              lowered_right, right_ok := ir_lower_expr(named.right, ctx, active_usings, active_aliases, arg_expected_type);
               if !right_ok return null, false;
               if ir_is_builtin_shader_type_name(constructor_name) {
                 // Builtin vector/matrix constructors expect positional args only.
@@ -1032,7 +1059,7 @@ ir_lower_expr :: (node: *Code_Node,
                 continue;
               }
 
-              lowered_left, left_ok := ir_lower_expr(named.left, input_fields, output_fields, active_usings, active_aliases, state);
+              lowered_left, left_ok := ir_lower_expr(named.left, ctx, active_usings, active_aliases);
               if !left_ok return null, false;
               arg := ir_expr_new(.BINARY);
               arg.binary_operator_type = cast(Operator_Type) #char "=";
@@ -1046,7 +1073,7 @@ ir_lower_expr :: (node: *Code_Node,
           if struct_type_info && positional_index < struct_type_info.members.count {
             arg_expected_type = struct_type_info.members[positional_index].type;
           }
-          arg, ok := ir_lower_expr(source_arg, input_fields, output_fields, active_usings, active_aliases, state, arg_expected_type);
+          arg, ok := ir_lower_expr(source_arg, ctx, active_usings, active_aliases, arg_expected_type);
           if !ok return null, false;
           array_add(*out.args, arg);
           positional_index += 1;
@@ -1067,7 +1094,7 @@ ir_lower_expr :: (node: *Code_Node,
           else if info.element_type.type_valued_expression member_expected_type = info.element_type.type_valued_expression.type;
         }
         for info.array_members {
-          arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings, active_aliases, state, member_expected_type);
+          arg, ok := ir_lower_expr(it, ctx, active_usings, active_aliases, member_expected_type);
           if !ok return null, false;
           array_add(*out.args, arg);
         }
@@ -1092,11 +1119,11 @@ ir_lower_expr :: (node: *Code_Node,
         if un.subexpression && un.subexpression.kind == .IDENT {
           ident := cast(*Code_Ident) un.subexpression;
           if ident.resolved_declaration && ir_decl_is_compile_constant(ident.resolved_declaration) {
-            lowered_enum, lowered_enum_ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases, state);
+            lowered_enum, lowered_enum_ok := ir_lower_expr(un.subexpression, ctx, active_usings, active_aliases);
             return lowered_enum, lowered_enum_ok;
           }
         }
-        inner, ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases, state);
+        inner, ok := ir_lower_expr(un.subexpression, ctx, active_usings, active_aliases);
         if !ok return null, false;
         out := ir_expr_new(.UNARY);
         out.unary_op = .DEREF;
@@ -1104,7 +1131,7 @@ ir_lower_expr :: (node: *Code_Node,
         return out, true;
       }
 
-      inner, ok := ir_lower_expr(un.subexpression, input_fields, output_fields, active_usings, active_aliases, state);
+      inner, ok := ir_lower_expr(un.subexpression, ctx, active_usings, active_aliases);
       if !ok return null, false;
       out := ir_expr_new(.UNARY);
       unary_op, unary_op_ok := ir_unary_op_from_compiler_operator(un.operator_type);
@@ -1130,7 +1157,7 @@ ir_lower_expr :: (node: *Code_Node,
            left_ident.resolved_declaration && left_ident.resolved_declaration.expression &&
            (left_ident.resolved_declaration.expression.kind == .TYPE_DEFINITION ||
             left_ident.resolved_declaration.expression.kind == .ENUM) {
-          lowered_const, lowered_const_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
+          lowered_const, lowered_const_ok := ir_lower_expr(bn.right, ctx, active_usings, active_aliases, expected_type);
           if lowered_const_ok return lowered_const, true;
         }
       }
@@ -1150,7 +1177,7 @@ ir_lower_expr :: (node: *Code_Node,
         }
       }
 
-      left, left_ok := ir_lower_expr(bn.left, input_fields, output_fields, active_usings, active_aliases, state);
+      left, left_ok := ir_lower_expr(bn.left, ctx, active_usings, active_aliases);
       if !left_ok return null, false;
 
       right_expected_type: *Type_Info = null;
@@ -1168,7 +1195,7 @@ ir_lower_expr :: (node: *Code_Node,
       }
 
       if bn.operator_type == .ARRAY_SUBSCRIPT {
-        right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state);
+        right, right_ok := ir_lower_expr(bn.right, ctx, active_usings, active_aliases);
         if !right_ok return null, false;
         out := ir_expr_new(.SUBSCRIPT);
         out.left = left;
@@ -1182,7 +1209,7 @@ ir_lower_expr :: (node: *Code_Node,
         left_is_matrix := ir_type_is_matrix_like(left_type);
         right_is_matrix := ir_type_is_matrix_like(right_type);
         if left_is_matrix || right_is_matrix {
-          right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state, right_expected_type);
+          right, right_ok := ir_lower_expr(bn.right, ctx, active_usings, active_aliases, right_expected_type);
           if !right_ok return null, false;
           out := ir_expr_new(.CALL);
           out.left = ir_expr_new(.IDENT);
@@ -1238,7 +1265,7 @@ ir_lower_expr :: (node: *Code_Node,
         return null, false;
       }
 
-      right, right_ok := ir_lower_expr(bn.right, input_fields, output_fields, active_usings, active_aliases, state, right_expected_type);
+      right, right_ok := ir_lower_expr(bn.right, ctx, active_usings, active_aliases, right_expected_type);
       if !right_ok return null, false;
       out := ir_expr_new(.BINARY);
       out.binary_operator_type = bn.operator_type;
@@ -1254,7 +1281,7 @@ ir_lower_expr :: (node: *Code_Node,
         return null, false;
       }
 
-      cond, cond_ok := ir_lower_expr(if_node.condition, input_fields, output_fields, active_usings, active_aliases, state);
+      cond, cond_ok := ir_lower_expr(if_node.condition, ctx, active_usings, active_aliases);
       if !cond_ok return null, false;
 
       then_node, then_node_ok := ir_extract_ifx_branch_expr(if_node.then_block, "then", state, node);
@@ -1262,12 +1289,12 @@ ir_lower_expr :: (node: *Code_Node,
       else_node, else_node_ok := ir_extract_ifx_branch_expr(if_node.else_block, "else", state, node);
       if !else_node_ok return null, false;
 
-      then_expr, then_ok := ir_lower_expr(then_node, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
+      then_expr, then_ok := ir_lower_expr(then_node, ctx, active_usings, active_aliases, expected_type);
       if !then_ok return null, false;
 
       else_expected_type := expected_type;
       if !else_expected_type else_expected_type = then_node.type;
-      else_expr, else_ok := ir_lower_expr(else_node, input_fields, output_fields, active_usings, active_aliases, state, else_expected_type);
+      else_expr, else_ok := ir_lower_expr(else_node, ctx, active_usings, active_aliases, else_expected_type);
       if !else_ok return null, false;
 
       out := ir_expr_new(.SELECT, node);
@@ -1290,7 +1317,7 @@ ir_lower_expr :: (node: *Code_Node,
         // In that case, recover the destination type from the cast expression type.
         fallback_type := node.type;
         if !fallback_type fallback_type = expected_type;
-        inner, inner_ok := ir_lower_expr(cast_node.expression, input_fields, output_fields, active_usings, active_aliases, state, fallback_type);
+        inner, inner_ok := ir_lower_expr(cast_node.expression, ctx, active_usings, active_aliases, fallback_type);
         if !inner_ok return null, false;
         if !fallback_type return inner, true;
 
@@ -1321,7 +1348,7 @@ ir_lower_expr :: (node: *Code_Node,
         return null, false;
       }
 
-      inner, ok := ir_lower_expr(cast_node.expression, input_fields, output_fields, active_usings, active_aliases, state);
+      inner, ok := ir_lower_expr(cast_node.expression, ctx, active_usings, active_aliases);
       if !ok return null, false;
       out := ir_expr_new(.CAST, node);
       out.text = type_name;
@@ -1331,12 +1358,12 @@ ir_lower_expr :: (node: *Code_Node,
 
     case .PROCEDURE_CALL; {
       pc := cast(*Code_Procedure_Call) node;
-      callee, callee_ok := ir_lower_expr(pc.procedure_expression, input_fields, output_fields, active_usings, active_aliases, state);
+      callee, callee_ok := ir_lower_expr(pc.procedure_expression, ctx, active_usings, active_aliases);
       if !callee_ok return null, false;
       out := ir_expr_new(.CALL);
       out.left = callee;
       for pc.arguments_sorted {
-        arg, ok := ir_lower_expr(it, input_fields, output_fields, active_usings, active_aliases, state);
+        arg, ok := ir_lower_expr(it, ctx, active_usings, active_aliases);
         if !ok return null, false;
         array_add(*out.args, arg);
       }
@@ -1376,11 +1403,11 @@ ir_lower_expr :: (node: *Code_Node,
           ir_set_diagnostic(state, "IR lowering: extract target argument is missing", node);
           return null, false;
         }
-        extracted_expr, extracted_ok := ir_lower_expr(target, input_fields, output_fields, active_usings, active_aliases, state, expected_type);
+        extracted_expr, extracted_ok := ir_lower_expr(target, ctx, active_usings, active_aliases, expected_type);
         return extracted_expr, extracted_ok;
       }
 
-      from_expr, from_ok := ir_lower_expr(ex.from, input_fields, output_fields, active_usings, active_aliases, state);
+      from_expr, from_ok := ir_lower_expr(ex.from, ctx, active_usings, active_aliases);
       if !from_ok return null, false;
 
       member_name := "";
@@ -1584,12 +1611,10 @@ ir_expr_to_slang_postfix_base :: (expr: *IR_Expr) -> (string, bool) {
 }
 
 ir_expr_to_slang :: (node: *Code_Node,
-                     input_fields: [] string,
-                     output_fields: [] string,
+                     using ctx: IR_Lowering_Context,
                      active_usings: [] IR_Using_Source = .[],
-                     active_aliases: [] IR_Decl_Alias = .[],
-                     state: *IR_Lowering_State = null) -> (string, bool) {
-  expr, ok := ir_lower_expr(node, input_fields, output_fields, active_usings, active_aliases, state);
+                     active_aliases: [] IR_Decl_Alias = .[]) -> (string, bool) {
+  expr, ok := ir_lower_expr(node, ctx, active_usings, active_aliases);
   if !ok return "", false;
   text, text_ok := ir_expr_to_slang_from_ir(expr);
   if !text_ok return "", false;
@@ -1638,21 +1663,6 @@ ir_member_access_kind_from_name :: (field_name: string) -> IR_Member_Access_Kind
   return .NONE;
 }
 
-ir_canonical_callee_name :: (name: string) -> string {
-  if name.count == 0 return name;
-  i := name.count - 1;
-  while i >= 0 {
-    if name[i] == #char "." {
-      out: string;
-      out.data = name.data + i + 1;
-      out.count = name.count - i - 1;
-      return out;
-    }
-    if i == 0 break;
-    i -= 1;
-  }
-  return name;
-}
 
 ir_callee_matches_builtin :: (callee: string, builtin: string) -> bool {
   if callee == builtin return true;
@@ -1772,6 +1782,7 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
   if !type || type.type != .STRUCT return out, false;
 
   st := cast(*Type_Info_Struct) type;
+  out.origin = st;
   for *st.members {
     ir_type, ir_type_ok := ir_type_from_type_info(it.type);
     if !ir_type_ok return out, false;
@@ -1783,6 +1794,7 @@ ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct,
       name = it.name,
       type = ir_type,
       semantic = semantic,
+      source_member_index = cast(s32) it_index,
     });
   }
 
@@ -2229,7 +2241,13 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
   ir_collect_parameter_using_sources(ctx.header, *parameter_usings);
   for out.input.fields array_add(*input_field_names, it.name);
   for out.output.fields array_add(*output_field_names, it.name);
-  if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
+  lowering_ctx: IR_Lowering_Context;
+  lowering_ctx.input_fields = input_field_names;
+  lowering_ctx.output_fields = output_field_names;
+  lowering_ctx.state = *state;
+  lowering_ctx.input_struct = *out.input;
+  lowering_ctx.output_struct = *out.output;
+  if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, lowering_ctx, true, parameter_usings) {
       return_err("failed while lowering function body");
   }
   function_constant_seen_headers: [..] *Code_Procedure_Header;
@@ -2344,7 +2362,13 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   if out_type_is_struct {
     for out.output.fields array_add(*output_field_names, it.name);
   }
-  if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, input_field_names, output_field_names, true, *state, parameter_usings, .[]) {
+  lowering_ctx: IR_Lowering_Context;
+  lowering_ctx.input_fields = input_field_names;
+  lowering_ctx.output_fields = output_field_names;
+  lowering_ctx.state = *state;
+  lowering_ctx.input_struct = *out.input;
+  lowering_ctx.output_struct = *out.output;
+  if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, lowering_ctx, true, parameter_usings) {
       return_err("failed while lowering function body", node=ctx.header.body_or_null.block);
   }
   function_constant_seen_headers: [..] *Code_Procedure_Header;
@@ -2445,7 +2469,11 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
   parameter_usings: [..] IR_Using_Source;
   ir_collect_parameter_using_sources(header, *parameter_usings);
   for out.input.fields array_add(*input_field_names, it.name);
-  if !ir_shared_lower_block(header.body_or_null.block, *out.body, input_field_names, .[], false, *state, parameter_usings, .[]) {
+  lowering_ctx: IR_Lowering_Context;
+  lowering_ctx.input_fields = input_field_names;
+  lowering_ctx.state = *state;
+  lowering_ctx.input_struct = *out.input;
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, lowering_ctx, false, parameter_usings) {
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
   function_constant_seen_headers: [..] *Code_Procedure_Header;
@@ -2502,7 +2530,9 @@ ir_lower_task_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
 
   parameter_usings: [..] IR_Using_Source;
   ir_collect_parameter_using_sources(header, *parameter_usings);
-  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], false, *state, parameter_usings, .[]) {
+  lowering_ctx: IR_Lowering_Context;
+  lowering_ctx.state = *state;
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, lowering_ctx, false, parameter_usings) {
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
 
@@ -2560,7 +2590,9 @@ ir_lower_mesh_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
 
   parameter_usings: [..] IR_Using_Source;
   ir_collect_parameter_using_sources(header, *parameter_usings);
-  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], false, *state, parameter_usings, .[]) {
+  lowering_ctx: IR_Lowering_Context;
+  lowering_ctx.state = *state;
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, lowering_ctx, false, parameter_usings) {
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
 

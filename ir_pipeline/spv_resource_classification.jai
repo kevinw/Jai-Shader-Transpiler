@@ -24,15 +24,14 @@ split_dotted_path :: (path: string, out_segments: *[..] string) {
   }
 }
 
-struct_has_pointer_fields_recursive :: (extra_structs: [] IR_Struct, struct_name: string, depth := 0) -> bool {
+struct_has_pointer_fields_recursive :: (extra_structs: [] IR_Struct, struct_name: string, origin: *Type_Info_Struct = null, depth := 0) -> bool {
   if depth > 24 return false;
   st: *IR_Struct = null;
-  for *extra_structs {
-    candidate := it;
-    if candidate.name == struct_name {
-      st = candidate;
-      break;
-    }
+  if origin {
+    for *extra_structs if it.origin && it.origin == origin { st = it; break; }
+  }
+  if !st {
+    for *extra_structs if it.name == struct_name { st = it; break; }
   }
   if !st return false;
   for st.fields {
@@ -40,10 +39,14 @@ struct_has_pointer_fields_recursive :: (extra_structs: [] IR_Struct, struct_name
     if field.type.kind == .POINTER return true;
     nested_field_struct_name := field.type.struct_name;
     if nested_field_struct_name.count == 0 continue;
+    nested_origin := field.type.origin;
     for *extra_structs {
       nested := it;
-      if nested.name != nested_field_struct_name continue;
-      if struct_has_pointer_fields_recursive(extra_structs, nested_field_struct_name, depth + 1) return true;
+      found := false;
+      if nested_origin && nested.origin && nested.origin == nested_origin { found = true; }
+      else if nested.name == nested_field_struct_name { found = true; }
+      if !found continue;
+      if struct_has_pointer_fields_recursive(extra_structs, nested_field_struct_name, nested_origin, depth + 1) return true;
       break;
     }
   }

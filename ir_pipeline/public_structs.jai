@@ -52,17 +52,20 @@ IR_Type :: struct {
   pointee_element_display_name: string;
   pointee_element_struct_name: string;
   pointee_array_count: s64;
+  origin: *Type_Info_Struct;           // non-null when kind==STRUCT
 }
 
 IR_Field :: struct {
   name: string;
   type: IR_Type;
   semantic: string;
+  source_member_index: s32 = -1;     // index in origin.members
 }
 
 IR_Struct :: struct {
   name: string;
   fields: [..] IR_Field;
+  origin: *Type_Info_Struct;          // null for synthetic structs
 }
 
 IR_Function_Constant_Type :: enum {
@@ -280,6 +283,7 @@ IR_Expr :: struct {
   left: *IR_Expr;
   right: *IR_Expr;
   args: [..] *IR_Expr;
+  resolved_field_index: s32 = -1;    // resolved index into parent IR_Struct.fields
 }
 
 IR_Stmt_Kind :: enum {
@@ -363,6 +367,14 @@ IR_Input_Builtin_Field :: struct {
 IR_Lowering_State :: struct {
   first_error: IR_Diagnostic;
   input_builtin_fields: [..] IR_Input_Builtin_Field;
+}
+
+IR_Lowering_Context :: struct {
+  input_fields: [] string;
+  output_fields: [] string;
+  state: *IR_Lowering_State;
+  input_struct: *IR_Struct;
+  output_struct: *IR_Struct;
 }
 
 Toolchain_Target :: enum { METAL; VULKAN_GLSL; }

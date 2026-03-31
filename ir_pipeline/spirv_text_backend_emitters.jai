@@ -400,6 +400,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
       field_index := find_field_index_by_name(current_struct, segments[i]);
       if field_index < 0 return_err("SPIR-V backend: field '%' not found in '%' while resolving '%' (segment %).", segments[i], current_struct_name, it.name, i);
       field := current_struct.fields[field_index];
+      assert(field.source_member_index < 0 || field.source_member_index == cast(s32) field_index, "pointer path: field index mismatch for '%.%' (name lookup %, source_member_index %)", current_struct_name, segments[i], field_index, field.source_member_index);
       consumed_path = tprint("%.%", consumed_path, segments[i]);
 
       if field.type.kind == .STRUCT &&
@@ -757,6 +758,7 @@ emit_graphics_physical_pointer_abi_binary :: (stage: IR_SPV_Gen_Stage,
       field_index := find_field_index_by_name(current_struct, segments[i]);
       if field_index < 0 return_err("SPIR-V backend: field '%' not found in '%' while resolving '%' (segment %).", segments[i], current_struct_name, it.name, i);
       field := current_struct.fields[field_index];
+      assert(field.source_member_index < 0 || field.source_member_index == cast(s32) field_index, "pointer path: field index mismatch for '%.%' (name lookup %, source_member_index %)", current_struct_name, segments[i], field_index, field.source_member_index);
       consumed_path = tprint("%.%", consumed_path, segments[i]);
 
       if field.type.kind == .STRUCT &&
@@ -1148,6 +1150,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
       }
 
       offset = align_up(offset, field_align);
+      assert(field.source_member_index < 0 || it_index == 0 || field.source_member_index > struct_def.fields[it_index-1].source_member_index || struct_def.fields[it_index-1].source_member_index < 0, "uniform field collection: non-monotonic source_member_index for '%.%'", struct_name, field.name);
       array_add(*uniform_block.fields, .{
         name = field.name,
         index = uniform_block.fields.count,
@@ -1484,6 +1487,7 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
       }
 
       offset = align_up(offset, field_align);
+      assert(field.source_member_index < 0 || it_index == 0 || field.source_member_index > struct_def.fields[it_index-1].source_member_index || struct_def.fields[it_index-1].source_member_index < 0, "uniform field collection(binary): non-monotonic source_member_index for '%.%'", struct_name, field.name);
       array_add(*uniform_block.fields, .{
         name = field.name,
         index = uniform_block.fields.count,
