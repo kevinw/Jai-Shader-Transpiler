@@ -119,10 +119,14 @@ IR_Compute_Shader :: struct {
 
 IR_Task_Shader :: struct {
   using #as ir_shader: IR_Shader;
+  payload_struct_name: string;
+  payload_size_bytes: s64;
 }
 
 IR_Mesh_Shader :: struct {
   using #as ir_shader: IR_Shader;
+  payload_struct_name: string;
+  payload_size_bytes: s64;
 }
 
 IR_Compute_Buffer :: struct {
@@ -213,10 +217,10 @@ IR_Call_Builtin_Kind :: enum {
   DISCARD;
   TASK_SET_MESH_GROUPS;
   TASK_GROUP_ID_X;
-  TASK_PAYLOAD_STORE_U32;
+  TASK_PAYLOAD_PTR;
   MESH_SET_OUTPUT_COUNTS;
   MESH_GROUP_ID_X;
-  MESH_PAYLOAD_LOAD_U32;
+  MESH_PAYLOAD_PTR;
   MESH_SET_VERTEX_POSITION;
   MESH_SET_VERTEX_COLOR;
   MESH_SET_TRIANGLE;

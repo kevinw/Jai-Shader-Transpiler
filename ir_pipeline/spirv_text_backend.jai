@@ -405,10 +405,10 @@ call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee_matches_builtin(callee, "discard") return .DISCARD;
   if callee_matches_builtin(callee, "task_set_mesh_groups") return .TASK_SET_MESH_GROUPS;
   if callee_matches_builtin(callee, "task_group_id_x") return .TASK_GROUP_ID_X;
-  if callee_matches_builtin(callee, "task_payload_store_u32") return .TASK_PAYLOAD_STORE_U32;
+  if callee_matches_builtin(callee, "task_payload_ptr") return .TASK_PAYLOAD_PTR;
   if callee_matches_builtin(callee, "mesh_set_output_counts") return .MESH_SET_OUTPUT_COUNTS;
   if callee_matches_builtin(callee, "mesh_group_id_x") return .MESH_GROUP_ID_X;
-  if callee_matches_builtin(callee, "mesh_payload_load_u32") return .MESH_PAYLOAD_LOAD_U32;
+  if callee_matches_builtin(callee, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
   if callee_matches_builtin(callee, "mesh_set_vertex_position") return .MESH_SET_VERTEX_POSITION;
   if callee_matches_builtin(callee, "mesh_set_vertex_color") return .MESH_SET_VERTEX_COLOR;
   if callee_matches_builtin(callee, "mesh_set_triangle") return .MESH_SET_TRIANGLE;
@@ -476,10 +476,10 @@ call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
   if kind == .WRITE_3D return "write_3d";
   if kind == .TASK_SET_MESH_GROUPS return "task_set_mesh_groups";
   if kind == .TASK_GROUP_ID_X return "task_group_id_x";
-  if kind == .TASK_PAYLOAD_STORE_U32 return "task_payload_store_u32";
+  if kind == .TASK_PAYLOAD_PTR return "task_payload_ptr";
   if kind == .MESH_SET_OUTPUT_COUNTS return "mesh_set_output_counts";
   if kind == .MESH_GROUP_ID_X return "mesh_group_id_x";
-  if kind == .MESH_PAYLOAD_LOAD_U32 return "mesh_payload_load_u32";
+  if kind == .MESH_PAYLOAD_PTR return "mesh_payload_ptr";
   if kind == .MESH_SET_VERTEX_POSITION return "mesh_set_vertex_position";
   if kind == .MESH_SET_VERTEX_COLOR return "mesh_set_vertex_color";
   if kind == .MESH_SET_TRIANGLE return "mesh_set_triangle";
@@ -783,6 +783,11 @@ IR_SPV_PS_Ptr_To_Ptr :: struct {
   ptr_to_ptr_type_id: s64;
 }
 
+IR_SPV_Payload_Field_Ptr_Type :: struct {
+  kind: IR_SPV_Gen_Type;
+  type_id: s64;
+}
+
 IR_SPV_Gen_State :: struct {
   next_id: s64;
   locals: [..] IR_SPV_Gen_Local;
@@ -964,14 +969,17 @@ IR_SPV_Gen_State :: struct {
   id_mesh_triangle_indices_var: s64;
   id_task_payload_struct: s64;
   id_ptr_task_payload_struct: s64;
-  id_ptr_task_payload_uint: s64;
   id_task_payload_var: s64;
+  task_payload_field_ptr_types: [..] IR_SPV_Payload_Field_Ptr_Type;
+  payload_struct_name: string;
+  payload_size_bytes: s64;
+  payload_memory_length: s64;
 
   bound_value: u32;
   emit_text: bool;
   record_binary: bool;
-  uses_task_payload_u32: bool;
-  uses_mesh_payload_u32: bool;
+  uses_task_payload: bool;
+  uses_mesh_payload: bool;
 }
 
 BINDLESS_SAMPLED_TEXTURE_ARRAY_LEN :: 32;
@@ -1701,6 +1709,159 @@ find_function :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Function {
   return null;
 }
 find_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Struct { return find_by_name(*s.extra_structs, name); }
+
+find_struct_field_by_name :: (st: *IR_Struct, name: string) -> (*IR_Field, s64) {
+  if !st return null, -1;
+  for st.fields {
+    if it.name == name return st.fields.data + it_index, it_index;
+  }
+  return null, -1;
+}
+
+payload_builtin_kind_from_call :: (call_expr: *IR_Expr) -> IR_Call_Builtin_Kind {
+  if !call_expr || call_expr.kind != .CALL return .NONE;
+  builtin_kind := call_builtin_kind_for_expr(call_expr);
+  if builtin_kind == .TASK_PAYLOAD_PTR return .TASK_PAYLOAD_PTR;
+  if builtin_kind == .MESH_PAYLOAD_PTR return .MESH_PAYLOAD_PTR;
+  callee_name := "";
+  if call_expr.call_resolved_name.count != 0 callee_name = canonical_callee_name(call_expr.call_resolved_name);
+  else if call_expr.left && (call_expr.left.kind == .IDENT || call_expr.left.kind == .MEMBER) callee_name = canonical_callee_name(call_expr.left.text);
+  if callee_name.count == 0 {
+    call_text := canonical_callee_name(expr_text(call_expr));
+    if contains(call_text, "task_payload_ptr()") return .TASK_PAYLOAD_PTR;
+    if contains(call_text, "mesh_payload_ptr()") return .MESH_PAYLOAD_PTR;
+  }
+  if callee_matches_builtin(callee_name, "task_payload_ptr") return .TASK_PAYLOAD_PTR;
+  if callee_matches_builtin(callee_name, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
+  return .NONE;
+}
+
+payload_struct_name_from_call_expr :: (call_expr: *IR_Expr) -> (string, IR_Call_Builtin_Kind, bool) {
+  builtin_kind := payload_builtin_kind_from_call(call_expr);
+  if builtin_kind == .NONE return "", .NONE, false;
+  if call_expr.result_type.kind != .POINTER || !call_expr.result_type.pointee_is_struct || call_expr.result_type.pointee_struct_name.count == 0 {
+    return "", .NONE, false;
+  }
+  return call_expr.result_type.pointee_struct_name, builtin_kind, true;
+}
+
+payload_field_ptr_type_id :: (s: *IR_SPV_Gen_State, kind: IR_SPV_Gen_Type) -> s64 {
+  assert(s != null);
+  for s.task_payload_field_ptr_types {
+    if it.kind == kind return it.type_id;
+  }
+  type_id := new_id(s);
+  array_add(*s.task_payload_field_ptr_types, .{kind = kind, type_id = type_id});
+  return type_id;
+}
+
+payload_register_struct_usage :: (s: *IR_SPV_Gen_State, struct_name: string) -> (ok: bool, diag: IR_Diagnostic) {
+  if !s return false, make_diag("payload registration requires state.");
+  if struct_name.count == 0 return false, make_diag("payload struct is missing a name.");
+  if s.payload_struct_name.count == 0 {
+    s.payload_struct_name = struct_name;
+    return true, {};
+  }
+  if s.payload_struct_name != struct_name return false, make_diag("mesh payload type mismatch: saw '%' after '%'.", struct_name, s.payload_struct_name);
+  return true, {};
+}
+
+payload_fallback_struct_name :: (s: *IR_SPV_Gen_State) -> string {
+  if !s return "";
+  if s.extra_structs.count == 1 return s.extra_structs[0].name;
+  if s.payload_struct_name.count != 0 return s.payload_struct_name;
+  return "";
+}
+
+payload_subscript_has_builtin_base :: (expr: *IR_Expr) -> bool {
+  text := canonical_callee_name(expr_text(expr));
+  if contains(text, "task_payload_ptr()") return true;
+  if contains(text, "mesh_payload_ptr()") return true;
+  cursor := expr;
+  while cursor {
+    if cursor.kind == .CALL {
+      return payload_builtin_kind_from_call(cursor) != .NONE;
+    }
+    if cursor.kind != .SUBSCRIPT return false;
+    cursor = cursor.left;
+  }
+  return false;
+}
+
+payload_field_ptr_from_struct_name :: (s: *IR_SPV_Gen_State, struct_name: string, builtin_kind: IR_Call_Builtin_Kind, field_name: string) -> (ptr_id: s64, field_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (message: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(message, ..args); }
+  if !struct_name.count return_err("payload access requires task_payload_ptr(T) or mesh_payload_ptr(T).");
+  if s.stage != .TASK && s.stage != .MESH return_err("payload access is only valid in task or mesh stages.");
+  if builtin_kind != .TASK_PAYLOAD_PTR && builtin_kind != .MESH_PAYLOAD_PTR return_err("payload access requires task_payload_ptr(T) or mesh_payload_ptr(T).");
+  register_ok, register_diag := payload_register_struct_usage(s, struct_name);
+  if !register_ok return 0, .UNKNOWN, false, register_diag;
+
+  st := find_struct(s, struct_name);
+  if !st return_err("payload struct '%' was not collected into IR.", struct_name);
+  field, field_index := find_struct_field_by_name(st, field_name);
+  if !field return_err("payload struct '%' has no field '%'.", struct_name, field_name);
+
+  field_kind := spv_kind_from_ir_type(field.type);
+  if field_kind == .UNKNOWN || field_kind == .STRUCT return_err("payload field '%.%' type '%' is not yet supported.", struct_name, field_name, field.type.display_name);
+
+  ptr_type_id := payload_field_ptr_type_id(s, field_kind);
+  ptr_id := new_id(s);
+  spv_emit_access_chain(s, ptr_id, ptr_type_id, s.id_task_payload_var, .[get_i32_const(s, cast(s32) field_index)]);
+
+  if builtin_kind == .TASK_PAYLOAD_PTR s.uses_task_payload = true;
+  if builtin_kind == .MESH_PAYLOAD_PTR s.uses_mesh_payload = true;
+  return ptr_id, field_kind, true, {};
+}
+
+payload_field_ptr_from_call :: (s: *IR_SPV_Gen_State, call_expr: *IR_Expr, field_name: string) -> (ptr_id: s64, field_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  struct_name, builtin_kind, struct_ok := payload_struct_name_from_call_expr(call_expr);
+  if !struct_ok && call_expr && call_expr.result_type.kind == .POINTER && call_expr.result_type.pointee_is_struct && call_expr.result_type.pointee_struct_name.count != 0 {
+    struct_name = call_expr.result_type.pointee_struct_name;
+    struct_ok = true;
+    if s.stage == .TASK builtin_kind = .TASK_PAYLOAD_PTR;
+    if s.stage == .MESH builtin_kind = .MESH_PAYLOAD_PTR;
+  }
+  if !struct_ok && (s.stage == .TASK || s.stage == .MESH) {
+    struct_name = payload_fallback_struct_name(s);
+    if struct_name.count != 0 {
+      struct_ok = true;
+      if s.stage == .TASK builtin_kind = .TASK_PAYLOAD_PTR;
+      if s.stage == .MESH builtin_kind = .MESH_PAYLOAD_PTR;
+    }
+  }
+  if !struct_ok return 0, .UNKNOWN, false, make_diag("payload access requires task_payload_ptr(T) or mesh_payload_ptr(T).");
+  out_ptr, out_type, out_ok, out_diag := payload_field_ptr_from_struct_name(s, struct_name, builtin_kind, field_name);
+  return out_ptr, out_type, out_ok, out_diag;
+}
+
+payload_field_ptr_from_expr :: (s: *IR_SPV_Gen_State, base_expr: *IR_Expr, field_name: string) -> (ptr_id: s64, field_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  if !base_expr return 0, .UNKNOWN, false, make_diag("payload access base is null.");
+  if base_expr.kind == .CALL {
+    out_ptr, out_type, out_ok, out_diag := payload_field_ptr_from_call(s, base_expr, field_name);
+    return out_ptr, out_type, out_ok, out_diag;
+  }
+  if base_expr.kind == .SUBSCRIPT {
+    payload_struct_name := "";
+    if base_expr.result_type.kind == .POINTER && base_expr.result_type.pointee_is_struct && base_expr.result_type.pointee_struct_name.count != 0 {
+      payload_struct_name = base_expr.result_type.pointee_struct_name;
+    } else if base_expr.result_type.kind == .STRUCT && base_expr.result_type.struct_name.count != 0 {
+      payload_struct_name = base_expr.result_type.struct_name;
+    }
+    if payload_struct_name.count == 0 && (s.stage == .TASK || s.stage == .MESH) && payload_subscript_has_builtin_base(base_expr) {
+      payload_struct_name = payload_fallback_struct_name(s);
+    }
+    if payload_struct_name.count != 0 {
+      builtin_kind: IR_Call_Builtin_Kind;
+      if s.stage == .TASK builtin_kind = .TASK_PAYLOAD_PTR;
+      else builtin_kind = .MESH_PAYLOAD_PTR;
+      out_ptr, out_type, out_ok, out_diag := payload_field_ptr_from_struct_name(s, payload_struct_name, builtin_kind, field_name);
+      return out_ptr, out_type, out_ok, out_diag;
+    }
+    return 0, .UNKNOWN, false, make_diag("payload subscript base unresolved: result_kind=% struct='%'.", base_expr.result_type.kind, base_expr.result_type.struct_name);
+  }
+  return 0, .UNKNOWN, false, make_diag("payload access requires task_payload_ptr(T) or mesh_payload_ptr(T); got base kind=% text='%'.", base_expr.kind, expr_text(base_expr));
+}
+
 find_local_struct :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SPV_Gen_Local_Struct {
   i := s.local_structs.count - 1;
   while i >= 0 {
@@ -2694,7 +2855,16 @@ copy_local_struct_fields :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Struct
     if src_field.type != it.type {
       return false, make_diag("struct field '%' type mismatch.", it.name);
     }
+    if src_field.ptr_id == 0 {
+      return false, make_diag("source struct field '%.%' has null local storage.", src.type_name, it.name);
+    }
+    if it.ptr_id == 0 {
+      return false, make_diag("destination struct field '%.%' has null local storage.", dst.type_name, it.name);
+    }
     type_id := type_id_from_kind(s, it.type);
+    if type_id == 0 {
+      return false, make_diag("struct field '%.%' type '%' has no SPIR-V type id.", dst.type_name, it.name, it.type);
+    }
     value_id := add_op(s, new_id(s), "OpLoad", type_id, src_field.ptr_id);
     add_op(s, "OpStore", it.ptr_id, value_id);
   }
@@ -2810,6 +2980,17 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
     return copy_ok, copy_diag;
   }
 
+  if expr.kind == .CALL && expr.left && expr.left.kind == .IDENT {
+    helper := find_function(s, expr.left.text);
+    if helper && helper.return_type.kind == .STRUCT {
+      helper_return_struct_name := spv_struct_name_from_ir_type(helper.return_type);
+      if helper_return_struct_name == dst.type_name {
+        call_ok, call_diag := eval_inline_function_to_struct(s, helper, expr.args, dst);
+        return call_ok, call_diag;
+      }
+    }
+  }
+
   expr_struct_name := spv_struct_name_from_ir_expr_result(expr);
   if expr.kind != .CONSTRUCTOR || expr_struct_name != dst.type_name {
     return false, make_diag("unsupported struct init expression for type '%'.", dst.type_name);
@@ -2881,6 +3062,9 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
     if !value_ok return false, value_diag;
     if value_type != it.type {
       return false, make_diag("struct constructor field '%' type mismatch.", it.name);
+    }
+    if it.ptr_id == 0 {
+      return false, make_diag("struct constructor field '%' in '%' has null local storage.", it.name, dst.type_name);
     }
     add_op(s, "OpStore", it.ptr_id, value_id);
   }
@@ -4921,19 +5105,12 @@ eval_inline_function_to_struct :: (s: *IR_SPV_Gen_State, helper: *IR_Function, c
     if !expr {
       return false, true, make_diag("helper '%' must return a struct value.", helper_name);
     }
-    if expr.kind != .IDENT return false, false, diag;
     dst_struct := find_local_struct(s, dst_name);
     if !dst_struct dst_struct = out_struct;
-    src_struct := find_local_struct(s, expr.text);
-    if !src_struct {
-      return false, true, make_diag("helper '%' return identifier '%' is not a local struct value.", helper_name, expr.text);
+    init_ok, init_diag := init_local_struct_from_expr(s, dst_struct, expr);
+    if !init_ok {
+      return false, true, make_diag("helper '%' return struct init failed: %", helper_name, init_diag.message);
     }
-    if src_struct.type_name != out_struct_type {
-      diag.message = tprint("helper '%' return struct type mismatch ('%' vs '%').", helper_name, src_struct.type_name, out_struct_type);
-      return false, true, diag;
-    }
-    copy_ok, copy_diag := copy_local_struct_fields(s, dst_struct, src_struct);
-    if !copy_ok return false, true, copy_diag;
     return true, true, diag;
   }
 
@@ -5143,6 +5320,20 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if expr.builtin_ref.kind == .GROUP_INDEX && expr.builtin_ref.component == -1 {
         return load_builtin_u32(s, s.id_gl_local_invocation_index), .UINT, true, diag;
       }
+      if expr.left && (expr.left.kind == .CALL || expr.left.kind == .SUBSCRIPT) {
+        payload_ptr, payload_type, payload_ok, payload_diag := payload_field_ptr_from_expr(s, expr.left, expr.text);
+        if payload_ok {
+          value_type_id := type_id_from_kind(s, payload_type);
+          if value_type_id == 0 return_err("unsupported payload field type for '%'.", path);
+          value_id := new_id(s);
+          emit_load(s, value_id, value_type_id, payload_ptr, payload_type);
+          return value_id, payload_type, true, diag;
+        }
+        if (expr.left.kind == .CALL && payload_builtin_kind_from_call(expr.left) != .NONE) ||
+           (expr.left.kind == .SUBSCRIPT && payload_subscript_has_builtin_base(expr.left)) {
+          return 0, .UNKNOWN, false, payload_diag;
+        }
+      }
       if expr.left && expr.left.kind == .CALL && expr.left.left && expr.left.left.kind == .IDENT {
         call_builtin := call_builtin_kind_for_expr(expr.left);
         if call_builtin == .NONE {
@@ -5180,8 +5371,10 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           if !temp_struct return_err("inline helper result struct '%' went missing.", temp_name);
           field := find_local_struct_field(temp_struct, expr.text);
           if !field return_err("helper call return type '%' has no field '%'.", helper_ret_text, expr.text);
+          if field.ptr_id == 0 return_err("helper call return field '%.%' has null local storage.", temp_name, expr.text);
           value_id := new_id(s);
           type_id := type_id_from_kind(s, field.type);
+          if type_id == 0 return_err("helper call return field '%.%' type '%' has no SPIR-V type id.", temp_name, expr.text, field.type);
           add_op(s, value_id, "OpLoad", type_id, field.ptr_id);
           return value_id, field.type, true, diag;
         }
@@ -5805,21 +5998,15 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if expr.args.count != 0 return_err("task_group_id_x expects 0 args.");
         return load_builtin_vec3_component(s, s.id_gl_workgroup_id, 0), .UINT, true, diag;
       }
-      if builtin_kind == .TASK_PAYLOAD_STORE_U32 {
-        return_err("task_payload_store_u32 has no return value and must be used as a statement.");
+      if builtin_kind == .TASK_PAYLOAD_PTR {
+        return_err("task_payload_ptr(T) must be used through direct field access, e.g. task_payload_ptr(T).field.");
       }
       if builtin_kind == .MESH_GROUP_ID_X {
         if expr.args.count != 0 return_err("mesh_group_id_x expects 0 args.");
         return load_builtin_vec3_component(s, s.id_gl_workgroup_id, 0), .UINT, true, diag;
       }
-      if builtin_kind == .MESH_PAYLOAD_LOAD_U32 {
-        if expr.args.count != 0 return_err("mesh_payload_load_u32 expects 0 args.");
-        payload_ptr := new_id(s);
-        spv_emit_access_chain(s, payload_ptr, s.id_ptr_task_payload_uint, s.id_task_payload_var, .[get_i32_const(s, 0)]);
-        payload_value := new_id(s);
-        spv_emit_load(s, payload_value, s.id_uint, payload_ptr);
-        s.uses_mesh_payload_u32 = true;
-        return payload_value, .UINT, true, diag;
+      if builtin_kind == .MESH_PAYLOAD_PTR {
+        return_err("mesh_payload_ptr(T) must be used through direct field access, e.g. mesh_payload_ptr(T).field.");
       }
       if builtin_kind == .ATOMIC_ADD_U32 {
         atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicIAdd", expr.args);
@@ -7108,10 +7295,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if !task_ok return false, false, task_diag;
         return true, true, diag;
       }
-      if builtin_kind == .TASK_PAYLOAD_STORE_U32 {
-        payload_ok, payload_diag := emit_task_payload_store_u32_call(s, stmt.call_expr.args);
-        if !payload_ok return false, false, payload_diag;
-        return true, false, diag;
+      if builtin_kind == .TASK_PAYLOAD_PTR || builtin_kind == .MESH_PAYLOAD_PTR {
+        return_err("% has no direct side effects and must be used through field access.", call_builtin_kind_to_name(builtin_kind));
       }
       if builtin_kind == .MESH_SET_OUTPUT_COUNTS {
         mesh_ok, mesh_diag := emit_mesh_set_output_counts_call(s, stmt.call_expr.args);

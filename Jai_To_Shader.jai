@@ -641,12 +641,16 @@ Transpiled_Mesh_Source_Bundle :: struct {
     task_source: string;
     mesh_source: string;
     pixel_source: string;
+    payload_size_bytes: s64;
+    payload_memory_length: s64;
 }
 
 Transpiled_Mesh_Pipeline :: struct {
     task_source: string;
     mesh_source: string;
     pixel_source: string;
+    payload_size_bytes: s64;
+    payload_memory_length: s64;
     meta: Shader_Meta;
 }
 
@@ -753,7 +757,14 @@ get_transpiled_mesh_pipeline :: (
         return tprint(#string END
 G :: #import,file "%";
 bundle := %;
-return Transpiled_Mesh_Pipeline.{task_source = bundle.task_source, mesh_source = bundle.mesh_source, pixel_source = bundle.pixel_source, meta = %};
+return Transpiled_Mesh_Pipeline.{
+  task_source = bundle.task_source,
+  mesh_source = bundle.mesh_source,
+  pixel_source = bundle.pixel_source,
+  payload_size_bytes = bundle.payload_size_bytes,
+  payload_memory_length = bundle.payload_memory_length,
+  meta = %,
+};
 END, compute_path_to_shader_bucket_module(get_current_workspace()), source_expr, meta_expr);
     };
 }
@@ -807,7 +818,14 @@ get_transpiled_task_mesh_pipeline :: (
         return tprint(#string END
 G :: #import,file "%";
 bundle := %;
-return Transpiled_Mesh_Pipeline.{task_source = bundle.task_source, mesh_source = bundle.mesh_source, pixel_source = bundle.pixel_source, meta = %};
+return Transpiled_Mesh_Pipeline.{
+  task_source = bundle.task_source,
+  mesh_source = bundle.mesh_source,
+  pixel_source = bundle.pixel_source,
+  payload_size_bytes = bundle.payload_size_bytes,
+  payload_memory_length = bundle.payload_memory_length,
+  meta = %,
+};
 END, compute_path_to_shader_bucket_module(get_current_workspace()), source_expr, meta_expr);
     };
 }
@@ -1095,6 +1113,8 @@ JST_Mesh_Source_Bundle_Lookup :: struct {
     task_source: string;
     mesh_source: string;
     pixel_source: string;
+    payload_size_bytes: s64;
+    payload_memory_length: s64;
 }
 
 #placeholder lookup_transpiled_impl;
@@ -1110,6 +1130,8 @@ lookup_transpiled_mesh :: (target_name: string, primary_name: string, secondary_
         task_source = value.task_source,
         mesh_source = value.mesh_source,
         pixel_source = value.pixel_source,
+        payload_size_bytes = value.payload_size_bytes,
+        payload_memory_length = value.payload_memory_length,
     };
 }
 END);
@@ -2318,6 +2340,139 @@ ir_source_file_from_mesh_context :: (mesh_ctx: *Shader_Write_Mesh_Context) -> st
   return tprint("% | %", mesh_file, fragment_file);
 }
 
+mesh_payload_builtin_from_expr :: (expr: *IR_Expr) -> IR_Call_Builtin_Kind {
+  if !expr || expr.kind != .CALL return .NONE;
+  if expr.call_builtin_kind == .TASK_PAYLOAD_PTR return .TASK_PAYLOAD_PTR;
+  if expr.call_builtin_kind == .MESH_PAYLOAD_PTR return .MESH_PAYLOAD_PTR;
+  callee_name := expr.call_resolved_name;
+  if callee_name.count == 0 && expr.left && (expr.left.kind == .IDENT || expr.left.kind == .MEMBER) callee_name = expr.left.text;
+  if callee_name.count == 0 {
+    call_text := canonical_callee_name(expr_text(expr));
+    if contains(call_text, "task_payload_ptr()") return .TASK_PAYLOAD_PTR;
+    if contains(call_text, "mesh_payload_ptr()") return .MESH_PAYLOAD_PTR;
+  }
+  if canonical_callee_name(callee_name) == "task_payload_ptr" return .TASK_PAYLOAD_PTR;
+  if canonical_callee_name(callee_name) == "mesh_payload_ptr" return .MESH_PAYLOAD_PTR;
+  return .NONE;
+}
+
+mesh_payload_struct_name_in_expr :: (expr: *IR_Expr, out_name: *string) -> bool {
+  if !expr return true;
+
+  if expr.kind == .CALL {
+    builtin_kind := mesh_payload_builtin_from_expr(expr);
+    if builtin_kind == .TASK_PAYLOAD_PTR || builtin_kind == .MESH_PAYLOAD_PTR {
+      struct_name := expr.result_type.pointee_struct_name;
+      if struct_name.count == 0 return false;
+      if out_name.*.count == 0 out_name.* = struct_name;
+      else assert(out_name.* == struct_name, "Mesh payload type mismatch: '%' vs '%'.", out_name.*, struct_name);
+    }
+  }
+
+  if expr.left && !mesh_payload_struct_name_in_expr(expr.left, out_name) return false;
+  if expr.right && !mesh_payload_struct_name_in_expr(expr.right, out_name) return false;
+  for expr.args if !mesh_payload_struct_name_in_expr(it, out_name) return false;
+  return true;
+}
+
+mesh_payload_struct_name_in_block :: (block: *IR_Block, out_name: *string) -> bool {
+  if !block return true;
+  for block.statements {
+    stmt := *it;
+    if stmt.decl_init && !mesh_payload_struct_name_in_expr(stmt.decl_init, out_name) return false;
+    if stmt.binary_left && !mesh_payload_struct_name_in_expr(stmt.binary_left, out_name) return false;
+    if stmt.binary_right && !mesh_payload_struct_name_in_expr(stmt.binary_right, out_name) return false;
+    if stmt.if_condition && !mesh_payload_struct_name_in_expr(stmt.if_condition, out_name) return false;
+    if stmt.if_then && !mesh_payload_struct_name_in_block(stmt.if_then, out_name) return false;
+    if stmt.if_else && !mesh_payload_struct_name_in_block(stmt.if_else, out_name) return false;
+    if stmt.for_start && !mesh_payload_struct_name_in_expr(stmt.for_start, out_name) return false;
+    if stmt.for_end && !mesh_payload_struct_name_in_expr(stmt.for_end, out_name) return false;
+    if stmt.for_body && !mesh_payload_struct_name_in_block(stmt.for_body, out_name) return false;
+    if stmt.while_condition && !mesh_payload_struct_name_in_expr(stmt.while_condition, out_name) return false;
+    if stmt.while_body && !mesh_payload_struct_name_in_block(stmt.while_body, out_name) return false;
+    if stmt.call_expr && !mesh_payload_struct_name_in_expr(stmt.call_expr, out_name) return false;
+    if stmt.return_expr && !mesh_payload_struct_name_in_expr(stmt.return_expr, out_name) return false;
+    for stmt.switch_cases if it.body && !mesh_payload_struct_name_in_block(it.body, out_name) return false;
+  }
+  return true;
+}
+
+mesh_payload_struct_name_in_shader :: (shader: *IR_Shader) -> string {
+  if !shader return "";
+  name := "";
+  _ = mesh_payload_struct_name_in_block(*shader.body, *name);
+  for shader.functions {
+    _ = mesh_payload_struct_name_in_block(*it.body, *name);
+  }
+  if name.count == 0 && shader.extra_structs.count == 1 {
+    name = shader.extra_structs[0].name;
+  }
+  return name;
+}
+
+payload_layout_for_type :: (structs: [] IR_Struct, ir_type: IR_Type) -> (size: s64, align: s64, ok: bool) {
+  if ir_type.kind == .BOOL return 4, 4, true;
+  if ir_type.kind == .I32 || ir_type.kind == .U32 || ir_type.kind == .F32 return 4, 4, true;
+  if ir_type.kind == .I64 || ir_type.kind == .U64 return 8, 8, true;
+  if ir_type.kind == .F16 return 2, 2, true;
+  if ir_type.kind == .F32x2 return 8, 8, true;
+  if ir_type.kind == .F32x3 return 12, 16, true;
+  if ir_type.kind == .F32x4 return 16, 16, true;
+  if ir_type.kind == .STRUCT {
+    nested: *IR_Struct = null;
+    for *structs {
+      if it.name == ir_type.struct_name {
+        nested = it;
+        break;
+      }
+    }
+    if !nested return 0, 0, false;
+    nested_size, nested_align, nested_ok := payload_layout_for_struct(structs, nested);
+    return nested_size, nested_align, nested_ok;
+  }
+  if ir_type.kind == .FIXED_ARRAY {
+    elem_type := IR_Type.{
+      kind = ir_type.element_kind,
+      display_name = ir_type.element_display_name,
+      struct_name = ir_type.element_struct_name,
+    };
+    elem_size, elem_align, elem_ok := payload_layout_for_type(structs, elem_type);
+    if !elem_ok return 0, 0, false;
+    stride := align_up(elem_size, elem_align);
+    return stride * ir_type.array_count, elem_align, true;
+  }
+  return 0, 0, false;
+}
+
+payload_layout_for_struct :: (structs: [] IR_Struct, st: *IR_Struct) -> (size: s64, align: s64, ok: bool) {
+  if !st return 0, 0, false;
+  offset: s64 = 0;
+  max_align: s64 = 1;
+  for st.fields {
+    field_size, field_align, field_ok := payload_layout_for_type(structs, it.type);
+    if !field_ok return 0, 0, false;
+    offset = align_up(offset, field_align);
+    offset += field_size;
+    if field_align > max_align max_align = field_align;
+  }
+  return offset, max_align, true;
+}
+
+payload_layout_from_name :: (structs: [] IR_Struct, payload_struct_name: string) -> (size: s64, memory_length: s64, ok: bool) {
+  if !payload_struct_name.count return 0, 0, true;
+  st: *IR_Struct = null;
+  for *structs {
+    if it.name == payload_struct_name {
+      st = it;
+      break;
+    }
+  }
+  if !st return 0, 0, false;
+  payload_size, _, payload_ok := payload_layout_for_struct(structs, st);
+  if !payload_ok return 0, 0, false;
+  return payload_size, align_up(payload_size, 16), true;
+}
+
 write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string, bool, IR_Diagnostic) {
   diag: IR_Diagnostic;
   if !mesh_ctx || mesh_ctx.language != .METAL || mesh_ctx.mesh_fn == null || mesh_ctx.fragment_fn == null {
@@ -2330,10 +2485,25 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   }
 
   task_source := "";
+  payload_struct_name := "";
+  payload_size_bytes: s64 = 0;
+  payload_memory_length: s64 = 0;
   if mesh_ctx.task_fn != null {
     task_ir_res := ir_lower_task_from_shader_context(.{name = mesh_ctx.task_fn.header.name, header = mesh_ctx.task_fn.header});
     ir_task, task_ok, task_diag := unpack_result(task_ir_res);
     if !task_ok return "", false, task_diag;
+    ir_task.payload_struct_name = mesh_payload_struct_name_in_shader(*ir_task);
+    if ir_task.payload_struct_name.count != 0 {
+      computed_payload_size, computed_payload_memory_length, payload_ok := payload_layout_from_name(ir_task.extra_structs, ir_task.payload_struct_name);
+      if !payload_ok {
+        diag.message = tprint("SPIR-V backend: failed computing payload layout for '%'.", ir_task.payload_struct_name);
+        return "", false, diag;
+      }
+      ir_task.payload_size_bytes = computed_payload_size;
+      payload_memory_length = computed_payload_memory_length;
+      payload_struct_name = ir_task.payload_struct_name;
+      payload_size_bytes = ir_task.payload_size_bytes;
+    }
     assign_single_function_constant_spec_ids(*ir_task);
     normalize_shader(*ir_task);
 
@@ -2388,6 +2558,24 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   mesh_ir_res := ir_lower_mesh_from_shader_context(.{name = mesh_ctx.mesh_fn.header.name, header = mesh_ctx.mesh_fn.header});
   ir_mesh, mesh_ok, mesh_diag := unpack_result(mesh_ir_res);
   if !mesh_ok return "", false, mesh_diag;
+  ir_mesh.payload_struct_name = mesh_payload_struct_name_in_shader(*ir_mesh);
+  if ir_mesh.payload_struct_name.count != 0 {
+    computed_payload_size, mesh_payload_memory_length, payload_ok := payload_layout_from_name(ir_mesh.extra_structs, ir_mesh.payload_struct_name);
+    if !payload_ok {
+      diag.message = tprint("SPIR-V backend: failed computing mesh payload layout for '%'.", ir_mesh.payload_struct_name);
+      return "", false, diag;
+    }
+    ir_mesh.payload_size_bytes = computed_payload_size;
+    if payload_struct_name.count == 0 {
+      payload_struct_name = ir_mesh.payload_struct_name;
+      payload_size_bytes = ir_mesh.payload_size_bytes;
+      payload_memory_length = mesh_payload_memory_length;
+    } else {
+      assert(payload_struct_name == ir_mesh.payload_struct_name, "Mesh payload type mismatch: '%' vs '%'.", payload_struct_name, ir_mesh.payload_struct_name);
+      assert(payload_size_bytes == ir_mesh.payload_size_bytes, "Mesh payload size mismatch for '%'.", payload_struct_name);
+      payload_memory_length = max(payload_memory_length, mesh_payload_memory_length);
+    }
+  }
   assign_single_function_constant_spec_ids(*ir_mesh);
   normalize_shader(*ir_mesh);
 
@@ -2484,8 +2672,10 @@ END_MESH,
   pixel_source = #string END_PIXEL
 %
 END_PIXEL,
+  payload_size_bytes = %,
+  payload_memory_length = %,
 };
-END, bundle_symbol, task_source, mesh_source, frag_source);
+END, bundle_symbol, task_source, mesh_source, frag_source, payload_size_bytes, payload_memory_length);
   return decl, true, diag;
 }
 

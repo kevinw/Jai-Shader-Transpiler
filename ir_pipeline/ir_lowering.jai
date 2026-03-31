@@ -1671,10 +1671,12 @@ ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   if ir_callee_matches_builtin(name, "write_2d") return .WRITE_2D;
   if ir_callee_matches_builtin(name, "write_3d") return .WRITE_3D;
   if ir_callee_matches_builtin(name, "discard") return .DISCARD;
+  if ir_callee_matches_builtin(name, "task_set_mesh_groups") return .TASK_SET_MESH_GROUPS;
   if ir_callee_matches_builtin(name, "task_group_id_x") return .TASK_GROUP_ID_X;
-  if ir_callee_matches_builtin(name, "task_payload_store_u32") return .TASK_PAYLOAD_STORE_U32;
+  if ir_callee_matches_builtin(name, "task_payload_ptr") return .TASK_PAYLOAD_PTR;
   if ir_callee_matches_builtin(name, "mesh_set_output_counts") return .MESH_SET_OUTPUT_COUNTS;
-  if ir_callee_matches_builtin(name, "mesh_payload_load_u32") return .MESH_PAYLOAD_LOAD_U32;
+  if ir_callee_matches_builtin(name, "mesh_group_id_x") return .MESH_GROUP_ID_X;
+  if ir_callee_matches_builtin(name, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
   if ir_callee_matches_builtin(name, "mesh_set_vertex_position") return .MESH_SET_VERTEX_POSITION;
   if ir_callee_matches_builtin(name, "mesh_set_vertex_color") return .MESH_SET_VERTEX_COLOR;
   if ir_callee_matches_builtin(name, "mesh_set_triangle") return .MESH_SET_TRIANGLE;
@@ -1814,13 +1816,75 @@ ir_collect_compute_declared_struct_type :: (ti: *Type_Info, state: *IR_Lowering_
   return true;
 }
 
+ir_collect_payload_structs_in_expr :: (node: *Code_Node, out_extra_structs: *[..] IR_Struct, state: *IR_Lowering_State) -> bool {
+  if !node return true;
+
+  if node.kind == .PROCEDURE_CALL {
+    pc := cast(*Code_Procedure_Call) node;
+    callee_name, callee_ok := ir_resolve_call_target_name_from_code_node(pc.procedure_expression);
+    if callee_ok && (ir_callee_matches_builtin(callee_name, "task_payload_ptr") || ir_callee_matches_builtin(callee_name, "mesh_payload_ptr")) {
+      if !ir_collect_compute_declared_struct_type(node.type, state, node, out_extra_structs) return false;
+    }
+    if pc.procedure_expression && !ir_collect_payload_structs_in_expr(pc.procedure_expression, out_extra_structs, state) return false;
+    for pc.arguments_sorted if !ir_collect_payload_structs_in_expr(it, out_extra_structs, state) return false;
+    for pc.arguments_unsorted {
+      if it.expression && !ir_collect_payload_structs_in_expr(it.expression, out_extra_structs, state) return false;
+    }
+    return true;
+  }
+
+  if node.kind == .BINARY_OPERATOR {
+    bn := cast(*Code_Binary_Operator) node;
+    if bn.left && !ir_collect_payload_structs_in_expr(bn.left, out_extra_structs, state) return false;
+    if bn.right && !ir_collect_payload_structs_in_expr(bn.right, out_extra_structs, state) return false;
+    return true;
+  }
+
+  if node.kind == .UNARY_OPERATOR {
+    un := cast(*Code_Unary_Operator) node;
+    if un.subexpression && !ir_collect_payload_structs_in_expr(un.subexpression, out_extra_structs, state) return false;
+    return true;
+  }
+
+  if node.kind == .CAST {
+    cn := cast(*Code_Cast) node;
+    if cn.expression && !ir_collect_payload_structs_in_expr(cn.expression, out_extra_structs, state) return false;
+    return true;
+  }
+
+  if node.kind == .LITERAL {
+    lit := cast(*Code_Literal) node;
+    if lit.value_type == .STRUCT {
+      for lit.struct_literal_info.arguments if !ir_collect_payload_structs_in_expr(it, out_extra_structs, state) return false;
+    } else if lit.value_type == .ARRAY {
+      for lit.array_literal_info.array_members if !ir_collect_payload_structs_in_expr(it, out_extra_structs, state) return false;
+    }
+    return true;
+  }
+
+  if node.kind == .DECLARATION {
+    decl := cast(*Code_Declaration) node;
+    if decl.expression && !ir_collect_payload_structs_in_expr(decl.expression, out_extra_structs, state) return false;
+    return true;
+  }
+
+  if node.kind == .RETURN {
+    rn := cast(*Code_Return) node;
+    for rn.arguments_sorted if !ir_collect_payload_structs_in_expr(it, out_extra_structs, state) return false;
+    return true;
+  }
+
+  return true;
+}
+
 ir_collect_compute_declared_structs_in_node :: (node: *Code_Node, out_extra_structs: *[..] IR_Struct, state: *IR_Lowering_State) -> bool {
   if !node return true;
 
   if node.kind == .DECLARATION {
     decl := cast(*Code_Declaration) node;
     decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
-    return ir_collect_compute_declared_struct_type(decl_type, state, node, out_extra_structs);
+    if !ir_collect_compute_declared_struct_type(decl_type, state, node, out_extra_structs) return false;
+    return ir_collect_payload_structs_in_expr(cast(*Code_Node) decl, out_extra_structs, state);
   }
 
   if node.kind == .IF {
@@ -1843,6 +1907,10 @@ ir_collect_compute_declared_structs_in_node :: (node: *Code_Node, out_extra_stru
   if node.kind == .CASE {
     n := cast(*Code_Case) node;
     return ir_collect_compute_declared_structs_in_block(n.then_block, out_extra_structs, state);
+  }
+
+  if node.kind == .RETURN || node.kind == .PROCEDURE_CALL || node.kind == .BINARY_OPERATOR || node.kind == .UNARY_OPERATOR || node.kind == .CAST || node.kind == .LITERAL {
+    return ir_collect_payload_structs_in_expr(node, out_extra_structs, state);
   }
 
   if node.kind == .BLOCK {

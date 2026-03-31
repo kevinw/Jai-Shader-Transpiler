@@ -82,6 +82,14 @@ emit_lvalue_ptr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (ptr_id: s64, ptr_t
     return_err("struct buffer '%' requires member access on lvalue.", buffer.name);
   }
   if expr.kind == .MEMBER {
+    if expr.left && (expr.left.kind == .CALL || expr.left.kind == .SUBSCRIPT) {
+      payload_ptr, payload_type, payload_ok, payload_diag := payload_field_ptr_from_expr(s, expr.left, expr.text);
+      if payload_ok return payload_ptr, payload_type, true, diag;
+      if (expr.left.kind == .CALL && payload_builtin_kind_from_call(expr.left) != .NONE) ||
+         (expr.left.kind == .SUBSCRIPT && payload_subscript_has_builtin_base(expr.left)) {
+        return 0, .UNKNOWN, false, payload_diag;
+      }
+    }
     if expr.left && expr.left.kind == .SUBSCRIPT {
       local_field_ptr, local_field_type, local_field_ok, _ := emit_local_struct_field_ptr(s, expr);
       if local_field_ok return local_field_ptr, local_field_type, true, diag;
