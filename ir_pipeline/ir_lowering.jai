@@ -1679,8 +1679,7 @@ ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   if ir_callee_matches_builtin(name, "mesh_group_id_x") return .MESH_GROUP_ID_X;
   if ir_callee_matches_builtin(name, "mesh_group_id_y") return .MESH_GROUP_ID_Y;
   if ir_callee_matches_builtin(name, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
-  if ir_callee_matches_builtin(name, "mesh_set_vertex_position") return .MESH_SET_VERTEX_POSITION;
-  if ir_callee_matches_builtin(name, "mesh_set_vertex_color") return .MESH_SET_VERTEX_COLOR;
+  if ir_callee_matches_builtin(name, "mesh_set_vertex") return .MESH_SET_VERTEX;
   if ir_callee_matches_builtin(name, "mesh_set_triangle") return .MESH_SET_TRIANGLE;
   if ir_callee_matches_builtin(name, "saturate") return .SATURATE;
   if ir_callee_matches_builtin(name, "mix") return .MIX;

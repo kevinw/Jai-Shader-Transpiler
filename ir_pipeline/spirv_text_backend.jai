@@ -411,8 +411,7 @@ call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee_matches_builtin(callee, "mesh_group_id_x") return .MESH_GROUP_ID_X;
   if callee_matches_builtin(callee, "mesh_group_id_y") return .MESH_GROUP_ID_Y;
   if callee_matches_builtin(callee, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
-  if callee_matches_builtin(callee, "mesh_set_vertex_position") return .MESH_SET_VERTEX_POSITION;
-  if callee_matches_builtin(callee, "mesh_set_vertex_color") return .MESH_SET_VERTEX_COLOR;
+  if callee_matches_builtin(callee, "mesh_set_vertex") return .MESH_SET_VERTEX;
   if callee_matches_builtin(callee, "mesh_set_triangle") return .MESH_SET_TRIANGLE;
   if callee_matches_builtin(callee, "saturate") return .SATURATE;
   if callee_matches_builtin(callee, "mix") return .MIX;
@@ -484,8 +483,7 @@ call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
   if kind == .MESH_GROUP_ID_X return "mesh_group_id_x";
   if kind == .MESH_GROUP_ID_Y return "mesh_group_id_y";
   if kind == .MESH_PAYLOAD_PTR return "mesh_payload_ptr";
-  if kind == .MESH_SET_VERTEX_POSITION return "mesh_set_vertex_position";
-  if kind == .MESH_SET_VERTEX_COLOR return "mesh_set_vertex_color";
+  if kind == .MESH_SET_VERTEX return "mesh_set_vertex";
   if kind == .MESH_SET_TRIANGLE return "mesh_set_triangle";
   if kind == .ATOMIC_ADD_U32 return "atomic_add_u32";
   if kind == .ATOMIC_SUB_U32 return "atomic_sub_u32";
@@ -579,6 +577,8 @@ IR_SPV_Gen_Interface_Var :: struct {
   name: string;
   type: IR_SPV_Gen_Type;
   ptr_id: s64;
+  element_ptr_id: s64;
+  array_type_id: s64;
   var_id: s64;
   location: s64;
   builtin: IR_SPV_Gen_Interface_Builtin;
@@ -967,6 +967,26 @@ IR_SPV_Gen_State :: struct {
   id_ptr_output_mesh_colors_array: s64;
   id_ptr_output_mesh_color: s64;
   id_mesh_colors_var: s64;
+  id_mesh_uvs_array_type: s64;
+  id_ptr_output_mesh_uvs_array: s64;
+  id_ptr_output_mesh_uv: s64;
+  id_mesh_uvs_var: s64;
+  id_mesh_world_positions_array_type: s64;
+  id_ptr_output_mesh_world_positions_array: s64;
+  id_ptr_output_mesh_world_position: s64;
+  id_mesh_world_positions_var: s64;
+  id_mesh_normals_array_type: s64;
+  id_ptr_output_mesh_normals_array: s64;
+  id_ptr_output_mesh_normal: s64;
+  id_mesh_normals_var: s64;
+  id_mesh_tangents_array_type: s64;
+  id_ptr_output_mesh_tangents_array: s64;
+  id_ptr_output_mesh_tangent: s64;
+  id_mesh_tangents_var: s64;
+  id_mesh_lod_alphas_array_type: s64;
+  id_ptr_output_mesh_lod_alphas_array: s64;
+  id_ptr_output_mesh_lod_alpha: s64;
+  id_mesh_lod_alphas_var: s64;
   id_mesh_triangle_indices_array_type: s64;
   id_ptr_output_mesh_triangle_indices_array: s64;
   id_ptr_output_mesh_triangle_indices: s64;
@@ -1774,8 +1794,17 @@ payload_register_struct_usage :: (s: *IR_SPV_Gen_State, struct_name: string) -> 
 
 payload_fallback_struct_name :: (s: *IR_SPV_Gen_State) -> string {
   if !s return "";
-  if s.extra_structs.count == 1 return s.extra_structs[0].name;
   if s.payload_struct_name.count != 0 return s.payload_struct_name;
+  payload_candidate := "";
+  for s.extra_structs {
+    has_upper, _ := contains(it.name, "Payload");
+    has_lower, _ := contains(it.name, "payload");
+    if !has_upper && !has_lower continue;
+    if payload_candidate.count == 0 payload_candidate = it.name;
+    else return "";
+  }
+  if payload_candidate.count != 0 return payload_candidate;
+  if s.extra_structs.count == 1 return s.extra_structs[0].name;
   return "";
 }
 
@@ -1821,6 +1850,21 @@ payload_field_ptr_from_struct_name :: (s: *IR_SPV_Gen_State, struct_name: string
 
 payload_field_ptr_from_call :: (s: *IR_SPV_Gen_State, call_expr: *IR_Expr, field_name: string) -> (ptr_id: s64, field_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   struct_name, builtin_kind, struct_ok := payload_struct_name_from_call_expr(call_expr);
+  if builtin_kind == .NONE && call_expr {
+    call_text := expr_text(call_expr);
+    has_task_payload, _ := contains(call_text, "task_payload_ptr");
+    has_mesh_payload, _ := contains(call_text, "mesh_payload_ptr");
+    if has_task_payload builtin_kind = .TASK_PAYLOAD_PTR;
+    if has_mesh_payload builtin_kind = .MESH_PAYLOAD_PTR;
+  }
+  if !struct_ok && builtin_kind != .NONE && (s.stage == .TASK || s.stage == .MESH) {
+    struct_name = payload_fallback_struct_name(s);
+    if struct_name.count != 0 {
+      struct_ok = true;
+      if s.stage == .TASK builtin_kind = .TASK_PAYLOAD_PTR;
+      if s.stage == .MESH builtin_kind = .MESH_PAYLOAD_PTR;
+    }
+  }
   if !struct_ok && call_expr && call_expr.result_type.kind == .POINTER && call_expr.result_type.pointee_is_struct && call_expr.result_type.pointee_struct_name.count != 0 {
     struct_name = call_expr.result_type.pointee_struct_name;
     struct_ok = true;
@@ -1835,7 +1879,7 @@ payload_field_ptr_from_call :: (s: *IR_SPV_Gen_State, call_expr: *IR_Expr, field
       if s.stage == .MESH builtin_kind = .MESH_PAYLOAD_PTR;
     }
   }
-  if !struct_ok return 0, .UNKNOWN, false, make_diag("payload access requires task_payload_ptr(T) or mesh_payload_ptr(T).");
+  if !struct_ok return 0, .UNKNOWN, false, make_diag("payload access requires task_payload_ptr(T) or mesh_payload_ptr(T); builtin=% call='%'.", builtin_kind, expr_text(call_expr));
   out_ptr, out_type, out_ok, out_diag := payload_field_ptr_from_struct_name(s, struct_name, builtin_kind, field_name);
   return out_ptr, out_type, out_ok, out_diag;
 }
@@ -1847,11 +1891,34 @@ payload_field_ptr_from_expr :: (s: *IR_SPV_Gen_State, base_expr: *IR_Expr, field
     return out_ptr, out_type, out_ok, out_diag;
   }
   if base_expr.kind == .SUBSCRIPT {
+    if payload_subscript_has_builtin_base(base_expr) {
+      cursor := base_expr;
+      while cursor {
+        if cursor.kind == .CALL {
+          out_ptr, out_type, out_ok, out_diag := payload_field_ptr_from_call(s, cursor, field_name);
+          return out_ptr, out_type, out_ok, out_diag;
+        }
+        if cursor.kind != .SUBSCRIPT break;
+        cursor = cursor.left;
+      }
+    }
     payload_struct_name := "";
+    base_expr_text := expr_text(base_expr);
+    if base_expr.left && base_expr.left.kind == .CALL {
+      left_struct_name, _, left_struct_ok := payload_struct_name_from_call_expr(base_expr.left);
+      if left_struct_ok payload_struct_name = left_struct_name;
+    }
     if base_expr.result_type.kind == .POINTER && base_expr.result_type.pointee_is_struct && base_expr.result_type.pointee_struct_name.count != 0 {
       payload_struct_name = base_expr.result_type.pointee_struct_name;
     } else if base_expr.result_type.kind == .STRUCT && base_expr.result_type.struct_name.count != 0 {
       payload_struct_name = base_expr.result_type.struct_name;
+    }
+    if payload_struct_name.count == 0 && (s.stage == .TASK || s.stage == .MESH) {
+      has_task_payload, _ := contains(base_expr_text, "task_payload_ptr");
+      has_mesh_payload, _ := contains(base_expr_text, "mesh_payload_ptr");
+      if has_task_payload || has_mesh_payload {
+        payload_struct_name = payload_fallback_struct_name(s);
+      }
     }
     if payload_struct_name.count == 0 && (s.stage == .TASK || s.stage == .MESH) && payload_subscript_has_builtin_base(base_expr) {
       payload_struct_name = payload_fallback_struct_name(s);
@@ -1863,7 +1930,7 @@ payload_field_ptr_from_expr :: (s: *IR_SPV_Gen_State, base_expr: *IR_Expr, field
       out_ptr, out_type, out_ok, out_diag := payload_field_ptr_from_struct_name(s, payload_struct_name, builtin_kind, field_name);
       return out_ptr, out_type, out_ok, out_diag;
     }
-    return 0, .UNKNOWN, false, make_diag("payload subscript base unresolved: result_kind=% struct='%'.", base_expr.result_type.kind, base_expr.result_type.struct_name);
+    return 0, .UNKNOWN, false, make_diag("payload subscript base unresolved: result_kind=% struct='%' expr='%'.", base_expr.result_type.kind, base_expr.result_type.struct_name, expr_text(base_expr));
   }
   return 0, .UNKNOWN, false, make_diag("payload access requires task_payload_ptr(T) or mesh_payload_ptr(T); got base kind=% text='%'.", base_expr.kind, expr_text(base_expr));
 }
@@ -7343,13 +7410,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if !mesh_ok return false, false, mesh_diag;
         return true, false, diag;
       }
-      if builtin_kind == .MESH_SET_VERTEX_POSITION {
-        mesh_ok, mesh_diag := emit_mesh_set_vertex_position_call(s, stmt.call_expr.args);
-        if !mesh_ok return false, false, mesh_diag;
-        return true, false, diag;
-      }
-      if builtin_kind == .MESH_SET_VERTEX_COLOR {
-        mesh_ok, mesh_diag := emit_mesh_set_vertex_color_call(s, stmt.call_expr.args);
+      if builtin_kind == .MESH_SET_VERTEX {
+        mesh_ok, mesh_diag := emit_mesh_set_vertex_call(s, stmt.call_expr.args);
         if !mesh_ok return false, false, mesh_diag;
         return true, false, diag;
       }
@@ -7488,6 +7550,8 @@ interface_builtin_from_semantic :: (stage: IR_SPV_Gen_Stage, field_name: string,
     if sem == "SV_INSTANCEID" || sem == "INSTANCE_ID" return .INSTANCE_INDEX;
     if sem == "SV_POSITION" || sem == "GL_POSITION" || sem == "POSITION" return .POSITION;
     if sem == "FRAG_COORD" || sem == "GL_FRAGCOORD" return .NONE;
+  } else if stage == .MESH {
+    if sem == "SV_POSITION" || sem == "GL_POSITION" || sem == "POSITION" return .POSITION;
   } else if stage == .FRAGMENT {
     if field_name == "gl_FragCoord" return .FRAG_COORD;
     if sem == "SV_POSITION" || sem == "POSITION" || sem == "FRAG_COORD" || sem == "GL_FRAGCOORD" return .FRAG_COORD;

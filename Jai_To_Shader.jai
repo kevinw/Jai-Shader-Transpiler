@@ -1628,6 +1628,17 @@ mesh_payload_struct_name_in_shader :: (shader: *IR_Shader) -> string {
   for shader.functions {
     _ = mesh_payload_struct_name_in_block(*it.body, *name);
   }
+  if name.count == 0 {
+    payload_candidate := "";
+    for shader.extra_structs {
+      has_upper, _ := contains(it.name, "Payload");
+      has_lower, _ := contains(it.name, "payload");
+      if !has_upper && !has_lower continue;
+      if payload_candidate.count == 0 payload_candidate = it.name;
+      else return "";
+    }
+    if payload_candidate.count != 0 return payload_candidate;
+  }
   if name.count == 0 && shader.extra_structs.count == 1 {
     name = shader.extra_structs[0].name;
   }
@@ -1806,6 +1817,7 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   frag_ir_res := ir_lower_fragment_from_shader_context(.{name = mesh_ctx.fragment_fn.header.name, header = mesh_ctx.fragment_fn.header});
   ir_fragment, frag_ok, frag_diag := unpack_result(frag_ir_res);
   if !frag_ok return "", false, frag_diag;
+  ir_mesh.output = ir_fragment.input;
   assign_single_function_constant_spec_ids(*ir_fragment);
   normalize_shader(*ir_fragment);
 
@@ -1863,7 +1875,7 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
     diag.message = "SPIR-V backend: mesh spirv-cross failed.";
     return "", false, diag;
   }
-  if !jst_emit_spirv_cross_target_source_cached(frag_opt_spv_path, metal_fragment_entry_name, .Fragment, .METAL, frag_output_path, ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs), source_entry_name=ir_fragment.entry_name) {
+  if !jst_emit_spirv_cross_target_source_cached(frag_opt_spv_path, metal_fragment_entry_name, .Fragment, .METAL, frag_output_path, false, source_entry_name=ir_fragment.entry_name) {
     diag.message = "SPIR-V backend: mesh fragment spirv-cross failed.";
     return "", false, diag;
   }

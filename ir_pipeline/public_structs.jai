@@ -127,6 +127,7 @@ IR_Task_Shader :: struct {
 IR_Mesh_Shader :: struct {
   using #as ir_shader: IR_Shader;
   args: [..] IR_Function_Arg;
+  output: IR_Struct;
   payload_struct_name: string;
   payload_size_bytes: s64;
 }
@@ -225,8 +226,7 @@ IR_Call_Builtin_Kind :: enum {
   MESH_GROUP_ID_X;
   MESH_GROUP_ID_Y;
   MESH_PAYLOAD_PTR;
-  MESH_SET_VERTEX_POSITION;
-  MESH_SET_VERTEX_COLOR;
+  MESH_SET_VERTEX;
   MESH_SET_TRIANGLE;
   SATURATE;
   MIX;

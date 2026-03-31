@@ -2132,6 +2132,37 @@ emit_mesh_store_array_value :: (s: *IR_SPV_Gen_State, ptr_elem_type_id: s64, arr
   spv_emit_store(s, ptr_id, value_id);
 }
 
+emit_mesh_vertex_struct_to_outputs :: (
+  s: *IR_SPV_Gen_State,
+  vertex_index_id: s64,
+  struct_def: *IR_Struct,
+  local_struct: *IR_SPV_Gen_Local_Struct,
+) -> (ok: bool, diag: IR_Diagnostic) {
+  if !struct_def return false, make_diag("mesh_set_vertex is missing struct metadata.");
+  if !local_struct return false, make_diag("mesh_set_vertex is missing local struct storage.");
+
+  for struct_def.fields {
+    local_field := find_local_struct_field(local_struct, it.name);
+    if !local_field return false, make_diag("mesh_set_vertex local struct '%' is missing field '%'.", local_struct.type_name, it.name);
+    if local_field.type == .STRUCT return false, make_diag("mesh_set_vertex does not support nested output struct fields yet ('%.%').", struct_def.name, it.name);
+
+    output_var := find_by_name(*s.output_vars, it.name);
+    if !output_var return false, make_diag("mesh_set_vertex field '%.%' is not present in the mesh stage output struct.", struct_def.name, it.name);
+    expected_type := output_var.type;
+
+    value_type_id := type_id_from_kind(s, local_field.type);
+    if value_type_id == 0 return false, make_diag("mesh_set_vertex field '%.%' has unsupported type %.", struct_def.name, it.name, local_field.type);
+    value_id := new_id(s);
+    add_op(s, value_id, "OpLoad", value_type_id, local_field.ptr_id);
+    coerced_value_id, coerced_type, coerced_ok, coerced_diag := coerce_to_exact_kind(s, value_id, local_field.type, expected_type);
+    if !coerced_ok return false, coerced_diag;
+    if coerced_type != expected_type return false, make_diag("mesh_set_vertex field '%.%' type mismatch after coercion.", struct_def.name, it.name);
+    emit_mesh_store_array_value(s, output_var.element_ptr_id, output_var.var_id, vertex_index_id, coerced_value_id);
+  }
+
+  return true, {};
+}
+
 emit_task_set_mesh_groups_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
   if s.stage != .TASK return false, make_diag("task_set_mesh_groups is currently task-stage only.");
   if args.count != 3 return false, make_diag("task_set_mesh_groups expects 3 args.");
@@ -2195,33 +2226,29 @@ emit_mesh_set_output_counts_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) ->
   return true, {};
 }
 
-emit_mesh_set_vertex_position_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
-  if s.stage != .MESH return false, make_diag("mesh_set_vertex_position is currently mesh-stage only.");
-  if args.count != 2 return false, make_diag("mesh_set_vertex_position expects 2 args.");
+emit_mesh_set_vertex_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  if s.stage != .MESH return false, make_diag("mesh_set_vertex is currently mesh-stage only.");
+  if args.count != 2 return false, make_diag("mesh_set_vertex expects 2 args.");
   index_id, index_type, index_ok, index_diag := emit_expr(s, args[0]);
   if !index_ok return false, index_diag;
   index_id, _, index_ok, index_diag = coerce_to_exact_kind(s, index_id, index_type, .UINT);
   if !index_ok return false, index_diag;
-  value_id, value_type, value_ok, value_diag := emit_expr(s, args[1]);
-  if !value_ok return false, value_diag;
-  value_id, _, value_ok, value_diag = coerce_to_exact_kind(s, value_id, value_type, .FLOAT4);
-  if !value_ok return false, value_diag;
-  emit_mesh_store_array_value(s, s.id_ptr_output_mesh_position, s.id_mesh_positions_var, index_id, value_id);
-  return true, {};
-}
+  struct_name := spv_struct_name_from_ir_expr_result(args[1]);
+  if struct_name.count == 0 && args[1].kind == .IDENT {
+    local_struct := find_local_struct(s, args[1].text);
+    if local_struct struct_name = local_struct.type_name;
+  }
+  if struct_name.count == 0 return false, make_diag("mesh_set_vertex expects a struct value as its second argument.");
+  struct_def := find_struct(s, struct_name);
+  if !struct_def return false, make_diag("mesh_set_vertex struct '%' is missing from IR extra structs.", struct_name);
 
-emit_mesh_set_vertex_color_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
-  if s.stage != .MESH return false, make_diag("mesh_set_vertex_color is currently mesh-stage only.");
-  if args.count != 2 return false, make_diag("mesh_set_vertex_color expects 2 args.");
-  index_id, index_type, index_ok, index_diag := emit_expr(s, args[0]);
-  if !index_ok return false, index_diag;
-  index_id, _, index_ok, index_diag = coerce_to_exact_kind(s, index_id, index_type, .UINT);
-  if !index_ok return false, index_diag;
-  value_id, value_type, value_ok, value_diag := emit_expr(s, args[1]);
-  if !value_ok return false, value_diag;
-  value_id, _, value_ok, value_diag = coerce_to_exact_kind(s, value_id, value_type, .FLOAT3);
-  if !value_ok return false, value_diag;
-  emit_mesh_store_array_value(s, s.id_ptr_output_mesh_color, s.id_mesh_colors_var, index_id, value_id);
+  temp_name := make_unique_local_struct_name(s, tprint("mesh_vertex.%", struct_name));
+  temp_struct, temp_ok, temp_diag := alloc_local_struct(s, temp_name, struct_name);
+  if !temp_ok return false, temp_diag;
+  init_ok, init_diag := init_local_struct_from_expr(s, temp_struct, args[1]);
+  if !init_ok return false, init_diag;
+  store_ok, store_diag := emit_mesh_vertex_struct_to_outputs(s, index_id, struct_def, temp_struct);
+  if !store_ok return false, store_diag;
   return true, {};
 }
 
@@ -2262,6 +2289,8 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   state.stage = .MESH;
   state.debug_type_prefix = tprint("mesh_%", shader.source_name);
   state.functions = shader.functions;
+  state.payload_struct_name = shader.payload_struct_name;
+  state.payload_size_bytes = shader.payload_size_bytes;
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
@@ -2273,15 +2302,6 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   for shader.extra_structs array_add(*state.extra_structs, it);
   init_ok, init_diag := init_base(*state, analysis.expanded_buffers, 1);
   if !init_ok return .[], false, init_diag;
-
-  state.id_mesh_positions_array_type = new_id(*state);
-  state.id_ptr_output_mesh_positions_array = new_id(*state);
-  state.id_ptr_output_mesh_position = new_id(*state);
-  state.id_mesh_positions_var = new_id(*state);
-  state.id_mesh_colors_array_type = new_id(*state);
-  state.id_ptr_output_mesh_colors_array = new_id(*state);
-  state.id_ptr_output_mesh_color = new_id(*state);
-  state.id_mesh_colors_var = new_id(*state);
   state.id_mesh_triangle_indices_array_type = new_id(*state);
   state.id_ptr_output_mesh_triangle_indices_array = new_id(*state);
   state.id_ptr_output_mesh_triangle_indices = new_id(*state);
@@ -2292,8 +2312,30 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   mesh_vertex_count_const := get_i32_const(*state, cast(s32) state.mesh_max_vertex_count);
   mesh_primitive_count_const := get_i32_const(*state, cast(s32) state.mesh_max_primitive_count);
 
-  add_debug_name(*state, state.id_mesh_positions_var, "gl_Position");
-  add_debug_name(*state, state.id_mesh_colors_var, "verts_color");
+  if shader.output.fields.count == 0 return_err("mesh shader '%' is missing an output struct.", shader.source_name);
+  state.output_struct_type_name = shader.output.name;
+  for shader.output.fields {
+    field_type := spv_kind_from_ir_type(it.type);
+    field_type_name := ir_string_first_non_empty(it.type.display_name, it.type.struct_name);
+    if field_type == .UNKNOWN || field_type == .STRUCT return_err("mesh output field '%' type '%' is unsupported.", it.name, field_type_name);
+    array_type_id := new_id(*state);
+    ptr_array_type_id := new_id(*state);
+    ptr_element_type_id := output_ptr_type_id_from_kind(*state, field_type);
+    if ptr_element_type_id == 0 return_err("mesh output field '%' is missing an output pointer type.", it.name);
+    var_id := new_id(*state);
+    builtin := interface_builtin_from_semantic(.MESH, it.name, it.semantic);
+    array_add(*state.output_vars, .{
+      name = it.name,
+      type = field_type,
+      ptr_id = ptr_array_type_id,
+      element_ptr_id = ptr_element_type_id,
+      array_type_id = array_type_id,
+      var_id = var_id,
+      location = -1,
+      builtin = builtin,
+    });
+    add_debug_name(*state, var_id, it.name);
+  }
   add_debug_name(*state, state.id_mesh_triangle_indices_var, "primitive_triangle_indices");
 
   entry_label := new_id(*state);
@@ -2310,11 +2352,9 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   spv_module_append_ext_inst_import(*module, cast(u32) state.id_extinst, "GLSL.std.450");
   spv_module_append_words(*module, .MEMORY_MODEL, SPV_OP_MEMORY_MODEL, SPV_ADDRESSING_MODEL_LOGICAL, SPV_MEMORY_MODEL_GLSL450);
   interface_ids: [..]u32;
-  array_add(*interface_ids,
-    cast(u32) state.id_gl_workgroup_id,
-    cast(u32) state.id_mesh_positions_var,
-    cast(u32) state.id_mesh_colors_var,
-    cast(u32) state.id_mesh_triangle_indices_var);
+  array_add(*interface_ids, cast(u32) state.id_gl_workgroup_id);
+  for state.output_vars array_add(*interface_ids, cast(u32) it.var_id);
+  array_add(*interface_ids, cast(u32) state.id_mesh_triangle_indices_var);
   for state.buffers array_add(*interface_ids, cast(u32) it.var_id);
   for state.uniform_blocks array_add(*interface_ids, cast(u32) it.var_id);
   for state.global_const_arrays array_add(*interface_ids, cast(u32) it.var_id);
@@ -2344,8 +2384,7 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
       spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.component_ids[i], SPV_DECORATION_SPEC_ID, it.spec_id + cast(u32) i);
     }
   }
-  spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_mesh_positions_var, SPV_DECORATION_BUILTIN, SPV_BUILTIN_POSITION);
-  spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_mesh_colors_var, SPV_DECORATION_LOCATION, 0);
+  spv_module_append_interface_var_decorations_binary(*module, state.output_vars);
   spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_mesh_triangle_indices_var, SPV_DECORATION_BUILTIN, SPV_BUILTIN_PRIMITIVE_TRIANGLE_INDICES_EXT);
   spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_gl_workgroup_id, SPV_DECORATION_BUILTIN, SPV_BUILTIN_WORKGROUP_ID);
   spv_module_append_base_buffer_decorations_binary(*module, *state);
@@ -2394,12 +2433,12 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   spv_module_append_sampled_image_decls_binary(*module, *state);
   spv_module_append_storage_image_decls_binary(*module, *state);
   spv_module_append_uniform_block_decls_binary(*module, *state);
-  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) state.id_mesh_positions_array_type, cast(u32) state.id_float4, cast(u32) mesh_vertex_count_const);
-  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_positions_array, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_mesh_positions_array_type);
-  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_position, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_float4);
-  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) state.id_mesh_colors_array_type, cast(u32) state.id_float3, cast(u32) mesh_vertex_count_const);
-  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_colors_array, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_mesh_colors_array_type);
-  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_color, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_float3);
+  for state.output_vars {
+    element_type_id := type_id_from_kind(*state, it.type);
+    if element_type_id == 0 return_err("mesh output field '%' has no SPIR-V type id.", it.name);
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) it.array_type_id, cast(u32) element_type_id, cast(u32) mesh_vertex_count_const);
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) it.ptr_id, SPV_STORAGE_CLASS_OUTPUT, cast(u32) it.array_type_id);
+  }
   spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) state.id_mesh_triangle_indices_array_type, cast(u32) state.id_v3uint, cast(u32) mesh_primitive_count_const);
   spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_triangle_indices_array, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_mesh_triangle_indices_array_type);
   spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_triangle_indices, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_v3uint);
@@ -2408,8 +2447,9 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
     if !payload_ok return .[], false, payload_diag;
   }
   spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_input_v3uint, cast(u32) state.id_gl_workgroup_id, SPV_STORAGE_CLASS_INPUT);
-  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_output_mesh_positions_array, cast(u32) state.id_mesh_positions_var, SPV_STORAGE_CLASS_OUTPUT);
-  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_output_mesh_colors_array, cast(u32) state.id_mesh_colors_var, SPV_STORAGE_CLASS_OUTPUT);
+  for state.output_vars {
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) it.ptr_id, cast(u32) it.var_id, SPV_STORAGE_CLASS_OUTPUT);
+  }
   spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_output_mesh_triangle_indices_array, cast(u32) state.id_mesh_triangle_indices_var, SPV_STORAGE_CLASS_OUTPUT);
   spv_module_append_buffer_type_decls_binary(*module, *state, SPV_STORAGE_CLASS_STORAGE_BUFFER);
   spv_module_append_buffer_vars_binary(*module, *state, SPV_STORAGE_CLASS_STORAGE_BUFFER);
@@ -2436,6 +2476,8 @@ emit_task_generic_binary :: (shader: *IR_Task_Shader) -> (spv: [] u8, ok: bool, 
   state.stage = .TASK;
   state.debug_type_prefix = tprint("task_%", shader.source_name);
   state.functions = shader.functions;
+  state.payload_struct_name = shader.payload_struct_name;
+  state.payload_size_bytes = shader.payload_size_bytes;
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
