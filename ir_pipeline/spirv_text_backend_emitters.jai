@@ -20,20 +20,48 @@ ps_get_storage_struct_ptr_type :: (s: *IR_SPV_Gen_State, ps_infos: *[..] IR_SPV_
   return ptr_type_id;
 }
 
+ps_resolve_struct_field_type_ids :: (state: *IR_SPV_Gen_State, ps_infos: *[..] IR_SPV_PS_Struct_Info, ps_info: *IR_SPV_PS_Struct_Info, st: *IR_Struct) -> (member_type_ids: [] s64, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return .[], false, make_diag(msg, ..args); }
+  ids: [..] s64;
+  ids.allocator = temp;
+  for st.fields {
+    field := it;
+    member_type_id: s64 = 0;
+    if field.type.kind == .POINTER {
+      if field.type.pointee_kind == .STRUCT && field.type.pointee_struct_name.count != 0 &&
+         struct_has_pointer_fields_recursive(state.extra_structs, field.type.pointee_struct_name) {
+        nested_info := find_ps_struct_info(ps_infos, field.type.pointee_struct_name);
+        if !nested_info return_err("SPIR-V backend: missing pointer type info for nested struct '%'.", field.type.pointee_struct_name);
+        member_type_id = nested_info.ptr_type_id;
+      } else {
+        leaf_path := tprint("%.%", ps_info.prefix, field.name);
+        leaf_buffer := find_buffer(state, leaf_path);
+        if !leaf_buffer return_err("SPIR-V backend: missing leaf buffer for path '%'.", leaf_path);
+        member_type_id = leaf_buffer.ptr_wrapper_type_id;
+      }
+    } else if field.type.kind == .STRUCT && field.type.struct_name.count != 0 &&
+              struct_has_pointer_fields_recursive(state.extra_structs, field.type.struct_name) {
+      nested_info := find_ps_struct_info(ps_infos, field.type.struct_name);
+      if !nested_info return_err("SPIR-V backend: missing nested struct type info for '%'.", field.type.struct_name);
+      member_type_id = nested_info.type_id;
+    } else {
+      kind := spv_kind_from_ir_type(field.type);
+      member_type_id = type_id_from_kind(state, kind);
+    }
+    if member_type_id == 0 return_err("SPIR-V backend: unsupported field type for pointer struct '%.%'.", st.name, field.name);
+    array_add(*ids, member_type_id);
+  }
+  return ids, true, {};
+}
+
 ps_emit_struct_type_decl_recursive :: (sb: *String_Builder, state: *IR_SPV_Gen_State, ps_infos: *[..] IR_SPV_PS_Struct_Info, struct_name: string, emitted: *[..] string) -> (ok: bool, diag: IR_Diagnostic) {
-  return_err :: (msg: string, args: ..Any) #expand { `return false, make_diag(msg, ..args); }
-
-  assert(sb != null);
-  assert(state != null);
-  assert(ps_infos != null);
-  assert(emitted != null);
-
+  assert(sb != null && state != null && ps_infos != null && emitted != null);
   for emitted.* if it == struct_name return true, {};
 
   ps_info := find_ps_struct_info(ps_infos, struct_name);
-  if !ps_info return_err("SPIR-V backend: missing pointer-struct type info for '%'.", struct_name);
+  if !ps_info return false, make_diag("SPIR-V backend: missing pointer-struct type info for '%'.", struct_name);
   st := find_struct(state, struct_name);
-  if !st return_err("SPIR-V backend: missing pointer-struct '%'.", struct_name);
+  if !st return false, make_diag("SPIR-V backend: missing pointer-struct '%'.", struct_name);
 
   for st.fields {
     if it.type.kind == .STRUCT && it.type.struct_name.count != 0 &&
@@ -43,35 +71,12 @@ ps_emit_struct_type_decl_recursive :: (sb: *String_Builder, state: *IR_SPV_Gen_S
     }
   }
 
+  member_ids, ids_ok, ids_diag := ps_resolve_struct_field_type_ids(state, ps_infos, ps_info, st);
+  if !ids_ok return false, ids_diag;
+
   type_line: String_Builder;
   append(*type_line, tprint("% = OpTypeStruct", id_text(ps_info.type_id)));
-  for st.fields {
-    field := it;
-    member_type_id: s64 = 0;
-    if field.type.kind == .POINTER {
-      if field.type.pointee_kind == .STRUCT && field.type.pointee_struct_name.count != 0 &&
-         struct_has_pointer_fields_recursive(state.extra_structs, field.type.pointee_struct_name) {
-        nested_info := find_ps_struct_info(ps_infos, field.type.pointee_struct_name);
-        if !nested_info return_err("SPIR-V backend: missing pointer type info for nested struct '%'.", field.type.pointee_struct_name);
-        member_type_id = nested_info.ptr_type_id;
-      } else {
-        leaf_path := tprint("%.%", ps_info.prefix, field.name);
-        leaf_buffer := find_buffer(state, leaf_path);
-        if !leaf_buffer return_err("SPIR-V backend: missing leaf buffer for path '%'.", leaf_path);
-        member_type_id = leaf_buffer.ptr_wrapper_type_id;
-      }
-    } else if field.type.kind == .STRUCT && field.type.struct_name.count != 0 &&
-              struct_has_pointer_fields_recursive(state.extra_structs, field.type.struct_name) {
-      nested_info := find_ps_struct_info(ps_infos, field.type.struct_name);
-      if !nested_info return_err("SPIR-V backend: missing nested struct type info for '%'.", field.type.struct_name);
-      member_type_id = nested_info.type_id;
-    } else {
-      kind := spv_kind_from_ir_type(field.type);
-      member_type_id = type_id_from_kind(state, kind);
-    }
-    if member_type_id == 0 return_err("SPIR-V backend: unsupported field type for pointer struct '%.%'.", struct_name, field.name);
-    append(*type_line, " ", id_text(member_type_id));
-  }
+  for member_ids append(*type_line, " ", id_text(it));
   append(*type_line, "\n");
   append_and_steal_buffers(sb, *type_line);
   array_add(emitted, struct_name);
@@ -79,19 +84,13 @@ ps_emit_struct_type_decl_recursive :: (sb: *String_Builder, state: *IR_SPV_Gen_S
 }
 
 ps_emit_struct_type_decl_recursive_binary :: (m: *SPV_Module, state: *IR_SPV_Gen_State, ps_infos: *[..] IR_SPV_PS_Struct_Info, struct_name: string, emitted: *[..] string) -> (ok: bool, diag: IR_Diagnostic) {
-  return_err :: (msg: string, args: ..Any) #expand { `return false, make_diag(msg, ..args); }
-
-  assert(m != null);
-  assert(state != null);
-  assert(ps_infos != null);
-  assert(emitted != null);
-
+  assert(m != null && state != null && ps_infos != null && emitted != null);
   for emitted.* if it == struct_name return true, {};
 
   ps_info := find_ps_struct_info(ps_infos, struct_name);
-  if !ps_info return_err("SPIR-V backend: missing pointer-struct type info for '%'.", struct_name);
+  if !ps_info return false, make_diag("SPIR-V backend: missing pointer-struct type info for '%'.", struct_name);
   st := find_struct(state, struct_name);
-  if !st return_err("SPIR-V backend: missing pointer-struct '%'.", struct_name);
+  if !st return false, make_diag("SPIR-V backend: missing pointer-struct '%'.", struct_name);
 
   for st.fields {
     if it.type.kind == .STRUCT && it.type.struct_name.count != 0 &&
@@ -101,36 +100,13 @@ ps_emit_struct_type_decl_recursive_binary :: (m: *SPV_Module, state: *IR_SPV_Gen
     }
   }
 
+  member_ids, ids_ok, ids_diag := ps_resolve_struct_field_type_ids(state, ps_infos, ps_info, st);
+  if !ids_ok return false, ids_diag;
+
   inst: SPV_Inst;
   inst.opcode = SPV_OP_TYPE_STRUCT;
   array_add(*inst.words, cast(u32) ps_info.type_id);
-  for st.fields {
-    field := it;
-    member_type_id: s64 = 0;
-    if field.type.kind == .POINTER {
-      if field.type.pointee_kind == .STRUCT && field.type.pointee_struct_name.count != 0 &&
-         struct_has_pointer_fields_recursive(state.extra_structs, field.type.pointee_struct_name) {
-        nested_info := find_ps_struct_info(ps_infos, field.type.pointee_struct_name);
-        if !nested_info return_err("SPIR-V backend: missing pointer type info for nested struct '%'.", field.type.pointee_struct_name);
-        member_type_id = nested_info.ptr_type_id;
-      } else {
-        leaf_path := tprint("%.%", ps_info.prefix, field.name);
-        leaf_buffer := find_buffer(state, leaf_path);
-        if !leaf_buffer return_err("SPIR-V backend: missing leaf buffer for path '%'.", leaf_path);
-        member_type_id = leaf_buffer.ptr_wrapper_type_id;
-      }
-    } else if field.type.kind == .STRUCT && field.type.struct_name.count != 0 &&
-              struct_has_pointer_fields_recursive(state.extra_structs, field.type.struct_name) {
-      nested_info := find_ps_struct_info(ps_infos, field.type.struct_name);
-      if !nested_info return_err("SPIR-V backend: missing nested struct type info for '%'.", field.type.struct_name);
-      member_type_id = nested_info.type_id;
-    } else {
-      kind := spv_kind_from_ir_type(field.type);
-      member_type_id = type_id_from_kind(state, kind);
-    }
-    if member_type_id == 0 return_err("SPIR-V backend: unsupported field type for pointer struct '%.%'.", struct_name, field.name);
-    array_add(*inst.words, cast(u32) member_type_id);
-  }
+  for member_ids array_add(*inst.words, cast(u32) it);
   spv_module_append_inst(m, .TYPES_CONSTANTS_GLOBALS, inst);
   array_add(emitted, struct_name);
   return true, {};

@@ -25,24 +25,7 @@ JST_TOOL_ARTIFACT_CACHE_DIR :: ".build/ir_tool_cache/artifacts";
 JST_FINGERPRINT_FILE_CACHE_DIR :: ".build/ir_tool_cache/fingerprint_files";
 MY_MODULE_NAME :: "Jai-Shader-Transpiler";
 
-jst_pipeline_fingerprint_ready: bool;
-jst_pipeline_fingerprint_cache: string;
-jst_cache_summary_logged: bool;
-
-JST_Cache_Stats :: struct {
-  fingerprint_file_hits: s64;
-  fingerprint_file_misses: s64;
-  tool_version_hits: s64;
-  tool_version_misses: s64;
-  spirv_opt_hits: s64;
-  spirv_opt_misses: s64;
-  spirv_cross_hits: s64;
-  spirv_cross_misses: s64;
-  spirv_dis_hits: s64;
-  spirv_dis_misses: s64;
-}
-
-jst_cache_stats: JST_Cache_Stats;
+#load "jst_cache.jai";
 
 Transpiled_Target :: enum {
   METAL;
@@ -101,342 +84,6 @@ get_plugin :: () -> *Jai_To_Shader_Plugin {
   return p;
 }
 
-jst_hash_u64_append_byte :: (h: *u64, b: u8) {
-  h.* = (h.* ^ cast(u64) b) * 1099511628211;
-}
-
-jst_hash_u64_append_string :: (h: *u64, s: string) {
-  for s jst_hash_u64_append_byte(h, it);
-}
-
-jst_trim_newlines :: (s: string) -> string {
-  out := s;
-  while out.count > 0 && (out[out.count-1] == #char "\n" || out[out.count-1] == #char "\r") out.count -= 1;
-  return out;
-}
-
-jst_detect_module_root :: () -> string {
-  cwd := get_working_directory();
-  if contains(cwd, "modules/Jai-Shader-Transpiler") return ".";
-  return "modules/Jai-Shader-Transpiler";
-}
-
-jst_collect_module_jai_files :: (module_root: string) -> [..] string {
-  #import "File_Utilities";
-  files: [..] string;
-  visitor :: (info: *File_Visit_Info, user_data: *[..] string) {
-      if ends_with(info.full_name, ".jai") {
-          if contains(info.full_name, "/.") return; // TODO @Perf see why descend_into_directory isn't working on mac?
-          array_add(user_data, copy_string(info.full_name));
-      }
-  }
-  visit_files(module_root, true, *files, visitor);
-  return files;
-}
-
-jst_tool_version_fingerprint_line :: (args: ..string) -> string {
-  result, stdout, stderr, timeout_reached := Process.run_command(..args, capture_and_return_output=true, timeout_ms=3_000);
-  if timeout_reached return tprint("timeout:%", args[0]);
-  stdout = jst_trim_newlines(stdout);
-  stderr = jst_trim_newlines(stderr);
-  return tprint("tool=% type=% exit=% out=% err=%", args[0], result.type, result.exit_code, stdout, stderr);
-}
-
-jst_tool_version_cache_key :: (args: [] string) -> string {
-  h: u64 = 1469598103934665603;
-  jst_hash_u64_append_string(*h, "tool-version-v1");
-  for args {
-    jst_hash_u64_append_string(*h, it);
-    jst_hash_u64_append_string(*h, "\n");
-  }
-
-  hex := sprint("%", formatInt(h, base=16));
-  if hex.count == 0 return "0";
-  return copy_string(hex);
-}
-
-jst_tool_version_fingerprint_line_cached :: (args: ..string) -> string {
-  if args.count == 0 return "";
-
-  make_directory_if_it_does_not_exist(JST_TOOL_VERSION_CACHE_DIR, recursive=true);
-  cache_key := jst_tool_version_cache_key(args);
-  cache_path := tprint("%/%_%.txt", JST_TOOL_VERSION_CACHE_DIR, args[0], cache_key);
-  if FU.file_exists(cache_path) {
-    cached, cached_ok := read_entire_file(cache_path);
-    if cached_ok {
-      jst_cache_stats.tool_version_hits += 1;
-      return jst_trim_newlines(cached);
-    }
-  }
-
-  jst_cache_stats.tool_version_misses += 1;
-  line := jst_tool_version_fingerprint_line(..args);
-  _ = write_entire_file(cache_path, line);
-  return line;
-}
-
-jst_fingerprint_file_cache_key :: (path: string) -> string {
-  h: u64 = 1469598103934665603;
-  jst_hash_u64_append_string(*h, "fingerprint-file-v1");
-  jst_hash_u64_append_string(*h, path);
-
-  hex := sprint("%", formatInt(h, base=16));
-  if hex.count == 0 return "0";
-  return copy_string(hex);
-}
-
-jst_hash_string_u64_hex :: (s: string) -> string {
-  h: u64 = 1469598103934665603;
-  jst_hash_u64_append_string(*h, s);
-
-  hex := sprint("%", formatInt(h, base=16));
-  if hex.count == 0 return "0";
-  return copy_string(hex);
-}
-
-jst_read_cached_module_file_hash :: (path: string) -> (string, bool) {
-  modtime, size, stat_ok := FU.file_modtime_and_size(path);
-  if !stat_ok return "", false;
-
-  make_directory_if_it_does_not_exist(JST_FINGERPRINT_FILE_CACHE_DIR, recursive=true);
-  cache_key := jst_fingerprint_file_cache_key(path);
-  cache_path := tprint("%/%_cache.txt", JST_FINGERPRINT_FILE_CACHE_DIR, cache_key);
-  stamp := tprint("%|%|%", modtime.high, modtime.low, size);
-
-  if FU.file_exists(cache_path) {
-    cached, cached_ok := read_entire_file(cache_path);
-    if cached_ok {
-      newline_index := find_index_from_left(cached, "\n");
-      if newline_index >= 0 {
-        cached_stamp := string.{newline_index, cached.data};
-        if cached_stamp == stamp {
-          hash_text := string.{cached.count - newline_index - 1, cached.data + newline_index + 1};
-          hash_text = jst_trim_newlines(hash_text);
-          if hash_text.count != 0 {
-            jst_cache_stats.fingerprint_file_hits += 1;
-            return copy_string(hash_text), true;
-          }
-        }
-      }
-    }
-  }
-
-  contents, read_ok := read_entire_file(path);
-  if !read_ok return "", false;
-  hash_text := jst_hash_string_u64_hex(contents);
-  cache_text := tprint("%\n%", stamp, hash_text);
-  _ = write_entire_file(cache_path, cache_text);
-  jst_cache_stats.fingerprint_file_misses += 1;
-  return hash_text, true;
-}
-
-jst_tool_artifact_cache_key :: (tool_name: string, tool_version: string, input_bytes: string, metadata: [] string) -> string {
-  h: u64 = 1469598103934665603;
-  jst_hash_u64_append_string(*h, "tool-artifact-v1");
-  jst_hash_u64_append_string(*h, tool_name);
-  jst_hash_u64_append_string(*h, "\n");
-  jst_hash_u64_append_string(*h, tool_version);
-  jst_hash_u64_append_string(*h, "\n");
-  for metadata {
-    jst_hash_u64_append_string(*h, it);
-    jst_hash_u64_append_string(*h, "\n");
-  }
-  jst_hash_u64_append_string(*h, input_bytes);
-
-  hex := sprint("%", formatInt(h, base=16));
-  if hex.count == 0 return "0";
-  return copy_string(hex);
-}
-
-jst_restore_cached_binary_artifact :: (cache_path: string, output_path: string) -> bool {
-  if !FU.file_exists(cache_path) return false;
-  data, ok := read_entire_file(cache_path);
-  if !ok return false;
-  return write_entire_file(output_path, data.data, data.count);
-}
-
-jst_restore_cached_text_artifact :: (cache_path: string, output_path: string) -> bool {
-  if !FU.file_exists(cache_path) return false;
-  data, ok := read_entire_file(cache_path);
-  if !ok return false;
-  return write_entire_file(output_path, data);
-}
-
-jst_store_cached_binary_artifact :: (source_path: string, cache_path: string) {
-  data, ok := read_entire_file(source_path);
-  if !ok return;
-  _ = write_entire_file(cache_path, data.data, data.count);
-}
-
-jst_store_cached_text_artifact :: (source_path: string, cache_path: string) {
-  data, ok := read_entire_file(source_path);
-  if !ok return;
-  _ = write_entire_file(cache_path, data);
-}
-
-jst_disassemble_spirv_binary_cached :: (input_spv: string, output_spvasm: string) -> bool {
-  input_bytes, ok := read_entire_file(input_spv);
-  if !ok return disassemble_spirv_binary(input_spv, output_spvasm);
-
-  tool_version := jst_tool_version_fingerprint_line_cached("spirv-dis", "--version");
-  metadata : [1] string = .["spirv-dis"];
-  cache_key := jst_tool_artifact_cache_key("spirv-dis", tool_version, input_bytes, metadata);
-  cache_dir := tprint("%/%", JST_TOOL_ARTIFACT_CACHE_DIR, "spirv-dis");
-  make_directory_if_it_does_not_exist(cache_dir, recursive=true);
-  cache_path := tprint("%/%_cached.spvasm", cache_dir, cache_key);
-  if jst_restore_cached_text_artifact(cache_path, output_spvasm) {
-    jst_cache_stats.spirv_dis_hits += 1;
-    return true;
-  }
-
-  jst_cache_stats.spirv_dis_misses += 1;
-  if !disassemble_spirv_binary(input_spv, output_spvasm) return false;
-  jst_store_cached_text_artifact(output_spvasm, cache_path);
-  return true;
-}
-
-jst_optimize_spirv_binary_cached :: (input_spv: string, output_spv: string) -> bool {
-  input_bytes, ok := read_entire_file(input_spv);
-  if !ok return optimize_spirv_binary(input_spv, output_spv);
-
-  tool_version := jst_tool_version_fingerprint_line_cached("spirv-opt", "--version");
-  metadata : [1] string = .["-O"];
-  cache_key := jst_tool_artifact_cache_key("spirv-opt", tool_version, input_bytes, metadata);
-  cache_dir := tprint("%/%", JST_TOOL_ARTIFACT_CACHE_DIR, "spirv-opt");
-  make_directory_if_it_does_not_exist(cache_dir, recursive=true);
-  cache_path := tprint("%/%_cached.spv", cache_dir, cache_key);
-  if jst_restore_cached_binary_artifact(cache_path, output_spv) {
-    jst_cache_stats.spirv_opt_hits += 1;
-    return true;
-  }
-
-  jst_cache_stats.spirv_opt_misses += 1;
-  if !optimize_spirv_binary(input_spv, output_spv) return false;
-  jst_store_cached_binary_artifact(output_spv, cache_path);
-  return true;
-}
-
-jst_emit_spirv_cross_target_source_cached :: (spv_path: string, entry_name: string, stage: IR_Shader_Kind, target: Toolchain_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool {
-  input_bytes, ok := read_entire_file(spv_path);
-  if !ok return emit_spirv_cross_target_source(spv_path, entry_name, stage, target, output_path, use_metal_argument_buffers, source_entry_name=source_entry_name);
-
-  tool_version := jst_tool_version_fingerprint_line_cached("spirv-cross", "--version");
-  metadata : [5] string = .[
-    tprint("target=%", target),
-    tprint("stage=%", stage),
-    tprint("entry=%", entry_name),
-    tprint("source_entry=%", source_entry_name),
-    tprint("argbuf=%", use_metal_argument_buffers),
-  ];
-  cache_key := jst_tool_artifact_cache_key("spirv-cross", tool_version, input_bytes, metadata);
-  cache_dir := tprint("%/%", JST_TOOL_ARTIFACT_CACHE_DIR, "spirv-cross");
-  make_directory_if_it_does_not_exist(cache_dir, recursive=true);
-  ext := "glsl";
-  if target == .METAL ext = "metal";
-  cache_path := tprint("%/%_cached.%", cache_dir, cache_key, ext);
-  if jst_restore_cached_text_artifact(cache_path, output_path) {
-    jst_cache_stats.spirv_cross_hits += 1;
-    return true;
-  }
-
-  jst_cache_stats.spirv_cross_misses += 1;
-  if !emit_spirv_cross_target_source(spv_path, entry_name, stage, target, output_path, use_metal_argument_buffers, source_entry_name=source_entry_name) return false;
-  jst_store_cached_text_artifact(output_path, cache_path);
-  return true;
-}
-
-jst_should_emit_spvasm_debug :: () -> bool {
-  if WRITE_SPVASM_DEBUG return true;
-  cwd := get_working_directory();
-  if contains(cwd, "/headless_ir") return true;
-  return false;
-}
-
-jst_log_cache_summary :: () {
-  if jst_cache_summary_logged return;
-  s := jst_cache_stats;
-  total := s.fingerprint_file_hits + s.fingerprint_file_misses
-         + s.tool_version_hits + s.tool_version_misses
-         + s.spirv_opt_hits + s.spirv_opt_misses
-         + s.spirv_cross_hits + s.spirv_cross_misses
-         + s.spirv_dis_hits + s.spirv_dis_misses;
-  if total == 0 return;
-  jst_cache_summary_logged = true;
-  log("JST cache: fingerprint h=% m=% | tool_version h=% m=% | spirv-opt h=% m=% | spirv-cross h=% m=% | spirv-dis h=% m=%",
-      s.fingerprint_file_hits, s.fingerprint_file_misses,
-      s.tool_version_hits, s.tool_version_misses,
-      s.spirv_opt_hits, s.spirv_opt_misses,
-      s.spirv_cross_hits, s.spirv_cross_misses,
-      s.spirv_dis_hits, s.spirv_dis_misses);
-}
-
-jst_compute_pipeline_fingerprint :: () -> string {
-  h: u64 = 1469598103934665603;
-  jst_hash_u64_append_string(*h, "jai-shader-transpiler-pipeline-v2");
-  jst_hash_u64_append_string(*h, tprint("USE_SPIRV_OPT=%", USE_SPIRV_OPT));
-
-  module_root := jst_detect_module_root();
-  files := jst_collect_module_jai_files(module_root);
-  for files {
-    content_hash, ok := jst_read_cached_module_file_hash(it);
-    if !ok continue;
-    jst_hash_u64_append_string(*h, "file:");
-    jst_hash_u64_append_string(*h, it);
-    jst_hash_u64_append_string(*h, "\n");
-    jst_hash_u64_append_string(*h, content_hash);
-    jst_hash_u64_append_string(*h, "\n");
-  }
-
-  jst_hash_u64_append_string(*h, jst_tool_version_fingerprint_line_cached("spirv-cross", "--version"));
-  jst_hash_u64_append_string(*h, jst_tool_version_fingerprint_line_cached("spirv-opt", "--version"));
-  jst_hash_u64_append_string(*h, jst_tool_version_fingerprint_line_cached("spirv-as", "--version"));
-  jst_hash_u64_append_string(*h, jst_tool_version_fingerprint_line_cached("spirv-val", "--version"));
-
-  hex := sprint("%", formatInt(h, base=16));
-  if hex.count == 0 return "0";
-  return copy_string(hex);
-}
-
-jst_pipeline_fingerprint :: () -> string {
-  if !jst_pipeline_fingerprint_ready {
-    jst_pipeline_fingerprint_cache = jst_compute_pipeline_fingerprint();
-    jst_pipeline_fingerprint_ready = true;
-  }
-  return jst_pipeline_fingerprint_cache;
-}
-
-jst_use_fingerprinted_artifact_dirs :: () -> bool {
-  cwd := get_working_directory();
-  if contains(cwd, "/headless_ir") return false;
-  return true;
-}
-
-jst_generated_dir :: () -> string {
-  if !jst_use_fingerprinted_artifact_dirs() return DEBUG_OUTDIR;
-  fp := jst_pipeline_fingerprint();
-  if fp.count == 0 return DEBUG_OUTDIR;
-  return tprint("%/%", DEBUG_OUTDIR, fp);
-}
-
-jst_ir_intermediate_dir :: () -> string {
-  if !jst_use_fingerprinted_artifact_dirs() return IR_INTERMEDIATE_DIR;
-  fp := jst_pipeline_fingerprint();
-  if fp.count == 0 return IR_INTERMEDIATE_DIR;
-  return tprint("%/%", IR_INTERMEDIATE_DIR, fp);
-}
-
-jst_mirror_to_legacy_intermediate_if_needed :: (path: string) {
-  if !jst_use_fingerprinted_artifact_dirs() return;
-  if path.count == 0 return;
-  filename := path_filename(path);
-  if filename.count == 0 return;
-  data, ok := read_entire_file(path);
-  if !ok return;
-  make_directory_if_it_does_not_exist(IR_INTERMEDIATE_DIR, recursive=true);
-  legacy_path := tprint("%/%", IR_INTERMEDIATE_DIR, filename);
-  _ = write_entire_file(legacy_path, data);
-}
-
 get_transpiled_requests_seen: Table(string, bool);
 
 expression_to_source_string :: (node: *Code_Node) -> string {
@@ -445,30 +92,30 @@ expression_to_source_string :: (node: *Code_Node) -> string {
   return builder_to_string(*sb);
 }
 
+normalize_target_expr :: (expr: string) -> string {
+  prefix :: "Transpiled_Target";
+  if begins_with(expr, prefix) && expr.count > prefix.count && expr[prefix.count] == #char "."
+    return string.{expr.count - prefix.count, expr.data + prefix.count};
+  return expr;
+}
+
 transpiled_target_from_expr_string :: (expr: string) -> (single_note: string, pair_note: string, supports_pair: bool, is_metal: bool, ok: bool) {
-  if expr == {
+  if normalize_target_expr(expr) == {
     case ".METAL";       return "shader_to_metal",  "shader_pair_to_metal",  true,  true,  true;
-    case "Transpiled_Target.METAL"; return "shader_to_metal",  "shader_pair_to_metal",  true,  true,  true;
     case ".HLSL";        return "shader_to_hlsl",   "",                      false, false, true;
-    case "Transpiled_Target.HLSL"; return "shader_to_hlsl",   "",                      false, false, true;
     case ".OPENGL_GLSL"; return "shader_to_glsl",   "shader_pair_to_glsl",   true,  false, true;
-    case "Transpiled_Target.OPENGL_GLSL"; return "shader_to_glsl",   "shader_pair_to_glsl",   true,  false, true;
     case ".VULKAN_GLSL"; return "shader_to_vulkan", "shader_pair_to_vulkan", true,  false, true;
-    case "Transpiled_Target.VULKAN_GLSL"; return "shader_to_vulkan", "shader_pair_to_vulkan", true,  false, true;
   }
   return "", "", false, false, false;
 }
 
 canonical_transpiled_target_expr_string :: (expr: string) -> (string, bool) {
-  if expr == {
-    case ".METAL"; #through;
-    case "Transpiled_Target.METAL"; return ".METAL", true;
-    case ".HLSL"; #through;
-    case "Transpiled_Target.HLSL"; return ".HLSL", true;
-    case ".OPENGL_GLSL"; #through;
-    case "Transpiled_Target.OPENGL_GLSL"; return ".OPENGL_GLSL", true;
-    case ".VULKAN_GLSL"; #through;
-    case "Transpiled_Target.VULKAN_GLSL"; return ".VULKAN_GLSL", true;
+  normalized := normalize_target_expr(expr);
+  if normalized == {
+    case ".METAL";       return ".METAL", true;
+    case ".HLSL";        return ".HLSL", true;
+    case ".OPENGL_GLSL"; return ".OPENGL_GLSL", true;
+    case ".VULKAN_GLSL"; return ".VULKAN_GLSL", true;
   }
   return "", false;
 }
@@ -1591,248 +1238,6 @@ run_spirv_external_jobs_parallel :: (jobs: [] SPV_External_Single_Job) {
   }
 }
 
-Metal_Air_Compile_Job :: struct {
-  source_path: string;
-  air_path: string;
-  ok: bool;
-  error_message: string;
-}
-
-run_metal_air_compile_job :: (job: *Metal_Air_Compile_Job) -> bool {
-  assert(job != null);
-  if job.source_path.count == 0 || job.air_path.count == 0 {
-    job.error_message = copy_string("Metal AIR compile job missing source/output path.");
-    return false;
-  }
-  result, stdout, stderr, timeout_reached := Process.run_command(
-    "xcrun", "-sdk", "macosx", "metal", "-std=metal3.0", "-c", job.source_path, "-o", job.air_path,
-    capture_and_return_output=true, timeout_ms=30_000);
-  if timeout_reached {
-    job.error_message = copy_string(tprint("xcrun metal timed out for '%'.", job.source_path));
-    return false;
-  }
-  if result.type == .FAILED_TO_LAUNCH {
-    job.error_message = copy_string("Failed to launch xcrun metal.");
-    return false;
-  }
-  if result.type != .EXITED || result.exit_code != 0 {
-    job.error_message = copy_string(tprint("xcrun metal failed for '%':\n%\n%", job.source_path, stdout, stderr));
-    return false;
-  }
-  return true;
-}
-
-metal_air_compile_worker_proc :: (group: *Thread_Group, thread: *Thread, work: *void) -> Thread_Continue_Status {
-  _ = group;
-  _ = thread;
-  job := cast(*Metal_Air_Compile_Job) work;
-  job.ok = run_metal_air_compile_job(job);
-  return .CONTINUE;
-}
-
-run_metal_air_compile_jobs_parallel :: (jobs: [] Metal_Air_Compile_Job) -> bool {
-  if jobs.count == 0 return true;
-  cpus := get_number_of_processors();
-  if cpus < 1 cpus = 1;
-  worker_count := min(max(cpus - 1, 1), cast(s32) jobs.count);
-  tg: Thread_Group;
-  init(*tg, worker_count, metal_air_compile_worker_proc);
-  tg.logging = false;
-  tg.name = "JTS-Metal-AIR";
-  start(*tg);
-  defer shutdown(*tg);
-
-  for *jobs add_work(*tg, it);
-
-  completed := 0;
-  while completed < jobs.count {
-    done := get_completed_work(*tg);
-    completed += done.count;
-    if completed < jobs.count sleep_milliseconds(1);
-  }
-
-  for jobs {
-    if it.ok continue;
-    if it.error_message.count != 0 log_error("%", it.error_message);
-    else log_error("xcrun metal failed for '%'.", it.source_path);
-    return false;
-  }
-  return true;
-}
-
-sanitize_workspace_name_for_artifacts :: (workspace_name: string) -> string {
-  out := copy_string(workspace_name);
-  if out.count == 0 return "workspace";
-  for out {
-    if it == {
-      case #char " "; #through;
-      case #char "/"; #through;
-      case #char "\\"; #through;
-      case #char ":";
-        out[it_index] = "_";
-    }
-  }
-  return out;
-}
-
-metallib_stem_from_request_name :: (request_name: string) -> string {
-  if request_name.count == 0 return "";
-  pair_prefix := "transpiled_pair_metal_";
-  legacy_pair_prefix := "transpiled_pair__metal_";
-  if begins_with(request_name, pair_prefix) || begins_with(request_name, legacy_pair_prefix) {
-    prefix := ifx begins_with(request_name, pair_prefix) then pair_prefix else legacy_pair_prefix;
-    rest: string = {request_name.count - prefix.count, request_name.data + prefix.count};
-    marker := "_vertex_main_";
-    at, found := find_substring_index_local(rest, marker);
-    if found && at > 0 {
-      out: string = {at, rest.data};
-      return copy_string(out);
-    }
-    return copy_string(rest);
-  }
-
-  single_prefix := "transpiled_single_metal_";
-  legacy_single_prefix := "transpiled_single__metal_";
-  if begins_with(request_name, single_prefix) || begins_with(request_name, legacy_single_prefix) {
-    prefix := ifx begins_with(request_name, single_prefix) then single_prefix else legacy_single_prefix;
-    rest: string = {request_name.count - prefix.count, request_name.data + prefix.count};
-    marker := "_compute_main";
-    at, found := find_substring_index_local(rest, marker);
-    if found && at > 0 {
-      out: string = {at, rest.data};
-      return copy_string(out);
-    }
-    return copy_string(rest);
-  }
-
-  return "";
-}
-
-stable_metallib_workspace_name :: (plugin: *Jai_To_Shader_Plugin) -> string {
-  if !plugin return "workspace";
-  for plugin.manifest_entries {
-    if it.target != "METAL" continue;
-    stem := metallib_stem_from_request_name(it.request_name);
-    if stem.count != 0 return sanitize_workspace_name_for_artifacts(stem);
-  }
-  return sanitize_workspace_name_for_artifacts(copy_string(get_name(plugin.workspace),, temp));
-}
-
-find_substring_index_local :: (haystack: string, needle: string) -> (s64, bool) {
-  if needle.count == 0 || haystack.count < needle.count return 0, false;
-  max_start := haystack.count - needle.count;
-  for i: 0..max_start {
-    matched := true;
-    for j: 0..needle.count-1 {
-      if haystack[i + j] != needle[j] {
-        matched = false;
-        break;
-      }
-    }
-    if matched return i, true;
-  }
-  return 0, false;
-}
-
-is_absolute_path_local :: (path: string) -> bool {
-  if path.count == 0 return false;
-  if path[0] == #char "/" return true;
-  if path.count >= 3 && path[1] == #char ":" && (path[2] == #char "/" || path[2] == #char "\\") return true;
-  return false;
-}
-
-string_array_contains_local :: (haystack: [] string, needle: string) -> bool {
-  for haystack if it == needle return true;
-  return false;
-}
-
-link_metallib_from_air_files :: (air_paths: [] string, metallib_path: string) -> bool {
-  if air_paths.count == 0 || metallib_path.count == 0 return false;
-  args: [..] string;
-  args.allocator = temp;
-  array_add(*args, "xcrun", "-sdk", "macosx", "metallib");
-  for air_paths array_add(*args, it);
-  array_add(*args, "-o", metallib_path);
-
-  result, stdout, stderr, timeout_reached := Process.run_command(..args, capture_and_return_output=true, timeout_ms=30_000);
-  if timeout_reached {
-    log_error("xcrun metallib timed out for '%'.", metallib_path);
-    return false;
-  }
-  if result.type == .FAILED_TO_LAUNCH {
-    log_error("Failed to launch xcrun metallib.");
-    return false;
-  }
-  if result.type != .EXITED || result.exit_code != 0 {
-    if stdout.count != 0 log("%", stdout);
-    if stderr.count != 0 log_error("%", stderr);
-    log_error("xcrun metallib failed for '%'.", metallib_path);
-    return false;
-  }
-  return true;
-}
-
-build_metal_artifacts_for_manifest_entries :: (plugin: *Jai_To_Shader_Plugin, workspace_root: string) -> bool {
-  if !plugin return true;
-  if contains(workspace_root, "modules/Jai-Shader-Transpiler") {
-    // Keep transpiler examples/tests on source-only behavior for now.
-    return true;
-  }
-
-  workspace_name := stable_metallib_workspace_name(plugin);
-  generated_dir := jst_generated_dir();
-  make_directory_if_it_does_not_exist(generated_dir, recursive=true);
-  metallib_rel_path := tprint("%/%_app.metallib", generated_dir, workspace_name);
-
-  jobs: [..] Metal_Air_Compile_Job;
-  air_paths: [..] string;
-  seen_sources: [..] string;
-  seen_sources.allocator = temp;
-
-  for *plugin.manifest_entries {
-    if it.target != "METAL" continue;
-    if it.output_source_path.count == 0 {
-      log_error("Jai Shader Transpiler: missing Metal source path for entry '%'.", it.entry_id);
-      return false;
-    }
-
-    source_abs := it.output_source_path;
-    if !is_absolute_path_local(source_abs) source_abs = tprint("%/%", workspace_root, source_abs);
-    _, source_exists := read_entire_file(source_abs);
-    if !source_exists {
-      log_error("Jai Shader Transpiler: Metal source missing for entry '%': %", it.entry_id, source_abs);
-      return false;
-    }
-
-    air_rel_path := tprint("%.air", it.output_source_path);
-    air_abs_path := air_rel_path;
-    if !is_absolute_path_local(air_abs_path) air_abs_path = tprint("%/%", workspace_root, air_abs_path);
-    make_directory_if_it_does_not_exist(path_strip_filename(air_abs_path), recursive=true);
-
-    it.output_air_path = copy_string(air_rel_path);
-    it.output_metallib_path = copy_string(metallib_rel_path);
-
-    if !string_array_contains_local(seen_sources, source_abs) {
-      array_add(*seen_sources, source_abs);
-      array_add(*jobs, .{
-        source_path = source_abs,
-        air_path = air_abs_path,
-      });
-      array_add(*air_paths, air_abs_path);
-    }
-  }
-
-  if jobs.count == 0 return true;
-  if !run_metal_air_compile_jobs_parallel(jobs) return false;
-
-  metallib_abs_path := metallib_rel_path;
-  if !is_absolute_path_local(metallib_abs_path) metallib_abs_path = tprint("%/%", workspace_root, metallib_abs_path);
-  make_directory_if_it_does_not_exist(path_strip_filename(metallib_abs_path), recursive=true);
-  if !link_metallib_from_air_files(air_paths, metallib_abs_path) return false;
-
-  return true;
-}
-
 finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job, add_generated_comment := true) -> (target_source: string, ok: bool, diag: IR_Diagnostic) {
   assert(job != null);
   diag: IR_Diagnostic;
@@ -1865,182 +1270,6 @@ finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job, add_genera
   write_entire_file(job.output_path, target_source);
 
   return target_source, true, diag;
-}
-
-ir_emit_single_spirv_target_source :: (ctx: *Shader_Write_Context, add_generated_comment := true) -> (string, string, bool, IR_Diagnostic) {
-  diag: IR_Diagnostic;
-  if !ir_spirv_supports_single_context(ctx) {
-    diag.message = "SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only.";
-    if ctx && ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", "", false, diag;
-  }
-
-  spv_binary: [] u8;
-  spv_ok := false;
-  spv_diag: IR_Diagnostic;
-  entry_name: string;
-  use_metal_argument_buffers := false;
-  if ctx.type == .Vertex {
-    ir_vertex, lowered, lowered_diag := ir_lower_vertex_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
-    if !lowered return "", "", false, lowered_diag;
-    assign_single_function_constant_spec_ids(*ir_vertex);
-    normalized, normalize_diag := normalize_vertex_ir(*ir_vertex);
-    if !normalized return "", "", false, normalize_diag;
-    ctx.function_constants = ir_vertex.function_constants;
-    entry_name = ir_vertex.entry_name;
-    spv_res := to_spv_binary(*ir_vertex);
-    spv_binary, spv_ok, spv_diag = unpack_result(spv_res);
-    use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_vertex.args, ir_vertex.extra_structs);
-  } else if ctx.type == .Fragment {
-    ir_fragment, lowered, lowered_diag := ir_lower_fragment_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
-    if !lowered return "", "", false, lowered_diag;
-    assign_single_function_constant_spec_ids(*ir_fragment);
-    normalized, normalize_diag := normalize_shader(*ir_fragment);
-    if !normalized return "", "", false, normalize_diag;
-    ctx.function_constants = ir_fragment.function_constants;
-    entry_name = ir_fragment.entry_name;
-    spv_res := to_spv_binary(*ir_fragment);
-    spv_binary, spv_ok, spv_diag = unpack_result(spv_res);
-    use_metal_argument_buffers = ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs);
-  } else {
-    ir_compute, lowered, lowered_diag := ir_lower_compute_from_shader_context(.{name=ctx.name, header=ctx.main_fn.header});
-    if !lowered return "", "", false, lowered_diag;
-    assign_single_function_constant_spec_ids(*ir_compute);
-    normalized, normalize_diag := normalize_compute_ir(*ir_compute);
-    if !normalized return "", "", false, normalize_diag;
-    ctx.function_constants = ir_compute.function_constants;
-    entry_name = ir_compute.entry_name;
-    spv_res := to_spv_binary(*ir_compute);
-    spv_binary, spv_ok, spv_diag = unpack_result(spv_res);
-  }
-
-  target, target_ok := ir_target_from_context(ctx);
-  if !target_ok {
-    diag.message = "SPIR-V backend: unsupported target for context.";
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", "", false, diag;
-  }
-
-  build_dir := jst_ir_intermediate_dir();
-  make_directory_if_it_does_not_exist(build_dir, recursive=true);
-
-  stage_short := ir_stage_short_from_context(ctx);
-  spv_path := tprint("%/%_%.spv", build_dir, ctx.name, stage_short);
-  spv_opt_path := tprint("%/%_%.opt.spv", build_dir, ctx.name, stage_short);
-  output_ext := ifx ctx.language == .METAL then "metal" else "glsl";
-  output_path := tprint("%/%_%.%", build_dir, ctx.name, stage_short, output_ext);
-
-  if entry_name.count == 0 {
-    diag.message = "SPIR-V backend: empty entry name.";
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", "", false, diag;
-  }
-
-  spvasm_path := tprint("%/%_%.spvasm", build_dir, ctx.name, stage_short);
-  if !spv_ok {
-    if ctx.type == .Compute {
-      if spv_diag.message.count == 0 spv_diag.message = tprint("SPIR-V binary backend: failed to emit SPIR-V for '%'.", ctx.name);
-    } else {
-      if spv_diag.message.count == 0 spv_diag.message = tprint("SPIR-V binary backend: failed to translate SPIR-V assembly for '%'.", ctx.name);
-    }
-    if !spv_diag.has_location && ctx.main_fn && ctx.main_fn.header {
-      spv_diag.location = make_location(ctx.main_fn.header);
-      spv_diag.has_location = true;
-    }
-    return "", "", false, spv_diag;
-  }
-  if !write_entire_file(spv_path, spv_binary.data, spv_binary.count) {
-    diag.message = tprint("SPIR-V backend: failed writing SPIR-V binary '%'.", spv_path);
-    if spv_binary.data free(spv_binary.data);
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", "", false, diag;
-  }
-  if spv_binary.data free(spv_binary.data);
-  jst_mirror_to_legacy_intermediate_if_needed(spv_path);
-
-  spv_for_target := spv_path;
-  if !jst_optimize_spirv_binary_cached(spv_path, spv_opt_path) {
-    diag.message = tprint("SPIR-V backend: spirv-opt failed for '%'. SPIR-V: %", ctx.name, spv_path);
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", "", false, diag;
-  }
-  jst_mirror_to_legacy_intermediate_if_needed(spv_opt_path);
-  spv_for_target = spv_opt_path;
-
-  if !validate_spirv_binary(spv_for_target) {
-    diag.message = tprint("SPIR-V backend: spirv-val failed for '%'. SPIR-V: %", ctx.name, spv_for_target);
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", "", false, diag;
-  }
-  if jst_should_emit_spvasm_debug() {
-    if !jst_disassemble_spirv_binary_cached(spv_path, spvasm_path) {
-      diag.message = tprint("SPIR-V backend: spirv-dis failed for '%'. SPIR-V: %", ctx.name, spv_path);
-      if ctx.main_fn && ctx.main_fn.header {
-        diag.location = make_location(ctx.main_fn.header);
-        diag.has_location = true;
-      }
-      return "", "", false, diag;
-    }
-    jst_mirror_to_legacy_intermediate_if_needed(spvasm_path);
-  }
-
-  if !jst_emit_spirv_cross_target_source_cached(spv_for_target, entry_name, ctx.type, target, output_path, use_metal_argument_buffers, source_entry_name=entry_name) {
-    diag.message = tprint("SPIR-V backend: spirv-cross failed for '%'. SPIR-V: %", ctx.name, spv_for_target);
-    if ctx.main_fn && ctx.main_fn.header {
-      diag.location = make_location(ctx.main_fn.header);
-      diag.has_location = true;
-    }
-    return "", "", false, diag;
-  }
-  jst_mirror_to_legacy_intermediate_if_needed(output_path);
-
-  target_source, ok := read_entire_file(output_path);
-  if !ok {
-    diag.message = tprint("SPIR-V backend: failed reading emitted target source '%'.", output_path);
-    return "", "", false, diag;
-  }
-  if ctx.language == .METAL && ctx.type != .Compute {
-    target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
-    write_entire_file(output_path, target_source);
-  }
-  if ctx.type == .Compute && ctx.language == .METAL {
-    target_source = ir_metal_enable_unsafe_runtime_array_indexing(target_source);
-    target_source = replace(target_source, "[[kernel]] void", "kernel void");
-  }
-  if add_generated_comment {
-    target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_context(ctx), ir_pipeline_label_spirv(target));
-  }
-  make_directory_if_it_does_not_exist(path_strip_filename(output_path), recursive=true);
-  write_entire_file(output_path, target_source);
-
-  return target_source, output_path, true, diag;
-}
-
-write_shader_single_ir_spirv :: (ctx: *Shader_Write_Context) -> (string, bool, IR_Diagnostic) {
-  target_source, _, ok, diag := ir_emit_single_spirv_target_source(ctx, add_generated_comment=true);
-  if !ok return "", false, diag;
-
-  symbol_name := source_symbol_name_from_context(ctx);
-  decl := tprint("% :: #string END\n%\nEND", symbol_name, target_source);
-  return decl, true, diag;
 }
 
 ir_semantic_upper_local :: (semantic: string) -> string {
@@ -2203,33 +1432,28 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
   // Keep direct bindings by default for pair shaders, but switch to argument buffers when
   // bindless globals are present in SPIR-V text (required for large bindless arrays on Metal).
   use_metal_argument_buffers := false;
-  
-  
-  // TODO: remove this
-  emit_ir_graphics_pair_to_spirv_binary_branch :: (vertex: IR_Vertex_Shader, fragment: IR_Fragment_Shader) -> (vertex_spv: []u8, fragment_spv: []u8, ok: bool, diag: IR_Diagnostic) {
-    diag: IR_Diagnostic;
-    assert(vertex.entry_name.count != 0);
-    assert(fragment.entry_name.count != 0);
-    
-    vert_spv_res := to_spv_binary(*vertex);
-    vertex_spv, vertex_ok, vertex_diag := unpack_result(vert_spv_res);
-    if !vertex_ok return .[], .[], false, vertex_diag;
-    
-    frag_spv_res := to_spv_binary(*fragment);
-    fragment_spv, fragment_ok, fragment_diag := unpack_result(frag_spv_res);
-    if !fragment_ok return .[], .[], false, fragment_diag;
-    
-    return vertex_spv, fragment_spv, true, diag;
+
+  assert(ir_vertex.entry_name.count != 0);
+  assert(ir_fragment.entry_name.count != 0);
+  vert_spv_res := to_spv_binary(*ir_vertex);
+  vertex_spv_binary, vertex_spv_ok, vertex_spv_diag := unpack_result(vert_spv_res);
+  if !vertex_spv_ok {
+    if !vertex_spv_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+      vertex_spv_diag.location = make_location(pair_ctx.vertex_fn.header);
+      vertex_spv_diag.has_location = true;
+    }
+    return "", false, vertex_spv_diag;
+  }
+  frag_spv_res := to_spv_binary(*ir_fragment);
+  fragment_spv_binary, fragment_spv_ok, fragment_spv_diag := unpack_result(frag_spv_res);
+  if !fragment_spv_ok {
+    if !fragment_spv_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
+      fragment_spv_diag.location = make_location(pair_ctx.vertex_fn.header);
+      fragment_spv_diag.has_location = true;
+    }
+    return "", false, fragment_spv_diag;
   }
 
-  vertex_spv_binary, fragment_spv_binary, pair_spvasm_ok, pair_spvasm_diag := emit_ir_graphics_pair_to_spirv_binary_branch(ir_vertex, ir_fragment);
-  if !pair_spvasm_ok {
-    if !pair_spvasm_diag.has_location && pair_ctx.vertex_fn && pair_ctx.vertex_fn.header {
-      pair_spvasm_diag.location = make_location(pair_ctx.vertex_fn.header);
-      pair_spvasm_diag.has_location = true;
-    }
-    return "", false, pair_spvasm_diag;
-  }
   build_dir := jst_ir_intermediate_dir();
   make_directory_if_it_does_not_exist(build_dir, recursive=true);
   vertex_spvasm_path := tprint("%/%_vert.spvasm", build_dir, pair_ctx.name);
@@ -2720,47 +1944,15 @@ trim_ascii_whitespace :: (in: string) -> string {
   return ret;
 }
 
-lookup_entry_already_queued :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, symbol_name: string) -> bool {
-  for plugin.lookup_entries {
-    if it.target_name != target_name continue;
-    if it.primary_name != primary_name continue;
-    if it.secondary_name != secondary_name continue;
-    if it.tertiary_name.count != 0 continue;
-    if it.symbol_name != symbol_name continue;
-    return true;
-  }
-  return false;
-}
-
-queue_lookup_entry :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, symbol_name: string) {
-  if lookup_entry_already_queued(plugin, target_name, primary_name, secondary_name, symbol_name) return;
-  array_add(*plugin.lookup_entries, .{
-    target_name = target_name,
-    primary_name = primary_name,
-    secondary_name = secondary_name,
-    tertiary_name = "",
-    symbol_name = symbol_name,
-  });
-  if plugin.did_emit_lookup_overloads {
-    plugin.did_emit_lookup_overloads = false;
-    emit_lookup_overloads(plugin, plugin.workspace);
-  }
-}
-
-lookup_entry3_already_queued :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, tertiary_name: string, symbol_name: string) -> bool {
+queue_lookup_entry :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, symbol_name: string, tertiary_name := "") {
   for plugin.lookup_entries {
     if it.target_name != target_name continue;
     if it.primary_name != primary_name continue;
     if it.secondary_name != secondary_name continue;
     if it.tertiary_name != tertiary_name continue;
     if it.symbol_name != symbol_name continue;
-    return true;
+    return;
   }
-  return false;
-}
-
-queue_lookup_entry3 :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, tertiary_name: string, symbol_name: string) {
-  if lookup_entry3_already_queued(plugin, target_name, primary_name, secondary_name, tertiary_name, symbol_name) return;
   array_add(*plugin.lookup_entries, .{
     target_name = target_name,
     primary_name = primary_name,
@@ -3138,7 +2330,7 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
       symbol_name := source_symbol_name_for_request(mesh_ctx.name);
       lookup_primary := ifx task_proc then task_proc.header.name else "";
       lookup_secondary := mesh_proc.header.name;
-      queue_lookup_entry3(plugin, target_name, lookup_primary, lookup_secondary, fragment_name, symbol_name);
+      queue_lookup_entry(plugin, target_name, lookup_primary, lookup_secondary, symbol_name, tertiary_name=fragment_name);
     }
   }
   return true;
@@ -3251,6 +2443,8 @@ member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
   }
   return false;
 }
+
+#load "metal_build.jai";
 
 #scope_file
 
