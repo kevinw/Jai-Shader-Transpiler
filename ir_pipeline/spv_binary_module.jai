@@ -106,6 +106,10 @@ spv_module_append_ext_inst_import :: (m: *SPV_Module, result_id: u32, text: stri
   spv_module_append_string_inst(m, .EXT_INST_IMPORTS, SPV_OP_EXT_INST_IMPORT, .[result_id], text);
 }
 
+spv_module_append_extension :: (m: *SPV_Module, text: string) {
+  spv_module_append_string_inst(m, .EXT_INST_IMPORTS, SPV_OP_EXTENSION, .[], text);
+}
+
 spv_module_append_source :: (m: *SPV_Module, source_language: u32, version: u32) {
   spv_module_append_words(m, .DEBUG, SPV_OP_SOURCE, source_language, version);
 }
@@ -877,6 +881,7 @@ spv_lookup_opcode :: (name: string) -> (u16, bool) {
   case "OpAtomicIAdd";             return SPV_OP_ATOMIC_IADD, true;
   case "OpAtomicExchange";         return SPV_OP_ATOMIC_EXCHANGE, true;
   case "OpAtomicCompareExchange";  return SPV_OP_ATOMIC_COMPARE_EXCHANGE, true;
+  case "OpEmitMeshTasksEXT";       return SPV_OP_EMIT_MESH_TASKS_EXT, true;
   case "OpDecorate";               return SPV_OP_DECORATE, true;
   case "OpMemberDecorate";         return SPV_OP_MEMBER_DECORATE, true;
   }
@@ -886,6 +891,7 @@ spv_lookup_opcode :: (name: string) -> (u16, bool) {
 spv_lookup_capability :: (name: string) -> (u32, bool) {
   if name == {
   case "Shader";                             return SPV_CAPABILITY_SHADER, true;
+  case "MeshShadingEXT";                     return SPV_CAPABILITY_MESH_SHADING_EXT, true;
   case "Int64";                              return SPV_CAPABILITY_INT64, true;
   case "Float16";                            return SPV_CAPABILITY_FLOAT16, true;
   case "StorageImageWriteWithoutFormat";     return SPV_CAPABILITY_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT, true;
@@ -909,6 +915,8 @@ spv_lookup_execution_model :: (name: string) -> (u32, bool) {
   if name == "Vertex" return SPV_EXECUTION_MODEL_VERTEX, true;
   if name == "Fragment" return SPV_EXECUTION_MODEL_FRAGMENT, true;
   if name == "GLCompute" return SPV_EXECUTION_MODEL_GLCOMPUTE, true;
+  if name == "TaskEXT" return SPV_EXECUTION_MODEL_TASK_EXT, true;
+  if name == "MeshEXT" return SPV_EXECUTION_MODEL_MESH_EXT, true;
   return 0, false;
 }
 
@@ -1021,6 +1029,7 @@ spv_lookup_glsl_extinst :: (name: string) -> (u32, bool) {
 SPV_OP_SOURCE                  :: 3;
 SPV_OP_NAME                    :: 5;
 SPV_OP_MEMBER_NAME             :: 6;
+SPV_OP_EXTENSION               :: 10;
 SPV_OP_EXT_INST_IMPORT         :: 11;
 SPV_OP_EXT_INST                :: 12;
 SPV_OP_MEMORY_MODEL            :: 14;
@@ -1124,12 +1133,15 @@ SPV_OP_SWITCH                  :: 251;
 SPV_OP_KILL                    :: 252;
 SPV_OP_RETURN                  :: 253;
 SPV_OP_UNREACHABLE             :: 255;
+SPV_OP_EMIT_MESH_TASKS_EXT     :: 5294;
+SPV_OP_SET_MESH_OUTPUTS_EXT    :: 5295;
 
 SPV_CAPABILITY_SHADER                          :: 1;
 SPV_CAPABILITY_FLOAT16                         :: 9;
 SPV_CAPABILITY_INT64                           :: 11;
 SPV_CAPABILITY_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT :: 56;
 SPV_CAPABILITY_PHYSICAL_STORAGE_BUFFER_ADDRESSES :: 5347;
+SPV_CAPABILITY_MESH_SHADING_EXT                :: 5283;
 
 SPV_ADDRESSING_MODEL_LOGICAL                   :: 0;
 SPV_ADDRESSING_MODEL_PHYSICAL_STORAGE_BUFFER_64 :: 5348;
@@ -1138,9 +1150,14 @@ SPV_MEMORY_MODEL_GLSL450                       :: 1;
 SPV_EXECUTION_MODEL_VERTEX                     :: 0;
 SPV_EXECUTION_MODEL_FRAGMENT                   :: 4;
 SPV_EXECUTION_MODEL_GLCOMPUTE                  :: 5;
+SPV_EXECUTION_MODEL_TASK_EXT                   :: 5364;
+SPV_EXECUTION_MODEL_MESH_EXT                   :: 5365;
 
 SPV_EXECUTION_MODE_ORIGIN_UPPER_LEFT           :: 7;
 SPV_EXECUTION_MODE_LOCAL_SIZE                  :: 17;
+SPV_EXECUTION_MODE_OUTPUT_VERTICES             :: 26;
+SPV_EXECUTION_MODE_OUTPUT_PRIMITIVES_EXT       :: 5270;
+SPV_EXECUTION_MODE_OUTPUT_TRIANGLES_EXT        :: 5298;
 
 SPV_SOURCE_LANGUAGE_UNKNOWN                    :: 0;
 
@@ -1165,6 +1182,7 @@ SPV_BUILTIN_LOCAL_INVOCATION_INDEX             :: 29;
 SPV_BUILTIN_FRAG_COORD                         :: 15;
 SPV_BUILTIN_VERTEX_INDEX                       :: 42;
 SPV_BUILTIN_INSTANCE_INDEX                     :: 43;
+SPV_BUILTIN_PRIMITIVE_TRIANGLE_INDICES_EXT     :: 5296;
 
 SPV_STORAGE_CLASS_UNIFORM_CONSTANT             :: 0;
 SPV_STORAGE_CLASS_INPUT                        :: 1;
@@ -1172,6 +1190,7 @@ SPV_STORAGE_CLASS_UNIFORM                      :: 2;
 SPV_STORAGE_CLASS_OUTPUT                       :: 3;
 SPV_STORAGE_CLASS_FUNCTION                     :: 7;
 SPV_STORAGE_CLASS_STORAGE_BUFFER               :: 12;
+SPV_STORAGE_CLASS_TASK_PAYLOAD_WORKGROUP_EXT   :: 5402;
 SPV_STORAGE_CLASS_PHYSICAL_STORAGE_BUFFER      :: 5349;
 
 SPV_DIM_2D                                     :: 1;

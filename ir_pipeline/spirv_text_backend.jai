@@ -20,6 +20,10 @@ to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) {
             generic_diag.message = tprint("SPIR-V generic backend: unsupported compute shader '%'.", shader.source_name);
         }
         return {"", false, generic_diag};
+    case .Task;
+        return {"", false, .{message = tprint("SPIR-V generic backend: task shader text emission is not implemented yet ('%').", shader.source_name)}};
+    case .Mesh;
+        return {"", false, .{message = tprint("SPIR-V generic backend: mesh shader text emission is not implemented yet ('%').", shader.source_name)}};
     }
 } @jdll_export
 
@@ -37,6 +41,12 @@ to_spv_binary :: (shader: *IR_Shader) -> IR_Result([] u8) {
         return {spv, ok, diag};
     case .Compute;
         spv, ok, diag := emit_compute_generic_uint_buffer_binary(cast(*IR_Compute_Shader)shader);
+        return {spv, ok, diag};
+    case .Task;
+        spv, ok, diag := emit_task_generic_binary(cast(*IR_Task_Shader)shader);
+        return {spv, ok, diag};
+    case .Mesh;
+        spv, ok, diag := emit_mesh_generic_binary(cast(*IR_Mesh_Shader)shader);
         return {spv, ok, diag};
     }
 } @jdll_export
@@ -393,6 +403,15 @@ call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee_matches_builtin(callee, "write_2d") return .WRITE_2D;
   if callee_matches_builtin(callee, "write_3d") return .WRITE_3D;
   if callee_matches_builtin(callee, "discard") return .DISCARD;
+  if callee_matches_builtin(callee, "task_set_mesh_groups") return .TASK_SET_MESH_GROUPS;
+  if callee_matches_builtin(callee, "task_group_id_x") return .TASK_GROUP_ID_X;
+  if callee_matches_builtin(callee, "task_payload_store_u32") return .TASK_PAYLOAD_STORE_U32;
+  if callee_matches_builtin(callee, "mesh_set_output_counts") return .MESH_SET_OUTPUT_COUNTS;
+  if callee_matches_builtin(callee, "mesh_group_id_x") return .MESH_GROUP_ID_X;
+  if callee_matches_builtin(callee, "mesh_payload_load_u32") return .MESH_PAYLOAD_LOAD_U32;
+  if callee_matches_builtin(callee, "mesh_set_vertex_position") return .MESH_SET_VERTEX_POSITION;
+  if callee_matches_builtin(callee, "mesh_set_vertex_color") return .MESH_SET_VERTEX_COLOR;
+  if callee_matches_builtin(callee, "mesh_set_triangle") return .MESH_SET_TRIANGLE;
   if callee_matches_builtin(callee, "saturate") return .SATURATE;
   if callee_matches_builtin(callee, "mix") return .MIX;
   if callee_matches_builtin(callee, "lerp") return .LERP;
@@ -455,6 +474,15 @@ call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
   if kind == .SAMPLE_3D return "sample_3d";
   if kind == .WRITE_2D return "write_2d";
   if kind == .WRITE_3D return "write_3d";
+  if kind == .TASK_SET_MESH_GROUPS return "task_set_mesh_groups";
+  if kind == .TASK_GROUP_ID_X return "task_group_id_x";
+  if kind == .TASK_PAYLOAD_STORE_U32 return "task_payload_store_u32";
+  if kind == .MESH_SET_OUTPUT_COUNTS return "mesh_set_output_counts";
+  if kind == .MESH_GROUP_ID_X return "mesh_group_id_x";
+  if kind == .MESH_PAYLOAD_LOAD_U32 return "mesh_payload_load_u32";
+  if kind == .MESH_SET_VERTEX_POSITION return "mesh_set_vertex_position";
+  if kind == .MESH_SET_VERTEX_COLOR return "mesh_set_vertex_color";
+  if kind == .MESH_SET_TRIANGLE return "mesh_set_triangle";
   if kind == .ATOMIC_ADD_U32 return "atomic_add_u32";
   if kind == .ATOMIC_SUB_U32 return "atomic_sub_u32";
   if kind == .ATOMIC_EXCHANGE_U32 return "atomic_exchange_u32";
@@ -529,8 +557,10 @@ IR_SPV_Gen_Type :: enum {
 
 IR_SPV_Gen_Stage :: enum {
   COMPUTE;
+  TASK;
   VERTEX;
   FRAGMENT;
+  MESH;
 }
 
 IR_SPV_Gen_Interface_Builtin :: enum {
@@ -920,9 +950,28 @@ IR_SPV_Gen_State :: struct {
     id_main: s64;
   };
 
+  id_mesh_positions_array_type: s64;
+  id_ptr_output_mesh_positions_array: s64;
+  id_ptr_output_mesh_position: s64;
+  id_mesh_positions_var: s64;
+  id_mesh_colors_array_type: s64;
+  id_ptr_output_mesh_colors_array: s64;
+  id_ptr_output_mesh_color: s64;
+  id_mesh_colors_var: s64;
+  id_mesh_triangle_indices_array_type: s64;
+  id_ptr_output_mesh_triangle_indices_array: s64;
+  id_ptr_output_mesh_triangle_indices: s64;
+  id_mesh_triangle_indices_var: s64;
+  id_task_payload_struct: s64;
+  id_ptr_task_payload_struct: s64;
+  id_ptr_task_payload_uint: s64;
+  id_task_payload_var: s64;
+
   bound_value: u32;
   emit_text: bool;
   record_binary: bool;
+  uses_task_payload_u32: bool;
+  uses_mesh_payload_u32: bool;
 }
 
 BINDLESS_SAMPLED_TEXTURE_ARRAY_LEN :: 32;
@@ -5749,6 +5798,29 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if builtin_kind == .DISCARD {
         return_err("discard has no return value and must be used as a statement.");
       }
+      if builtin_kind == .TASK_SET_MESH_GROUPS {
+        return_err("task_set_mesh_groups has no return value and must be used as a statement.");
+      }
+      if builtin_kind == .TASK_GROUP_ID_X {
+        if expr.args.count != 0 return_err("task_group_id_x expects 0 args.");
+        return load_builtin_vec3_component(s, s.id_gl_workgroup_id, 0), .UINT, true, diag;
+      }
+      if builtin_kind == .TASK_PAYLOAD_STORE_U32 {
+        return_err("task_payload_store_u32 has no return value and must be used as a statement.");
+      }
+      if builtin_kind == .MESH_GROUP_ID_X {
+        if expr.args.count != 0 return_err("mesh_group_id_x expects 0 args.");
+        return load_builtin_vec3_component(s, s.id_gl_workgroup_id, 0), .UINT, true, diag;
+      }
+      if builtin_kind == .MESH_PAYLOAD_LOAD_U32 {
+        if expr.args.count != 0 return_err("mesh_payload_load_u32 expects 0 args.");
+        payload_ptr := new_id(s);
+        spv_emit_access_chain(s, payload_ptr, s.id_ptr_task_payload_uint, s.id_task_payload_var, .[get_i32_const(s, 0)]);
+        payload_value := new_id(s);
+        spv_emit_load(s, payload_value, s.id_uint, payload_ptr);
+        s.uses_mesh_payload_u32 = true;
+        return payload_value, .UINT, true, diag;
+      }
       if builtin_kind == .ATOMIC_ADD_U32 {
         atomic_id, atomic_type, atomic_ok, atomic_diag := emit_atomic_u32_call(s, "OpAtomicIAdd", expr.args);
         return atomic_id, atomic_type, atomic_ok, atomic_diag;
@@ -7030,6 +7102,36 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if stmt.call_expr.args.count != 0 return_err("discard expects 0 args.");
         spv_emit_terminator0(s, "OpKill");
         return true, true, diag;
+      }
+      if builtin_kind == .TASK_SET_MESH_GROUPS {
+        task_ok, task_diag := emit_task_set_mesh_groups_call(s, stmt.call_expr.args);
+        if !task_ok return false, false, task_diag;
+        return true, true, diag;
+      }
+      if builtin_kind == .TASK_PAYLOAD_STORE_U32 {
+        payload_ok, payload_diag := emit_task_payload_store_u32_call(s, stmt.call_expr.args);
+        if !payload_ok return false, false, payload_diag;
+        return true, false, diag;
+      }
+      if builtin_kind == .MESH_SET_OUTPUT_COUNTS {
+        mesh_ok, mesh_diag := emit_mesh_set_output_counts_call(s, stmt.call_expr.args);
+        if !mesh_ok return false, false, mesh_diag;
+        return true, false, diag;
+      }
+      if builtin_kind == .MESH_SET_VERTEX_POSITION {
+        mesh_ok, mesh_diag := emit_mesh_set_vertex_position_call(s, stmt.call_expr.args);
+        if !mesh_ok return false, false, mesh_diag;
+        return true, false, diag;
+      }
+      if builtin_kind == .MESH_SET_VERTEX_COLOR {
+        mesh_ok, mesh_diag := emit_mesh_set_vertex_color_call(s, stmt.call_expr.args);
+        if !mesh_ok return false, false, mesh_diag;
+        return true, false, diag;
+      }
+      if builtin_kind == .MESH_SET_TRIANGLE {
+        mesh_ok, mesh_diag := emit_mesh_set_triangle_call(s, stmt.call_expr.args);
+        if !mesh_ok return false, false, mesh_diag;
+        return true, false, diag;
       }
 
       helper := find_function(s, helper_name);

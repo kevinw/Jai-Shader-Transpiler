@@ -249,6 +249,17 @@ atomic_compare_exchange_u32 :: (dst: *u32, compare: u32, value: u32) -> u32 { re
 atomic_min_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
 atomic_max_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
 
+// Minimal mesh-shader helpers for the initial IR/SPIR-V mesh path.
+task_set_mesh_groups :: (group_count_x: u32, group_count_y: u32, group_count_z: u32) { }
+task_group_id_x :: () -> u32 { return 0; }
+task_payload_store_u32 :: (value: u32) { }
+mesh_set_output_counts :: (vertex_count: u32, primitive_count: u32) { }
+mesh_group_id_x :: () -> u32 { return 0; }
+mesh_payload_load_u32 :: () -> u32 { return 0; }
+mesh_set_vertex_position :: (vertex_index: u32, position: Vector4) { }
+mesh_set_vertex_color :: (vertex_index: u32, color: Vector3) { }
+mesh_set_triangle :: (primitive_index: u32, i0: u32, i1: u32, i2: u32) { }
+
 is_number :: (T: Type) -> bool {
   return T == float ||
          T == float64 ||

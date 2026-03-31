@@ -2097,6 +2097,313 @@ emit_compute_generic_uint_buffer_binary :: (shader: *IR_Compute_Shader) -> (spv:
   return spv_serialize_module_binary(*module), true, diag;
 }
 
+emit_mesh_set_outputs_ext :: (s: *IR_SPV_Gen_State, vertex_count_id: s64, primitive_count_id: s64) {
+  if s.record_binary {
+    words: [..]u32;
+    array_add(*words, cast(u32) vertex_count_id, cast(u32) primitive_count_id);
+    array_add(*s.op_insts, .{opcode = SPV_OP_SET_MESH_OUTPUTS_EXT, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("               OpSetMeshOutputsEXT % %\n", id_text(vertex_count_id), id_text(primitive_count_id)));
+  }
+  s.last_op_is_terminator = false;
+}
+
+emit_mesh_store_array_value :: (s: *IR_SPV_Gen_State, ptr_elem_type_id: s64, array_var_id: s64, index_id: s64, value_id: s64) {
+  ptr_id := new_id(s);
+  spv_emit_access_chain(s, ptr_id, ptr_elem_type_id, array_var_id, .[index_id]);
+  spv_emit_store(s, ptr_id, value_id);
+}
+
+emit_task_set_mesh_groups_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  if s.stage != .TASK return false, make_diag("task_set_mesh_groups is currently task-stage only.");
+  if args.count != 3 return false, make_diag("task_set_mesh_groups expects 3 args.");
+  group_ids: [3]s64;
+  for args {
+    value_id, value_type, value_ok, value_diag := emit_expr(s, it);
+    if !value_ok return false, value_diag;
+    value_id, _, value_ok, value_diag = coerce_to_exact_kind(s, value_id, value_type, .UINT);
+    if !value_ok return false, value_diag;
+    group_ids[it_index] = value_id;
+  }
+  if s.uses_task_payload_u32 {
+    add_op(s, "OpEmitMeshTasksEXT", group_ids[0], group_ids[1], group_ids[2], s.id_task_payload_var, is_terminator=true);
+  } else {
+    add_op(s, "OpEmitMeshTasksEXT", group_ids[0], group_ids[1], group_ids[2], is_terminator=true);
+  }
+  return true, {};
+}
+
+emit_task_payload_store_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  if s.stage != .TASK return false, make_diag("task_payload_store_u32 is currently task-stage only.");
+  if args.count != 1 return false, make_diag("task_payload_store_u32 expects 1 arg.");
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[0]);
+  if !value_ok return false, value_diag;
+  value_id, _, value_ok, value_diag = coerce_to_exact_kind(s, value_id, value_type, .UINT);
+  if !value_ok return false, value_diag;
+  payload_ptr := new_id(s);
+  spv_emit_access_chain(s, payload_ptr, s.id_ptr_task_payload_uint, s.id_task_payload_var, .[get_i32_const(s, 0)]);
+  spv_emit_store(s, payload_ptr, value_id);
+  s.uses_task_payload_u32 = true;
+  return true, {};
+}
+
+emit_mesh_set_output_counts_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  if s.stage != .MESH return false, make_diag("mesh_set_output_counts is currently mesh-stage only.");
+  if args.count != 2 return false, make_diag("mesh_set_output_counts expects 2 args.");
+  vertex_count_id, vertex_count_type, vertex_count_ok, vertex_count_diag := emit_expr(s, args[0]);
+  if !vertex_count_ok return false, vertex_count_diag;
+  vertex_count_id, _, vertex_count_ok, vertex_count_diag = coerce_to_exact_kind(s, vertex_count_id, vertex_count_type, .UINT);
+  if !vertex_count_ok return false, vertex_count_diag;
+  primitive_count_id, primitive_count_type, primitive_count_ok, primitive_count_diag := emit_expr(s, args[1]);
+  if !primitive_count_ok return false, primitive_count_diag;
+  primitive_count_id, _, primitive_count_ok, primitive_count_diag = coerce_to_exact_kind(s, primitive_count_id, primitive_count_type, .UINT);
+  if !primitive_count_ok return false, primitive_count_diag;
+  emit_mesh_set_outputs_ext(s, vertex_count_id, primitive_count_id);
+  return true, {};
+}
+
+emit_mesh_set_vertex_position_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  if s.stage != .MESH return false, make_diag("mesh_set_vertex_position is currently mesh-stage only.");
+  if args.count != 2 return false, make_diag("mesh_set_vertex_position expects 2 args.");
+  index_id, index_type, index_ok, index_diag := emit_expr(s, args[0]);
+  if !index_ok return false, index_diag;
+  index_id, _, index_ok, index_diag = coerce_to_exact_kind(s, index_id, index_type, .UINT);
+  if !index_ok return false, index_diag;
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[1]);
+  if !value_ok return false, value_diag;
+  value_id, _, value_ok, value_diag = coerce_to_exact_kind(s, value_id, value_type, .FLOAT4);
+  if !value_ok return false, value_diag;
+  emit_mesh_store_array_value(s, s.id_ptr_output_mesh_position, s.id_mesh_positions_var, index_id, value_id);
+  return true, {};
+}
+
+emit_mesh_set_vertex_color_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  if s.stage != .MESH return false, make_diag("mesh_set_vertex_color is currently mesh-stage only.");
+  if args.count != 2 return false, make_diag("mesh_set_vertex_color expects 2 args.");
+  index_id, index_type, index_ok, index_diag := emit_expr(s, args[0]);
+  if !index_ok return false, index_diag;
+  index_id, _, index_ok, index_diag = coerce_to_exact_kind(s, index_id, index_type, .UINT);
+  if !index_ok return false, index_diag;
+  value_id, value_type, value_ok, value_diag := emit_expr(s, args[1]);
+  if !value_ok return false, value_diag;
+  value_id, _, value_ok, value_diag = coerce_to_exact_kind(s, value_id, value_type, .FLOAT3);
+  if !value_ok return false, value_diag;
+  emit_mesh_store_array_value(s, s.id_ptr_output_mesh_color, s.id_mesh_colors_var, index_id, value_id);
+  return true, {};
+}
+
+emit_mesh_set_triangle_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (ok: bool, diag: IR_Diagnostic) {
+  if s.stage != .MESH return false, make_diag("mesh_set_triangle is currently mesh-stage only.");
+  if args.count != 4 return false, make_diag("mesh_set_triangle expects 4 args.");
+  prim_index_id, prim_index_type, prim_index_ok, prim_index_diag := emit_expr(s, args[0]);
+  if !prim_index_ok return false, prim_index_diag;
+  prim_index_id, _, prim_index_ok, prim_index_diag = coerce_to_exact_kind(s, prim_index_id, prim_index_type, .UINT);
+  if !prim_index_ok return false, prim_index_diag;
+
+  index_ids: [3]s64;
+  for i: 1..3 {
+    value_id, value_type, value_ok, value_diag := emit_expr(s, args[i]);
+    if !value_ok return false, value_diag;
+    value_id, _, value_ok, value_diag = coerce_to_exact_kind(s, value_id, value_type, .UINT);
+    if !value_ok return false, value_diag;
+    index_ids[i-1] = value_id;
+  }
+
+  triangle_value_id := add_op(s, new_id(s), "OpCompositeConstruct", s.id_v3uint, index_ids[0], index_ids[1], index_ids[2]);
+  emit_mesh_store_array_value(s, s.id_ptr_output_mesh_triangle_indices, s.id_mesh_triangle_indices_var, prim_index_id, triangle_value_id);
+  return true, {};
+}
+
+emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return .[], false, make_diag(msg, ..args); }
+  diag: IR_Diagnostic;
+  assert(shader != null);
+
+  state: IR_SPV_Gen_State;
+  state.record_binary = true;
+  state.stage = .MESH;
+  state.debug_type_prefix = tprint("mesh_%", shader.source_name);
+  state.functions = shader.functions;
+  function_constants_ok, function_constants_diag := register_function_constants(*state, shader.function_constants);
+  if !function_constants_ok return .[], false, function_constants_diag;
+  for shader.extra_structs array_add(*state.extra_structs, it);
+  init_ok, init_diag := init_base(*state, .[], 1);
+  if !init_ok return .[], false, init_diag;
+
+  state.id_mesh_positions_array_type = new_id(*state);
+  state.id_ptr_output_mesh_positions_array = new_id(*state);
+  state.id_ptr_output_mesh_position = new_id(*state);
+  state.id_mesh_positions_var = new_id(*state);
+  state.id_mesh_colors_array_type = new_id(*state);
+  state.id_ptr_output_mesh_colors_array = new_id(*state);
+  state.id_ptr_output_mesh_color = new_id(*state);
+  state.id_mesh_colors_var = new_id(*state);
+  state.id_mesh_triangle_indices_array_type = new_id(*state);
+  state.id_ptr_output_mesh_triangle_indices_array = new_id(*state);
+  state.id_ptr_output_mesh_triangle_indices = new_id(*state);
+  state.id_mesh_triangle_indices_var = new_id(*state);
+  state.id_task_payload_struct = new_id(*state);
+  state.id_ptr_task_payload_struct = new_id(*state);
+  state.id_ptr_task_payload_uint = new_id(*state);
+  state.id_task_payload_var = new_id(*state);
+  mesh_vertex_count_const := get_i32_const(*state, 3);
+  mesh_primitive_count_const := get_i32_const(*state, 1);
+
+  add_debug_name(*state, state.id_mesh_positions_var, "gl_Position");
+  add_debug_name(*state, state.id_mesh_colors_var, "verts_color");
+  add_debug_name(*state, state.id_mesh_triangle_indices_var, "primitive_triangle_indices");
+
+  entry_label := new_id(*state);
+  block_ok, block_terminated, block_diag := emit_stmt_block(*state, *shader.body);
+  if !block_ok return .[], false, block_diag;
+  if !block_terminated spv_emit_terminator0(*state, "OpReturn");
+
+  module: SPV_Module;
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_SHADER);
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_MESH_SHADING_EXT);
+  if state_uses_int64(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT64);
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_FLOAT16);
+  spv_module_append_extension(*module, "SPV_EXT_mesh_shader");
+  spv_module_append_ext_inst_import(*module, cast(u32) state.id_extinst, "GLSL.std.450");
+  spv_module_append_words(*module, .MEMORY_MODEL, SPV_OP_MEMORY_MODEL, SPV_ADDRESSING_MODEL_LOGICAL, SPV_MEMORY_MODEL_GLSL450);
+  interface_ids: [..]u32;
+  array_add(*interface_ids,
+    cast(u32) state.id_gl_workgroup_id,
+    cast(u32) state.id_mesh_positions_var,
+    cast(u32) state.id_mesh_colors_var,
+    cast(u32) state.id_mesh_triangle_indices_var);
+  if state.uses_mesh_payload_u32 array_add(*interface_ids, cast(u32) state.id_task_payload_var);
+  spv_module_append_entry_point(*module, SPV_EXECUTION_MODEL_MESH_EXT, cast(u32) state.id_main, shader.entry_name, interface_ids);
+  spv_module_append_words(*module, .EXECUTION_MODES, SPV_OP_EXECUTION_MODE, cast(u32) state.id_main, SPV_EXECUTION_MODE_OUTPUT_PRIMITIVES_EXT, 1);
+  spv_module_append_words(*module, .EXECUTION_MODES, SPV_OP_EXECUTION_MODE, cast(u32) state.id_main, SPV_EXECUTION_MODE_OUTPUT_VERTICES, 3);
+  spv_module_append_words(*module, .EXECUTION_MODES, SPV_OP_EXECUTION_MODE, cast(u32) state.id_main, SPV_EXECUTION_MODE_LOCAL_SIZE, 1, 1, 1);
+  spv_module_append_words(*module, .EXECUTION_MODES, SPV_OP_EXECUTION_MODE, cast(u32) state.id_main, SPV_EXECUTION_MODE_OUTPUT_TRIANGLES_EXT);
+  spv_module_append_source(*module, SPV_SOURCE_LANGUAGE_UNKNOWN, 100000);
+  spv_module_append_name(*module, cast(u32) state.id_main, shader.entry_name);
+  spv_module_append_name(*module, cast(u32) state.id_gl_workgroup_id, "gl_WorkGroupID");
+  for state.debug_names spv_module_append_name(*module, cast(u32) it.id, it.name);
+  for state.debug_member_names spv_module_append_member_name(*module, cast(u32) it.type_id, cast(u32) it.member_index, it.name);
+  for state.function_constants {
+    if it.component_count <= 1 {
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.id, SPV_DECORATION_SPEC_ID, it.spec_id);
+      continue;
+    }
+    for i: 0..it.component_count-1 {
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.component_ids[i], SPV_DECORATION_SPEC_ID, it.spec_id + cast(u32) i);
+    }
+  }
+  spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_mesh_positions_var, SPV_DECORATION_BUILTIN, SPV_BUILTIN_POSITION);
+  spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_mesh_colors_var, SPV_DECORATION_LOCATION, 0);
+  spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_mesh_triangle_indices_var, SPV_DECORATION_BUILTIN, SPV_BUILTIN_PRIMITIVE_TRIANGLE_INDICES_EXT);
+  spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_gl_workgroup_id, SPV_DECORATION_BUILTIN, SPV_BUILTIN_WORKGROUP_ID);
+
+  spv_module_append_common_type_decls_binary(*module, *state, SPV_STORAGE_CLASS_STORAGE_BUFFER);
+  spv_module_append_numeric_constants_binary(*module, *state);
+  function_constant_defs_ok, function_constant_defs_diag := spv_module_append_function_constant_defs_binary(*module, *state);
+  if !function_constant_defs_ok return .[], false, function_constant_defs_diag;
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) state.id_mesh_positions_array_type, cast(u32) state.id_float4, cast(u32) mesh_vertex_count_const);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_positions_array, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_mesh_positions_array_type);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_position, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_float4);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) state.id_mesh_colors_array_type, cast(u32) state.id_float3, cast(u32) mesh_vertex_count_const);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_colors_array, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_mesh_colors_array_type);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_color, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_float3);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) state.id_mesh_triangle_indices_array_type, cast(u32) state.id_v3uint, cast(u32) mesh_primitive_count_const);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_triangle_indices_array, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_mesh_triangle_indices_array_type);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_output_mesh_triangle_indices, SPV_STORAGE_CLASS_OUTPUT, cast(u32) state.id_v3uint);
+  if state.uses_mesh_payload_u32 {
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_STRUCT, cast(u32) state.id_task_payload_struct, cast(u32) state.id_uint);
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_task_payload_struct, SPV_STORAGE_CLASS_TASK_PAYLOAD_WORKGROUP_EXT, cast(u32) state.id_task_payload_struct);
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_task_payload_uint, SPV_STORAGE_CLASS_TASK_PAYLOAD_WORKGROUP_EXT, cast(u32) state.id_uint);
+  }
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_input_v3uint, cast(u32) state.id_gl_workgroup_id, SPV_STORAGE_CLASS_INPUT);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_output_mesh_positions_array, cast(u32) state.id_mesh_positions_var, SPV_STORAGE_CLASS_OUTPUT);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_output_mesh_colors_array, cast(u32) state.id_mesh_colors_var, SPV_STORAGE_CLASS_OUTPUT);
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_output_mesh_triangle_indices_array, cast(u32) state.id_mesh_triangle_indices_var, SPV_STORAGE_CLASS_OUTPUT);
+  if state.uses_mesh_payload_u32 {
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_task_payload_struct, cast(u32) state.id_task_payload_var, SPV_STORAGE_CLASS_TASK_PAYLOAD_WORKGROUP_EXT);
+  }
+  spv_module_append_null_constants_binary(*module, *state);
+  spv_module_append_global_const_array_decls_binary(*module, *state);
+
+  module.bound = cast(u32) state.next_id;
+  spv_module_append_function_body(*module, *state, entry_label);
+  return spv_serialize_module_binary(*module), true, diag;
+}
+
+emit_task_generic_binary :: (shader: *IR_Task_Shader) -> (spv: [] u8, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return .[], false, make_diag(msg, ..args); }
+  diag: IR_Diagnostic;
+  assert(shader != null);
+
+  state: IR_SPV_Gen_State;
+  state.record_binary = true;
+  state.stage = .TASK;
+  state.debug_type_prefix = tprint("task_%", shader.source_name);
+  state.functions = shader.functions;
+  function_constants_ok, function_constants_diag := register_function_constants(*state, shader.function_constants);
+  if !function_constants_ok return .[], false, function_constants_diag;
+  for shader.extra_structs array_add(*state.extra_structs, it);
+  init_ok, init_diag := init_base(*state, .[], 1);
+  if !init_ok return .[], false, init_diag;
+  state.id_task_payload_struct = new_id(*state);
+  state.id_ptr_task_payload_struct = new_id(*state);
+  state.id_ptr_task_payload_uint = new_id(*state);
+  state.id_task_payload_var = new_id(*state);
+
+  entry_label := new_id(*state);
+  block_ok, block_terminated, block_diag := emit_stmt_block(*state, *shader.body);
+  if !block_ok return .[], false, block_diag;
+  if !block_terminated return_err("task shader must terminate with task_set_mesh_groups exactly once.");
+
+  module: SPV_Module;
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_SHADER);
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_MESH_SHADING_EXT);
+  if state_uses_int64(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT64);
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_FLOAT16);
+  spv_module_append_extension(*module, "SPV_EXT_mesh_shader");
+  spv_module_append_ext_inst_import(*module, cast(u32) state.id_extinst, "GLSL.std.450");
+  spv_module_append_words(*module, .MEMORY_MODEL, SPV_OP_MEMORY_MODEL, SPV_ADDRESSING_MODEL_LOGICAL, SPV_MEMORY_MODEL_GLSL450);
+  interface_ids: [..]u32;
+  array_add(*interface_ids, cast(u32) state.id_gl_workgroup_id);
+  if state.uses_task_payload_u32 array_add(*interface_ids, cast(u32) state.id_task_payload_var);
+  spv_module_append_entry_point(*module, SPV_EXECUTION_MODEL_TASK_EXT, cast(u32) state.id_main, shader.entry_name, interface_ids);
+  spv_module_append_words(*module, .EXECUTION_MODES, SPV_OP_EXECUTION_MODE, cast(u32) state.id_main, SPV_EXECUTION_MODE_LOCAL_SIZE, 1, 1, 1);
+  spv_module_append_source(*module, SPV_SOURCE_LANGUAGE_UNKNOWN, 100000);
+  spv_module_append_name(*module, cast(u32) state.id_main, shader.entry_name);
+  spv_module_append_name(*module, cast(u32) state.id_gl_workgroup_id, "gl_WorkGroupID");
+  for state.debug_names spv_module_append_name(*module, cast(u32) it.id, it.name);
+  for state.debug_member_names spv_module_append_member_name(*module, cast(u32) it.type_id, cast(u32) it.member_index, it.name);
+  for state.function_constants {
+    if it.component_count <= 1 {
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.id, SPV_DECORATION_SPEC_ID, it.spec_id);
+      continue;
+    }
+    for i: 0..it.component_count-1 {
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) it.component_ids[i], SPV_DECORATION_SPEC_ID, it.spec_id + cast(u32) i);
+    }
+  }
+  spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_gl_workgroup_id, SPV_DECORATION_BUILTIN, SPV_BUILTIN_WORKGROUP_ID);
+
+  spv_module_append_common_type_decls_binary(*module, *state, SPV_STORAGE_CLASS_STORAGE_BUFFER);
+  spv_module_append_numeric_constants_binary(*module, *state);
+  function_constant_defs_ok, function_constant_defs_diag := spv_module_append_function_constant_defs_binary(*module, *state);
+  if !function_constant_defs_ok return .[], false, function_constant_defs_diag;
+  if state.uses_task_payload_u32 {
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_STRUCT, cast(u32) state.id_task_payload_struct, cast(u32) state.id_uint);
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_task_payload_struct, SPV_STORAGE_CLASS_TASK_PAYLOAD_WORKGROUP_EXT, cast(u32) state.id_task_payload_struct);
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) state.id_ptr_task_payload_uint, SPV_STORAGE_CLASS_TASK_PAYLOAD_WORKGROUP_EXT, cast(u32) state.id_uint);
+    spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_task_payload_struct, cast(u32) state.id_task_payload_var, SPV_STORAGE_CLASS_TASK_PAYLOAD_WORKGROUP_EXT);
+  }
+  spv_module_append_words(*module, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) state.id_ptr_input_v3uint, cast(u32) state.id_gl_workgroup_id, SPV_STORAGE_CLASS_INPUT);
+  spv_module_append_null_constants_binary(*module, *state);
+  spv_module_append_global_const_array_decls_binary(*module, *state);
+
+  module.bound = cast(u32) state.next_id;
+  spv_module_append_function_body(*module, *state, entry_label);
+  return spv_serialize_module_binary(*module), true, diag;
+}
+
 spv_binary_from_text_module :: (spvasm: string) -> (spv: [] u8, ok: bool, diag: IR_Diagnostic) {
   module: SPV_Module;
   ingest_ok, ingest_diag := spv_ingest_text_into_module(*module, spvasm);

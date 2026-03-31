@@ -109,6 +109,8 @@ spirv_cross_stage_name :: (stage: IR_Shader_Kind) -> string {
         case .Vertex;   return "vert";
         case .Fragment; return "frag";
         case .Compute;  return "comp";
+        case .Task;     return "task";
+        case .Mesh;     return "mesh";
     }
     return "";
 }

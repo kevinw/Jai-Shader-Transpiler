@@ -2,6 +2,8 @@ IR_Shader_Kind :: enum {
   Vertex;
   Fragment;
   Compute;
+  Task;
+  Mesh;
 }
 
 IR_Shader_Header_Context :: struct {
@@ -115,6 +117,14 @@ IR_Compute_Shader :: struct {
   buffers: [..] IR_Compute_Buffer;
 }
 
+IR_Task_Shader :: struct {
+  using #as ir_shader: IR_Shader;
+}
+
+IR_Mesh_Shader :: struct {
+  using #as ir_shader: IR_Shader;
+}
+
 IR_Compute_Buffer :: struct {
   name: string;
   element_type: IR_Type;
@@ -201,6 +211,15 @@ IR_Call_Builtin_Kind :: enum {
   WRITE_2D;
   WRITE_3D;
   DISCARD;
+  TASK_SET_MESH_GROUPS;
+  TASK_GROUP_ID_X;
+  TASK_PAYLOAD_STORE_U32;
+  MESH_SET_OUTPUT_COUNTS;
+  MESH_GROUP_ID_X;
+  MESH_PAYLOAD_LOAD_U32;
+  MESH_SET_VERTEX_POSITION;
+  MESH_SET_VERTEX_COLOR;
+  MESH_SET_TRIANGLE;
   SATURATE;
   MIX;
   LERP;

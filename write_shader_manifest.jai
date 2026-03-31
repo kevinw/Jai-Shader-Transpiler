@@ -29,6 +29,8 @@ manifest_stage_from_shader_type :: (type: Shader_Type) -> string {
   if type == .Vertex return "vertex";
   if type == .Fragment return "fragment";
   if type == .Compute return "compute";
+  if type == .Task return "task";
+  if type == .Mesh return "mesh";
   return "unknown";
 }
 

@@ -66,6 +66,7 @@ Jai_To_Shader_Plugin :: struct {
     using impl: struct {
       currently_waiting_contexts: [..] Shader_Write_Context;
       currently_waiting_pair_contexts: [..] Shader_Write_Pair_Context;
+      currently_waiting_mesh_contexts: [..] Shader_Write_Mesh_Context;
       pending_request_declarations: [..] *Code_Declaration;
       known_procedure_bodies: [..] *Code_Procedure_Body;
       lookup_entries: [..] Transpiled_Lookup_Entry;
@@ -81,6 +82,7 @@ Transpiled_Lookup_Entry :: struct {
   target_name: string;
   primary_name: string;
   secondary_name: string;
+  tertiary_name: string;
   symbol_name: string;
 }
 
@@ -635,6 +637,19 @@ Transpiled_Shader :: struct {
     meta: Shader_Meta;
 }
 
+Transpiled_Mesh_Source_Bundle :: struct {
+    task_source: string;
+    mesh_source: string;
+    pixel_source: string;
+}
+
+Transpiled_Mesh_Pipeline :: struct {
+    task_source: string;
+    mesh_source: string;
+    pixel_source: string;
+    meta: Shader_Meta;
+}
+
 make_constants_code_string :: (using shader_meta: Shader_Meta) -> string {
     return tprint("%.{};", function_constants_type_name);
 }
@@ -691,6 +706,112 @@ get_default_function_constants :: (
     };
 }
 
+get_transpiled_mesh_pipeline :: (
+    target: Transpiled_Target,
+    mesh_shader: Any,
+    fragment_shader: Any,
+    call: Code = #caller_code,
+    loc: Source_Code_Location = #caller_location
+) -> Transpiled_Mesh_Pipeline #expand {
+    #insert #run,stallable -> string {
+        root := compiler_get_nodes(call);
+        if root.kind != .PROCEDURE_CALL {
+            compiler_report("Jai Shader Transpiler: get_transpiled_mesh_pipeline must be called directly.", loc=loc);
+            return "return .{};";
+        }
+
+        pc := cast(*Code_Procedure_Call) root;
+        if pc.arguments_unsorted.count != 3 {
+            compiler_report("Jai Shader Transpiler: get_transpiled_mesh_pipeline expects 3 args (target, mesh_fn, fragment_fn).", loc=loc);
+            return "return .{};";
+        }
+
+        target_expr := trim_ascii_whitespace(expression_to_source_string(pc.arguments_unsorted[0].expression));
+        resolved_target_expr, resolved_target_ok := resolve_transpiled_target_expr_string(pc.arguments_unsorted[0].expression);
+        target_parse_expr := ifx resolved_target_ok then resolved_target_expr else target_expr;
+        canonical_target_expr, canonical_target_ok := canonical_transpiled_target_expr_string(target_parse_expr);
+        if !canonical_target_ok || canonical_target_expr != ".METAL" {
+            compiler_report("Jai Shader Transpiler: get_transpiled_mesh_pipeline currently only supports .METAL.", loc=loc);
+            return "return .{};";
+        }
+
+        mesh_name := shader_name_from_call_arg(pc.arguments_unsorted[1].expression);
+        fragment_name := shader_name_from_call_arg(pc.arguments_unsorted[2].expression);
+        if !mesh_name || !fragment_name {
+            compiler_report("Jai Shader Transpiler: mesh pipeline shader arguments must be procedure identifiers.", loc=loc);
+            return "return .{};";
+        }
+
+        request_name := tprint("transpiled_mesh_metal_%_%", mesh_name, fragment_name);
+        to_lower_in_place(request_name);
+        key := tprint("mesh|METAL||%|%", mesh_name, fragment_name);
+        request_source := tprint("% :: %; @shader_mesh_to_metal(%)\n", request_name, mesh_name, fragment_name);
+        ensure_get_transpiled_request_registered(key, request_source);
+
+        source_expr := tprint("G.lookup_transpiled_mesh(\".METAL\", \"\", \"%\", \"%\")", mesh_name, fragment_name);
+        meta_expr := tprint("Shader_Meta.{request_name = \"%\", function_constants_type_name = \"%\"}", request_name, function_constants_type_name_for_request(request_name));
+        return tprint(#string END
+G :: #import,file "%";
+bundle := %;
+return Transpiled_Mesh_Pipeline.{task_source = bundle.task_source, mesh_source = bundle.mesh_source, pixel_source = bundle.pixel_source, meta = %};
+END, compute_path_to_shader_bucket_module(get_current_workspace()), source_expr, meta_expr);
+    };
+}
+
+get_transpiled_task_mesh_pipeline :: (
+    target: Transpiled_Target,
+    task_shader: Any,
+    mesh_shader: Any,
+    fragment_shader: Any,
+    call: Code = #caller_code,
+    loc: Source_Code_Location = #caller_location
+) -> Transpiled_Mesh_Pipeline #expand {
+    #insert #run,stallable -> string {
+        root := compiler_get_nodes(call);
+        if root.kind != .PROCEDURE_CALL {
+            compiler_report("Jai Shader Transpiler: get_transpiled_task_mesh_pipeline must be called directly.", loc=loc);
+            return "return .{};";
+        }
+
+        pc := cast(*Code_Procedure_Call) root;
+        if pc.arguments_unsorted.count != 4 {
+            compiler_report("Jai Shader Transpiler: get_transpiled_task_mesh_pipeline expects 4 args (target, task_fn, mesh_fn, fragment_fn).", loc=loc);
+            return "return .{};";
+        }
+
+        target_expr := trim_ascii_whitespace(expression_to_source_string(pc.arguments_unsorted[0].expression));
+        resolved_target_expr, resolved_target_ok := resolve_transpiled_target_expr_string(pc.arguments_unsorted[0].expression);
+        target_parse_expr := ifx resolved_target_ok then resolved_target_expr else target_expr;
+        canonical_target_expr, canonical_target_ok := canonical_transpiled_target_expr_string(target_parse_expr);
+        if !canonical_target_ok || canonical_target_expr != ".METAL" {
+            compiler_report("Jai Shader Transpiler: get_transpiled_task_mesh_pipeline currently only supports .METAL.", loc=loc);
+            return "return .{};";
+        }
+
+        task_name := shader_name_from_call_arg(pc.arguments_unsorted[1].expression);
+        mesh_name := shader_name_from_call_arg(pc.arguments_unsorted[2].expression);
+        fragment_name := shader_name_from_call_arg(pc.arguments_unsorted[3].expression);
+        if !task_name || !mesh_name || !fragment_name {
+            compiler_report("Jai Shader Transpiler: task+mesh pipeline shader arguments must be procedure identifiers.", loc=loc);
+            return "return .{};";
+        }
+
+        request_name := tprint("transpiled_mesh_metal_%_%_%", task_name, mesh_name, fragment_name);
+        to_lower_in_place(request_name);
+        key := tprint("mesh|METAL|%|%|%", task_name, mesh_name, fragment_name);
+        request_source := tprint("% :: %; @shader_task_mesh_to_metal(\"%,%\")\n", request_name, task_name, mesh_name, fragment_name);
+        ensure_get_transpiled_request_registered(key, request_source);
+
+        source_expr := tprint("G.lookup_transpiled_mesh(\".METAL\", \"%\", \"%\", \"%\")", task_name, mesh_name, fragment_name);
+        meta_expr := tprint("Shader_Meta.{request_name = \"%\", function_constants_type_name = \"%\"}", request_name, function_constants_type_name_for_request(request_name));
+        return tprint(#string END
+G :: #import,file "%";
+bundle := %;
+return Transpiled_Mesh_Pipeline.{task_source = bundle.task_source, mesh_source = bundle.mesh_source, pixel_source = bundle.pixel_source, meta = %};
+END, compute_path_to_shader_bucket_module(get_current_workspace()), source_expr, meta_expr);
+    };
+}
+
 
 convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
   plugin := cast(*Jai_To_Shader_Plugin) p;
@@ -707,7 +828,9 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             if note.text == {
             case "compute_shader"; #through;
             case "vertex_shader"; #through;
-            case "fragment_shader";
+            case "fragment_shader"; #through;
+            case "task_shader"; #through;
+            case "mesh_shader";
               array_add_if_unique(*plugin.known_procedure_bodies, proc);
               break;
             }
@@ -790,6 +913,25 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           if manifest_entry.request_name.count != 0 array_add(*plugin.manifest_entries, manifest_entry);
 
           remove pair_ctx;
+        }
+
+        for *mesh_ctx: plugin.currently_waiting_mesh_contexts {
+          s2, ok2, diag := write_shader_mesh_ir_spirv(mesh_ctx);
+          if !ok2 {
+            report_message := tprint("Jai Shader Transpiler: SPIR-V backend mode failed for mesh pipeline '%'.", mesh_ctx.name);
+            if diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, diag.message);
+            if diag.has_location compiler_report(report_message, diag.location);
+            else compiler_report(report_message, make_location(mesh_ctx.mesh_fn.header));
+            remove mesh_ctx;
+            continue;
+          }
+
+          source_symbol := source_symbol_name_for_request(mesh_ctx.name);
+          if !generated_symbol_already_emitted(plugin, source_symbol) {
+            add_code(plugin, s2, "waiting_meshes");
+            mark_generated_symbol_emitted(plugin, source_symbol);
+          }
+          remove mesh_ctx;
         }
 
         {
@@ -895,7 +1037,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     
     case .COMPLETE; {
       using,except(message, plugin) plugin;
-      if currently_waiting_contexts.count != 0 || currently_waiting_pair_contexts.count != 0 {
+      if currently_waiting_contexts.count != 0 || currently_waiting_pair_contexts.count != 0 || currently_waiting_mesh_contexts.count != 0 {
         complete_message := cast(*Message_Complete)message;
         if complete_message.error_code == 0 {
           compiler_report("Jai Shader Transpiler: Compiler is finished, but some functions have not yet been transpiled.");
@@ -903,6 +1045,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       }
       array_reset(*currently_waiting_contexts);
       array_reset(*currently_waiting_pair_contexts);
+      array_reset(*currently_waiting_mesh_contexts);
       array_reset(*pending_request_declarations);
       array_reset(*known_procedure_bodies);
       array_reset(*lookup_entries);
@@ -948,10 +1091,26 @@ shader_function_constant_info :: struct {
     offset: s64;
 }
 
+JST_Mesh_Source_Bundle_Lookup :: struct {
+    task_source: string;
+    mesh_source: string;
+    pixel_source: string;
+}
+
 #placeholder lookup_transpiled_impl;
+#placeholder lookup_transpiled_mesh_impl;
 
 lookup_transpiled :: (target_name: string, primary_name: string, secondary_name: string) -> string {
     return lookup_transpiled_impl(target_name, primary_name, secondary_name);
+}
+
+lookup_transpiled_mesh :: (target_name: string, primary_name: string, secondary_name: string, tertiary_name: string) -> JST_Mesh_Source_Bundle_Lookup {
+    value := lookup_transpiled_mesh_impl(target_name, primary_name, secondary_name, tertiary_name);
+    return .{
+        task_source = value.task_source,
+        mesh_source = value.mesh_source,
+        pixel_source = value.pixel_source,
+    };
 }
 END);
     assert(ok);
@@ -971,7 +1130,7 @@ compute_path_to_shader_bucket_module :: (workspace: Workspace) -> string {
 ir_supports_single_context :: (ctx: *Shader_Write_Context) -> bool {
   if !ctx return false;
   if ctx.language != .METAL && !(ctx.language == .GLSL && ctx.glsl_target == .VULKAN) return false;
-  return ctx.type == .Vertex || ctx.type == .Fragment || ctx.type == .Compute;
+  return ctx.type == .Vertex || ctx.type == .Fragment || ctx.type == .Compute || ctx.type == .Task || ctx.type == .Mesh;
 }
 
 request_target_ident_from_language :: (language: Shader_Language, glsl_target: GLSL_Target) -> string {
@@ -1009,6 +1168,8 @@ ir_target_from_context :: (ctx: *Shader_Write_Context) -> (Toolchain_Target, boo
 ir_stage_short_from_context :: (ctx: *Shader_Write_Context) -> string {
   if ctx.type == .Vertex return "vert";
   if ctx.type == .Compute return "comp";
+  if ctx.type == .Task return "task";
+  if ctx.type == .Mesh return "mesh";
   return "frag";
 }
 
@@ -1250,7 +1411,7 @@ prepare_single_spirv_external_job :: (ctx: *Shader_Write_Context, job: *SPV_Exte
 
   diag: IR_Diagnostic;
   if !ir_spirv_supports_single_context(ctx)
-      return_err("SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only.");
+      return_err("SPIR-V backend currently supports vertex/fragment/compute shaders targeting Metal or Vulkan GLSL only. Task/mesh lowering is not wired yet.");
 
   target, target_ok := ir_target_from_context(ctx);
   if !target_ok
@@ -2147,6 +2308,187 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
   return decl, true, diag;
 }
 
+ir_source_file_from_mesh_context :: (mesh_ctx: *Shader_Write_Mesh_Context) -> string {
+  if !mesh_ctx return "";
+  mesh_file := ir_source_file_from_proc(mesh_ctx.mesh_fn);
+  fragment_file := ir_source_file_from_proc(mesh_ctx.fragment_fn);
+  if mesh_file.count == 0 return fragment_file;
+  if fragment_file.count == 0 return mesh_file;
+  if mesh_file == fragment_file return mesh_file;
+  return tprint("% | %", mesh_file, fragment_file);
+}
+
+write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string, bool, IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if !mesh_ctx || mesh_ctx.language != .METAL || mesh_ctx.mesh_fn == null || mesh_ctx.fragment_fn == null {
+    diag.message = "SPIR-V backend: unsupported mesh pipeline context/target combination.";
+    if mesh_ctx && mesh_ctx.mesh_fn && mesh_ctx.mesh_fn.header {
+      diag.location = make_location(mesh_ctx.mesh_fn.header);
+      diag.has_location = true;
+    }
+    return "", false, diag;
+  }
+
+  task_source := "";
+  if mesh_ctx.task_fn != null {
+    task_ir_res := ir_lower_task_from_shader_context(.{name = mesh_ctx.task_fn.header.name, header = mesh_ctx.task_fn.header});
+    ir_task, task_ok, task_diag := unpack_result(task_ir_res);
+    if !task_ok return "", false, task_diag;
+    assign_single_function_constant_spec_ids(*ir_task);
+    normalize_shader(*ir_task);
+
+    task_spv_res := to_spv_binary(*ir_task);
+    task_spv, task_spv_ok, task_spv_diag := unpack_result(task_spv_res);
+    if !task_spv_ok return "", false, task_spv_diag;
+
+    build_dir := jst_ir_intermediate_dir();
+    make_directory_if_it_does_not_exist(build_dir, recursive=true);
+    task_spv_path := tprint("%/%_task.spv", build_dir, mesh_ctx.name);
+    task_opt_spv_path := tprint("%/%_task.opt.spv", build_dir, mesh_ctx.name);
+    task_output_path := tprint("%/%_task.metal", build_dir, mesh_ctx.name);
+    metal_task_entry_name := "objectMain";
+
+    if !write_entire_file(task_spv_path, task_spv.data, task_spv.count) {
+      if task_spv.data free(task_spv.data);
+      diag.message = "SPIR-V backend: failed writing mesh task SPIR-V binary.";
+      return "", false, diag;
+    }
+    if task_spv.data free(task_spv.data);
+    jst_mirror_to_legacy_intermediate_if_needed(task_spv_path);
+
+    if !jst_optimize_spirv_binary_cached(task_spv_path, task_opt_spv_path) {
+      diag.message = "SPIR-V backend: spirv-opt failed for task stage.";
+      return "", false, diag;
+    }
+    jst_mirror_to_legacy_intermediate_if_needed(task_opt_spv_path);
+
+    if !validate_spirv_binary(task_opt_spv_path) {
+      diag.message = "SPIR-V backend: spirv-val failed for task stage.";
+      return "", false, diag;
+    }
+
+    if !jst_emit_spirv_cross_target_source_cached(task_opt_spv_path, metal_task_entry_name, .Task, .METAL, task_output_path, false, source_entry_name=ir_task.entry_name) {
+      diag.message = "SPIR-V backend: task spirv-cross failed.";
+      return "", false, diag;
+    }
+    jst_mirror_to_legacy_intermediate_if_needed(task_output_path);
+
+    task_source_read, task_read_ok := read_entire_file(task_output_path);
+    if !task_read_ok {
+      diag.message = "SPIR-V backend: failed reading task spirv-cross output.";
+      return "", false, diag;
+    }
+    task_source_read = replace(task_source_read, "[[object]]", "[[object, max_total_threads_per_threadgroup(1)]]");
+    task_source_read = ir_metal_enable_unsafe_runtime_array_indexing(task_source_read);
+    task_source_read = ir_prepend_generated_comment(task_source_read, ir_source_file_from_mesh_context(mesh_ctx), ir_pipeline_label_spirv(.METAL));
+    _ = write_entire_file(task_output_path, task_source_read);
+    task_source = task_source_read;
+  }
+
+  mesh_ir_res := ir_lower_mesh_from_shader_context(.{name = mesh_ctx.mesh_fn.header.name, header = mesh_ctx.mesh_fn.header});
+  ir_mesh, mesh_ok, mesh_diag := unpack_result(mesh_ir_res);
+  if !mesh_ok return "", false, mesh_diag;
+  assign_single_function_constant_spec_ids(*ir_mesh);
+  normalize_shader(*ir_mesh);
+
+  frag_ir_res := ir_lower_fragment_from_shader_context(.{name = mesh_ctx.fragment_fn.header.name, header = mesh_ctx.fragment_fn.header});
+  ir_fragment, frag_ok, frag_diag := unpack_result(frag_ir_res);
+  if !frag_ok return "", false, frag_diag;
+  assign_single_function_constant_spec_ids(*ir_fragment);
+  normalize_shader(*ir_fragment);
+
+  mesh_spv_res := to_spv_binary(*ir_mesh);
+  mesh_spv, mesh_spv_ok, mesh_spv_diag := unpack_result(mesh_spv_res);
+  if !mesh_spv_ok return "", false, mesh_spv_diag;
+
+  frag_spv_res := to_spv_binary(*ir_fragment);
+  frag_spv, frag_spv_ok, frag_spv_diag := unpack_result(frag_spv_res);
+  if !frag_spv_ok return "", false, frag_spv_diag;
+
+  build_dir := jst_ir_intermediate_dir();
+  make_directory_if_it_does_not_exist(build_dir, recursive=true);
+  mesh_spv_path := tprint("%/%_mesh.spv", build_dir, mesh_ctx.name);
+  frag_spv_path := tprint("%/%_frag.spv", build_dir, mesh_ctx.name);
+  mesh_opt_spv_path := tprint("%/%_mesh.opt.spv", build_dir, mesh_ctx.name);
+  frag_opt_spv_path := tprint("%/%_frag.opt.spv", build_dir, mesh_ctx.name);
+  mesh_output_path := tprint("%/%_mesh.metal", build_dir, mesh_ctx.name);
+  frag_output_path := tprint("%/%_frag.metal", build_dir, mesh_ctx.name);
+  metal_mesh_entry_name := "meshMain";
+  metal_fragment_entry_name := "fragmentMain";
+
+  if !write_entire_file(mesh_spv_path, mesh_spv.data, mesh_spv.count) || !write_entire_file(frag_spv_path, frag_spv.data, frag_spv.count) {
+    if mesh_spv.data free(mesh_spv.data);
+    if frag_spv.data free(frag_spv.data);
+    diag.message = "SPIR-V backend: failed writing mesh pipeline SPIR-V binaries.";
+    return "", false, diag;
+  }
+  if mesh_spv.data free(mesh_spv.data);
+  if frag_spv.data free(frag_spv.data);
+  jst_mirror_to_legacy_intermediate_if_needed(mesh_spv_path);
+  jst_mirror_to_legacy_intermediate_if_needed(frag_spv_path);
+
+  if !jst_optimize_spirv_binary_cached(mesh_spv_path, mesh_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-opt failed for mesh stage.";
+    return "", false, diag;
+  }
+  if !jst_optimize_spirv_binary_cached(frag_spv_path, frag_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-opt failed for mesh fragment stage.";
+    return "", false, diag;
+  }
+  jst_mirror_to_legacy_intermediate_if_needed(mesh_opt_spv_path);
+  jst_mirror_to_legacy_intermediate_if_needed(frag_opt_spv_path);
+
+  if !validate_spirv_binary(mesh_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-val failed for mesh stage.";
+    return "", false, diag;
+  }
+  if !validate_spirv_binary(frag_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-val failed for mesh fragment stage.";
+    return "", false, diag;
+  }
+
+  if !jst_emit_spirv_cross_target_source_cached(mesh_opt_spv_path, metal_mesh_entry_name, .Mesh, .METAL, mesh_output_path, false, source_entry_name=ir_mesh.entry_name) {
+    diag.message = "SPIR-V backend: mesh spirv-cross failed.";
+    return "", false, diag;
+  }
+  if !jst_emit_spirv_cross_target_source_cached(frag_opt_spv_path, metal_fragment_entry_name, .Fragment, .METAL, frag_output_path, ir_graphics_requires_metal_argument_buffer(ir_fragment.args, ir_fragment.extra_structs), source_entry_name=ir_fragment.entry_name) {
+    diag.message = "SPIR-V backend: mesh fragment spirv-cross failed.";
+    return "", false, diag;
+  }
+  jst_mirror_to_legacy_intermediate_if_needed(mesh_output_path);
+  jst_mirror_to_legacy_intermediate_if_needed(frag_output_path);
+
+  mesh_source, mesh_read_ok := read_entire_file(mesh_output_path);
+  frag_source, frag_read_ok := read_entire_file(frag_output_path);
+  if !mesh_read_ok || !frag_read_ok {
+    diag.message = "SPIR-V backend: failed reading mesh pipeline spirv-cross outputs.";
+    return "", false, diag;
+  }
+
+  mesh_source = ir_metal_enable_unsafe_runtime_array_indexing(mesh_source);
+  frag_source = ir_metal_enable_unsafe_runtime_array_indexing(frag_source);
+  mesh_source = ir_prepend_generated_comment(mesh_source, ir_source_file_from_mesh_context(mesh_ctx), ir_pipeline_label_spirv(.METAL));
+  frag_source = ir_prepend_generated_comment(frag_source, ir_source_file_from_mesh_context(mesh_ctx), ir_pipeline_label_spirv(.METAL));
+  _ = write_entire_file(mesh_output_path, mesh_source);
+  _ = write_entire_file(frag_output_path, frag_source);
+
+  bundle_symbol := source_symbol_name_for_request(mesh_ctx.name);
+  decl := tprint(#string END
+% :: JST_Mesh_Source_Bundle_Lookup.{
+  task_source = #string END_TASK
+%
+END_TASK,
+  mesh_source = #string END_MESH
+%
+END_MESH,
+  pixel_source = #string END_PIXEL
+%
+END_PIXEL,
+};
+END, bundle_symbol, task_source, mesh_source, frag_source);
+  return decl, true, diag;
+}
+
 ir_supports_pair_context :: (pair_ctx: *Shader_Write_Pair_Context) -> bool {
   if !pair_ctx return false;
   if pair_ctx.language != .METAL return false;
@@ -2193,6 +2535,7 @@ lookup_entry_already_queued :: (plugin: *Jai_To_Shader_Plugin, target_name: stri
     if it.target_name != target_name continue;
     if it.primary_name != primary_name continue;
     if it.secondary_name != secondary_name continue;
+    if it.tertiary_name.count != 0 continue;
     if it.symbol_name != symbol_name continue;
     return true;
   }
@@ -2205,6 +2548,34 @@ queue_lookup_entry :: (plugin: *Jai_To_Shader_Plugin, target_name: string, prima
     target_name = target_name,
     primary_name = primary_name,
     secondary_name = secondary_name,
+    tertiary_name = "",
+    symbol_name = symbol_name,
+  });
+  if plugin.did_emit_lookup_overloads {
+    plugin.did_emit_lookup_overloads = false;
+    emit_lookup_overloads(plugin, plugin.workspace);
+  }
+}
+
+lookup_entry3_already_queued :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, tertiary_name: string, symbol_name: string) -> bool {
+  for plugin.lookup_entries {
+    if it.target_name != target_name continue;
+    if it.primary_name != primary_name continue;
+    if it.secondary_name != secondary_name continue;
+    if it.tertiary_name != tertiary_name continue;
+    if it.symbol_name != symbol_name continue;
+    return true;
+  }
+  return false;
+}
+
+queue_lookup_entry3 :: (plugin: *Jai_To_Shader_Plugin, target_name: string, primary_name: string, secondary_name: string, tertiary_name: string, symbol_name: string) {
+  if lookup_entry3_already_queued(plugin, target_name, primary_name, secondary_name, tertiary_name, symbol_name) return;
+  array_add(*plugin.lookup_entries, .{
+    target_name = target_name,
+    primary_name = primary_name,
+    secondary_name = secondary_name,
+    tertiary_name = tertiary_name,
     symbol_name = symbol_name,
   });
   if plugin.did_emit_lookup_overloads {
@@ -2224,10 +2595,22 @@ emit_lookup_overloads :: (plugin: *Jai_To_Shader_Plugin, workspace: Workspace) {
     "lookup_transpiled_impl :: (target_name: string, primary_name: string, secondary_name: string) -> string {",
   );
   for plugin.lookup_entries {
+    if it.tertiary_name.count != 0 continue;
     a(*sb, "  if target_name == \"%\" && primary_name == \"%\" && secondary_name == \"%\" return %;",
                  it.target_name, it.primary_name, it.secondary_name, it.symbol_name);
   }
   a(*sb, "  return \"\";\n}");
+
+  append_lines(*sb,
+    "#poke_name G lookup_transpiled_mesh_impl;",
+    "lookup_transpiled_mesh_impl :: (target_name: string, primary_name: string, secondary_name: string, tertiary_name: string) -> JST_Mesh_Source_Bundle_Lookup {",
+  );
+  for plugin.lookup_entries {
+    if it.tertiary_name.count == 0 continue;
+    a(*sb, "  if target_name == \"%\" && primary_name == \"%\" && secondary_name == \"%\" && tertiary_name == \"%\" return %;",
+                 it.target_name, it.primary_name, it.secondary_name, it.tertiary_name, it.symbol_name);
+  }
+  a(*sb, "  return .{};\n}");
 
   add_code(plugin, builder_to_string(*sb), "lookup_overloads");
 }
@@ -2272,6 +2655,69 @@ parse_shader_pair_note :: (note_text: string) -> (Shader_Language, GLSL_Target, 
   return .NONE, .OPENGL, "", false, false;
 }
 
+parse_shader_mesh_note :: (note_text: string) -> (Shader_Language, GLSL_Target, string, string, bool, bool) {
+  prefixes := string.[
+    "shader_mesh_to_metal(",
+    "shader_task_mesh_to_metal(",
+  ];
+  languages := Shader_Language.[.METAL, .METAL];
+  targets := GLSL_Target.[.OPENGL, .OPENGL];
+
+  for prefixes {
+    prefix := it;
+    if !begins_with(note_text, prefix) continue;
+
+    rest: string = { note_text.count - prefix.count, note_text.data + prefix.count };
+    if rest.count == 0 return .NONE, .OPENGL, "", "", true, false;
+
+    close_paren_index: s64 = -1;
+    for i: 0..rest.count-1 {
+      if rest[i] == #char ")" {
+        close_paren_index = i;
+        break;
+      }
+    }
+    if close_paren_index == -1 return .NONE, .OPENGL, "", "", true, false;
+
+    args: string = { close_paren_index, rest.data };
+    args = trim_ascii_whitespace(args);
+    if args.count == 0 return .NONE, .OPENGL, "", "", true, false;
+
+    quoted_pair := false;
+    if args.count >= 2 && args[0] == #char "\"" && args[args.count-1] == #char "\"" {
+      args = string.{ args.count - 2, args.data + 1 };
+      quoted_pair = true;
+    }
+
+    comma_index := find_index_from_left(args, ",");
+    mesh_name := "";
+    fragment_name := "";
+    if comma_index < 0 {
+      mesh_name = "";
+      fragment_name = trim_ascii_whitespace(args);
+      if fragment_name.count == 0 return .NONE, .OPENGL, "", "", true, false;
+    } else {
+      first_arg: string = {comma_index, args.data};
+      second_arg: string = {args.count - comma_index - 1, args.data + comma_index + 1};
+      first_arg = trim_ascii_whitespace(first_arg);
+      second_arg = trim_ascii_whitespace(second_arg);
+      if first_arg.count == 0 || second_arg.count == 0 return .NONE, .OPENGL, "", "", true, false;
+      mesh_name = first_arg;
+      fragment_name = second_arg;
+    }
+
+    if quoted_pair && mesh_name.count == 0 return .NONE, .OPENGL, "", "", true, false;
+
+    trailing: string = { rest.count - (close_paren_index + 1), rest.data + close_paren_index + 1 };
+    trailing = trim_ascii_whitespace(trailing);
+    if trailing.count != 0 return .NONE, .OPENGL, "", "", true, false;
+
+    return languages[it_index], targets[it_index], mesh_name, fragment_name, true, true;
+  }
+
+  return .NONE, .OPENGL, "", "", false, false;
+}
+
 context_already_queued :: (plugin: *Jai_To_Shader_Plugin, language: Shader_Language, proc: *Code_Procedure_Body, glsl_target: GLSL_Target) -> bool {
   for *plugin.currently_waiting_contexts {
     if it.main_fn != proc continue;
@@ -2285,6 +2731,18 @@ context_already_queued :: (plugin: *Jai_To_Shader_Plugin, language: Shader_Langu
 pair_context_already_queued :: (plugin: *Jai_To_Shader_Plugin, language: Shader_Language, vertex: *Code_Procedure_Body, fragment: *Code_Procedure_Body, glsl_target: GLSL_Target) -> bool {
   for *plugin.currently_waiting_pair_contexts {
     if it.vertex_fn != vertex continue;
+    if it.fragment_fn != fragment continue;
+    if it.language != language continue;
+    if it.glsl_target != glsl_target continue;
+    return true;
+  }
+  return false;
+}
+
+mesh_context_already_queued :: (plugin: *Jai_To_Shader_Plugin, language: Shader_Language, task: *Code_Procedure_Body, mesh: *Code_Procedure_Body, fragment: *Code_Procedure_Body, glsl_target: GLSL_Target) -> bool {
+  for *plugin.currently_waiting_mesh_contexts {
+    if it.task_fn != task continue;
+    if it.mesh_fn != mesh continue;
     if it.fragment_fn != fragment continue;
     if it.language != language continue;
     if it.glsl_target != glsl_target continue;
@@ -2344,6 +2802,11 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
   pair_requested_languages: [..] Shader_Language;
   pair_requested_glsl_targets: [..] GLSL_Target;
   pair_fragment_names: [..] string;
+  mesh_requested_languages: [..] Shader_Language;
+  mesh_requested_glsl_targets: [..] GLSL_Target;
+  mesh_task_names: [..] string;
+  mesh_stage_names: [..] string;
+  mesh_fragment_names: [..] string;
   for decl.notes {
     language, glsl_target, is_shader_request := shader_request_name_to_language(it.text);
     if is_shader_request {
@@ -2353,16 +2816,30 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
     }
 
     pair_language, pair_glsl_target, fragment_name, pair_matched, pair_valid := parse_shader_pair_note(it.text);
-    if !pair_matched continue;
-    if !pair_valid {
-      compiler_report("Jai Shader Transpiler: Invalid shader pair request note format. Use @shader_pair_to_metal(fragment_fn), @shader_pair_to_glsl(fragment_fn), or @shader_pair_to_vulkan(fragment_fn).", make_location(decl));
+    if pair_matched {
+      if !pair_valid {
+        compiler_report("Jai Shader Transpiler: Invalid shader pair request note format. Use @shader_pair_to_metal(fragment_fn), @shader_pair_to_glsl(fragment_fn), or @shader_pair_to_vulkan(fragment_fn).", make_location(decl));
+        continue;
+      }
+      array_add(*pair_requested_languages, pair_language);
+      array_add(*pair_requested_glsl_targets, pair_glsl_target);
+      array_add(*pair_fragment_names, fragment_name);
       continue;
     }
-    array_add(*pair_requested_languages, pair_language);
-    array_add(*pair_requested_glsl_targets, pair_glsl_target);
-    array_add(*pair_fragment_names, fragment_name);
+
+    mesh_language, mesh_glsl_target, mesh_name, mesh_fragment_name, mesh_matched, mesh_valid := parse_shader_mesh_note(it.text);
+    if !mesh_matched continue;
+    if !mesh_valid {
+      compiler_report("Jai Shader Transpiler: Invalid mesh shader request note format. Use @shader_mesh_to_metal(fragment_fn) on a @mesh_shader declaration, or @shader_mesh_to_metal(mesh_fn, fragment_fn) on a @task_shader declaration.", make_location(decl));
+      continue;
+    }
+    array_add(*mesh_requested_languages, mesh_language);
+    array_add(*mesh_requested_glsl_targets, mesh_glsl_target);
+    array_add(*mesh_task_names, "");
+    array_add(*mesh_stage_names, mesh_name);
+    array_add(*mesh_fragment_names, mesh_fragment_name);
   }
-  if requested_languages.count == 0 && pair_requested_languages.count == 0 return true;
+  if requested_languages.count == 0 && pair_requested_languages.count == 0 && mesh_requested_languages.count == 0 return true;
 
   vertex_proc := resolve_shader_request_target(decl.expression, procedure_bodies);
   if !vertex_proc {
@@ -2427,6 +2904,51 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
     if target_name.count != 0 {
       symbol_name := source_symbol_name_for_request(pair_name);
       queue_lookup_entry(plugin, target_name, vertex_lookup_name, fragment_name, symbol_name);
+    }
+  }
+
+  for mesh_requested_languages {
+    language := it;
+    glsl_target := mesh_requested_glsl_targets[it_index];
+    _ = mesh_task_names[it_index];
+    mesh_name := mesh_stage_names[it_index];
+    fragment_name := mesh_fragment_names[it_index];
+    task_proc: *Code_Procedure_Body = null;
+    mesh_proc: *Code_Procedure_Body = null;
+    if mesh_name.count == 0 {
+      mesh_proc = vertex_proc;
+    } else {
+      task_proc = vertex_proc;
+      mesh_proc = resolve_shader_request_target_by_name(mesh_name, procedure_bodies);
+    }
+    fragment_proc := resolve_shader_request_target_by_name(fragment_name, procedure_bodies);
+    if !mesh_proc || !fragment_proc || (mesh_name.count != 0 && !task_proc) return false;
+
+    task_is_valid := mesh_name.count == 0 || proc_has_note(task_proc.header, "task_shader");
+    mesh_is_valid := proc_has_note(mesh_proc.header, "mesh_shader");
+    fragment_is_valid := proc_has_note(fragment_proc.header, "fragment_shader");
+    if !task_is_valid || !mesh_is_valid || !fragment_is_valid {
+      compiler_report("Jai Shader Transpiler: shader_mesh_to_metal requires either a @mesh_shader declaration expression plus @fragment_shader note argument, or a @task_shader declaration expression plus @mesh_shader and @fragment_shader note arguments.", make_location(decl));
+      continue;
+    }
+
+    if mesh_context_already_queued(plugin, language, task_proc, mesh_proc, fragment_proc, glsl_target) continue;
+    mesh_ctx := Shader_Write_Mesh_Context.{
+      name = ifx decl.name.count != 0 then decl.name else ifx task_proc then tprint("%_%_%", task_proc.header.name, mesh_proc.header.name, fragment_proc.header.name) else tprint("%_%", mesh_proc.header.name, fragment_proc.header.name),
+      language = language,
+      glsl_target = glsl_target,
+      task_fn = task_proc,
+      mesh_fn = mesh_proc,
+      fragment_fn = fragment_proc,
+    };
+    array_add(*plugin.currently_waiting_mesh_contexts, mesh_ctx);
+
+    target_name := target_name_from_language(language, glsl_target);
+    if target_name.count != 0 {
+      symbol_name := source_symbol_name_for_request(mesh_ctx.name);
+      lookup_primary := ifx task_proc then task_proc.header.name else "";
+      lookup_secondary := mesh_proc.header.name;
+      queue_lookup_entry3(plugin, target_name, lookup_primary, lookup_secondary, fragment_name, symbol_name);
     }
   }
   return true;
@@ -2511,6 +3033,15 @@ Shader_Write_Pair_Context :: struct {
   function_constants: [..] IR_Function_Constant;
 }
 
+Shader_Write_Mesh_Context :: struct {
+  name: string;
+  language: Shader_Language;
+  glsl_target: GLSL_Target;
+  task_fn: *Code_Procedure_Body;
+  mesh_fn: *Code_Procedure_Body;
+  fragment_fn: *Code_Procedure_Body;
+}
+
 member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
   auto_release_temp();
   
@@ -2560,8 +3091,10 @@ create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure
     if      proc_has_note(proc.header, "vertex_shader")    shader_type = .Vertex;
     else if proc_has_note(proc.header, "fragment_shader")  shader_type = .Fragment;
     else if proc_has_note(proc.header, "compute_shader")   shader_type = .Compute;
+    else if proc_has_note(proc.header, "task_shader")      shader_type = .Task;
+    else if proc_has_note(proc.header, "mesh_shader")      shader_type = .Mesh;
     else
-      compiler_report("Jai Shader Transpiler: No Shader type tag found. Use @vertex_shader or @fragment_shader or @compute_shader", make_location(proc.header));
+      compiler_report("Jai Shader Transpiler: No shader type tag found. Use @vertex_shader, @fragment_shader, @compute_shader, @task_shader, or @mesh_shader.", make_location(proc.header));
     
     return {
         name = proc.header.name,

@@ -1671,6 +1671,13 @@ ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   if ir_callee_matches_builtin(name, "write_2d") return .WRITE_2D;
   if ir_callee_matches_builtin(name, "write_3d") return .WRITE_3D;
   if ir_callee_matches_builtin(name, "discard") return .DISCARD;
+  if ir_callee_matches_builtin(name, "task_group_id_x") return .TASK_GROUP_ID_X;
+  if ir_callee_matches_builtin(name, "task_payload_store_u32") return .TASK_PAYLOAD_STORE_U32;
+  if ir_callee_matches_builtin(name, "mesh_set_output_counts") return .MESH_SET_OUTPUT_COUNTS;
+  if ir_callee_matches_builtin(name, "mesh_payload_load_u32") return .MESH_PAYLOAD_LOAD_U32;
+  if ir_callee_matches_builtin(name, "mesh_set_vertex_position") return .MESH_SET_VERTEX_POSITION;
+  if ir_callee_matches_builtin(name, "mesh_set_vertex_color") return .MESH_SET_VERTEX_COLOR;
+  if ir_callee_matches_builtin(name, "mesh_set_triangle") return .MESH_SET_TRIANGLE;
   if ir_callee_matches_builtin(name, "saturate") return .SATURATE;
   if ir_callee_matches_builtin(name, "mix") return .MIX;
   if ir_callee_matches_builtin(name, "lerp") return .LERP;
@@ -2401,6 +2408,97 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
       return_err("failed while collecting function constants");
   }
   ir_sort_function_constants_deterministic(*out.function_constants);
+  return {out, true, ir_get_diagnostic(*state)};
+} @jdll_export
+
+ir_lower_task_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Task_Shader) {
+  return_err :: (msg: string, args: ..Any, node: *Code_Node = null) #expand {
+      ir_set_diagnostic(*state, sprint(join("IR lowering(task): ", msg), ..args), ctx.header);
+      `return { {}, false, ir_get_diagnostic(*state) };
+  }
+
+  out: IR_Task_Shader;
+  state: IR_Lowering_State;
+  ir_reset_diagnostic(*state);
+  header := ctx.header;
+  assert(header != null);
+  assert(header.body_or_null != null);
+  assert(header.body_or_null.block != null);
+  if header.arguments.count != 0 {
+      return_err("initial task shader path expects zero arguments.");
+  }
+  if header.returns.count != 0 {
+      return_err("task shaders must have zero return values.");
+  }
+
+  out.source_name = ctx.name;
+  out.entry_name = "TaskMain";
+  out.kind = .Task;
+
+  seen_headers: [..] *Code_Procedure_Header;
+  if !ir_shared_collect_functions_recursive(header, *seen_headers, *out.functions, header, *state) {
+      return_err("failed while collecting/lowering helper functions");
+  }
+
+  if !ir_collect_compute_declared_structs_in_block(header.body_or_null.block, *out.extra_structs, *state) {
+    return {out, false, ir_get_diagnostic(*state)};
+  }
+
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], false, *state, .[], .[]) {
+      return_err("failed while lowering function body", node=header.body_or_null.block);
+  }
+
+  function_constant_seen_headers: [..] *Code_Procedure_Header;
+  if !ir_collect_function_constants_recursive(header, *function_constant_seen_headers, *out.function_constants, header, *state) {
+      return_err("failed while collecting function constants");
+  }
+  ir_sort_function_constants_deterministic(*out.function_constants);
+  return {out, true, ir_get_diagnostic(*state)};
+} @jdll_export
+
+ir_lower_mesh_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Mesh_Shader) {
+  return_err :: (msg: string, args: ..Any, node: *Code_Node = null) #expand {
+      ir_set_diagnostic(*state, sprint(join("IR lowering(mesh): ", msg), ..args), ctx.header);
+      `return { {}, false, ir_get_diagnostic(*state) };
+  }
+
+  out: IR_Mesh_Shader;
+  state: IR_Lowering_State;
+  ir_reset_diagnostic(*state);
+  header := ctx.header;
+  assert(header != null);
+  assert(header.body_or_null != null);
+  assert(header.body_or_null.block != null);
+  if header.arguments.count != 0 {
+      return_err("initial mesh shader path expects zero arguments.");
+  }
+  if header.returns.count != 0 {
+      return_err("mesh shaders must have zero return values.");
+  }
+
+  out.source_name = ctx.name;
+  out.entry_name = "MeshMain";
+  out.kind = .Mesh;
+
+  seen_headers: [..] *Code_Procedure_Header;
+  if !ir_shared_collect_functions_recursive(header, *seen_headers, *out.functions, header, *state) {
+      return_err("failed while collecting/lowering helper functions");
+  }
+
+  if !ir_collect_compute_declared_structs_in_block(header.body_or_null.block, *out.extra_structs, *state) {
+    return {out, false, ir_get_diagnostic(*state)};
+  }
+
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], false, *state, .[], .[]) {
+      return_err("failed while lowering function body", node=header.body_or_null.block);
+  }
+
+  function_constant_seen_headers: [..] *Code_Procedure_Header;
+  if !ir_collect_function_constants_recursive(header, *function_constant_seen_headers, *out.function_constants, header, *state) {
+      return_err("failed while collecting function constants");
+  }
+  ir_sort_function_constants_deterministic(*out.function_constants);
+
   return {out, true, ir_get_diagnostic(*state)};
 } @jdll_export
 
