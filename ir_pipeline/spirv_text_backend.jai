@@ -406,8 +406,10 @@ call_builtin_kind_from_callee_name :: (callee: string) -> IR_Call_Builtin_Kind {
   if callee_matches_builtin(callee, "task_set_mesh_groups") return .TASK_SET_MESH_GROUPS;
   if callee_matches_builtin(callee, "task_group_id_x") return .TASK_GROUP_ID_X;
   if callee_matches_builtin(callee, "task_payload_ptr") return .TASK_PAYLOAD_PTR;
+  if callee_matches_builtin(callee, "mesh_set_max_output_counts") return .MESH_SET_MAX_OUTPUT_COUNTS;
   if callee_matches_builtin(callee, "mesh_set_output_counts") return .MESH_SET_OUTPUT_COUNTS;
   if callee_matches_builtin(callee, "mesh_group_id_x") return .MESH_GROUP_ID_X;
+  if callee_matches_builtin(callee, "mesh_group_id_y") return .MESH_GROUP_ID_Y;
   if callee_matches_builtin(callee, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
   if callee_matches_builtin(callee, "mesh_set_vertex_position") return .MESH_SET_VERTEX_POSITION;
   if callee_matches_builtin(callee, "mesh_set_vertex_color") return .MESH_SET_VERTEX_COLOR;
@@ -477,8 +479,10 @@ call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
   if kind == .TASK_SET_MESH_GROUPS return "task_set_mesh_groups";
   if kind == .TASK_GROUP_ID_X return "task_group_id_x";
   if kind == .TASK_PAYLOAD_PTR return "task_payload_ptr";
+  if kind == .MESH_SET_MAX_OUTPUT_COUNTS return "mesh_set_max_output_counts";
   if kind == .MESH_SET_OUTPUT_COUNTS return "mesh_set_output_counts";
   if kind == .MESH_GROUP_ID_X return "mesh_group_id_x";
+  if kind == .MESH_GROUP_ID_Y return "mesh_group_id_y";
   if kind == .MESH_PAYLOAD_PTR return "mesh_payload_ptr";
   if kind == .MESH_SET_VERTEX_POSITION return "mesh_set_vertex_position";
   if kind == .MESH_SET_VERTEX_COLOR return "mesh_set_vertex_color";
@@ -974,6 +978,8 @@ IR_SPV_Gen_State :: struct {
   payload_struct_name: string;
   payload_size_bytes: s64;
   payload_memory_length: s64;
+  mesh_max_vertex_count: u32;
+  mesh_max_primitive_count: u32;
 
   bound_value: u32;
   emit_text: bool;
@@ -6001,9 +6007,16 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if builtin_kind == .TASK_PAYLOAD_PTR {
         return_err("task_payload_ptr(T) must be used through direct field access, e.g. task_payload_ptr(T).field.");
       }
+      if builtin_kind == .MESH_SET_MAX_OUTPUT_COUNTS {
+        return_err("mesh_set_max_output_counts has no return value and must be used as a statement.");
+      }
       if builtin_kind == .MESH_GROUP_ID_X {
         if expr.args.count != 0 return_err("mesh_group_id_x expects 0 args.");
         return load_builtin_vec3_component(s, s.id_gl_workgroup_id, 0), .UINT, true, diag;
+      }
+      if builtin_kind == .MESH_GROUP_ID_Y {
+        if expr.args.count != 0 return_err("mesh_group_id_y expects 0 args.");
+        return load_builtin_vec3_component(s, s.id_gl_workgroup_id, 1), .UINT, true, diag;
       }
       if builtin_kind == .MESH_PAYLOAD_PTR {
         return_err("mesh_payload_ptr(T) must be used through direct field access, e.g. mesh_payload_ptr(T).field.");
@@ -6442,11 +6455,28 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
           if expr.args.count != 1 return_err("length expects 1 arg.");
           v_id, v_type, v_ok, v_diag := emit_expr(s, expr.args[0]);
           if !v_ok return 0, .UNKNOWN, false, v_diag;
-          v2, v2_ok, v2_diag := coerce_to_float2(s, v_id, v_type);
-          if !v2_ok return 0, .UNKNOWN, false, v2_diag;
-          out := new_id(s);
-          spv_emit_extinst(s, out, s.id_float, "Length", .[v2]);
-          return out, .FLOAT, true, diag;
+          if v_type == .FLOAT2 {
+            v2, v2_ok, v2_diag := coerce_to_float2(s, v_id, v_type);
+            if !v2_ok return 0, .UNKNOWN, false, v2_diag;
+            out := new_id(s);
+            spv_emit_extinst(s, out, s.id_float, "Length", .[v2]);
+            return out, .FLOAT, true, diag;
+          }
+          if v_type == .FLOAT3 {
+            v3, v3_ok, v3_diag := coerce_to_float3(s, v_id, v_type);
+            if !v3_ok return 0, .UNKNOWN, false, v3_diag;
+            out := new_id(s);
+            spv_emit_extinst(s, out, s.id_float, "Length", .[v3]);
+            return out, .FLOAT, true, diag;
+          }
+          if v_type == .FLOAT4 {
+            v4, v4_ok, v4_diag := coerce_to_float4(s, v_id, v_type);
+            if !v4_ok return 0, .UNKNOWN, false, v4_diag;
+            out := new_id(s);
+            spv_emit_extinst(s, out, s.id_float, "Length", .[v4]);
+            return out, .FLOAT, true, diag;
+          }
+          return_err("length requires float2/float3/float4, got %.", v_type);
         }
         if builtin_kind == .NORMALIZE {
           if expr.args.count != 1 return_err("normalize expects 1 arg.");
@@ -7297,6 +7327,16 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       }
       if builtin_kind == .TASK_PAYLOAD_PTR || builtin_kind == .MESH_PAYLOAD_PTR {
         return_err("% has no direct side effects and must be used through field access.", call_builtin_kind_to_name(builtin_kind));
+      }
+      if builtin_kind == .MESH_SET_MAX_OUTPUT_COUNTS {
+        if s.stage != .MESH return_err("mesh_set_max_output_counts is currently mesh-stage only.");
+        if stmt.call_expr.args.count != 2 return_err("mesh_set_max_output_counts expects 2 args.");
+        vertex_count, vertex_ok := parse_u32_literal_expr(stmt.call_expr.args[0]);
+        primitive_count, primitive_ok := parse_u32_literal_expr(stmt.call_expr.args[1]);
+        if !vertex_ok || !primitive_ok return_err("mesh_set_max_output_counts requires literal u32 arguments.");
+        s.mesh_max_vertex_count = max(vertex_count, 1);
+        s.mesh_max_primitive_count = max(primitive_count, 1);
+        return true, false, diag;
       }
       if builtin_kind == .MESH_SET_OUTPUT_COUNTS {
         mesh_ok, mesh_diag := emit_mesh_set_output_counts_call(s, stmt.call_expr.args);

@@ -1674,8 +1674,10 @@ ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   if ir_callee_matches_builtin(name, "task_set_mesh_groups") return .TASK_SET_MESH_GROUPS;
   if ir_callee_matches_builtin(name, "task_group_id_x") return .TASK_GROUP_ID_X;
   if ir_callee_matches_builtin(name, "task_payload_ptr") return .TASK_PAYLOAD_PTR;
+  if ir_callee_matches_builtin(name, "mesh_set_max_output_counts") return .MESH_SET_MAX_OUTPUT_COUNTS;
   if ir_callee_matches_builtin(name, "mesh_set_output_counts") return .MESH_SET_OUTPUT_COUNTS;
   if ir_callee_matches_builtin(name, "mesh_group_id_x") return .MESH_GROUP_ID_X;
+  if ir_callee_matches_builtin(name, "mesh_group_id_y") return .MESH_GROUP_ID_Y;
   if ir_callee_matches_builtin(name, "mesh_payload_ptr") return .MESH_PAYLOAD_PTR;
   if ir_callee_matches_builtin(name, "mesh_set_vertex_position") return .MESH_SET_VERTEX_POSITION;
   if ir_callee_matches_builtin(name, "mesh_set_vertex_color") return .MESH_SET_VERTEX_COLOR;
@@ -2102,8 +2104,9 @@ ir_lower_extra_args_readonly :: (
     out_args: *[..] IR_Function_Arg,
     extra_structs: *[..] IR_Struct,
     state: *IR_Lowering_State,
+    start_arg_index: s64 = 1,
 ) -> (ok: bool, error_msg: string) {
-    for i: 1..header.arguments.count-1 {
+    for i: start_arg_index..header.arguments.count-1 {
         arg := header.arguments[i];
         arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
         arg_ok := ir_collect_nested_structs_for_shader_arg_type(arg_type, extra_structs);
@@ -2201,7 +2204,7 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
   out.input = in_struct;
   out.output = out_struct;
   {
-    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state);
+    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state, 1);
     if !args_ok {
       if args_err.count != 0 return_err("%", args_err);
       return { {}, false, ir_get_diagnostic(*state) };
@@ -2314,7 +2317,7 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   out.input = in_struct;
   out.output = out_struct;
   {
-    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state);
+    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state, 1);
     if !args_ok {
       if args_err.count != 0 return_err("%", args_err);
       return { {}, false, ir_get_diagnostic(*state) };
@@ -2467,9 +2470,6 @@ ir_lower_task_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
   assert(header != null);
   assert(header.body_or_null != null);
   assert(header.body_or_null.block != null);
-  if header.arguments.count != 0 {
-      return_err("initial task shader path expects zero arguments.");
-  }
   if header.returns.count != 0 {
       return_err("task shaders must have zero return values.");
   }
@@ -2477,17 +2477,33 @@ ir_lower_task_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
   out.source_name = ctx.name;
   out.entry_name = "TaskMain";
   out.kind = .Task;
+  {
+    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state, 0);
+    if !args_ok {
+      if args_err.count != 0 return_err("%", args_err);
+      return { {}, false, ir_get_diagnostic(*state) };
+    }
+  }
 
   seen_headers: [..] *Code_Procedure_Header;
   if !ir_shared_collect_functions_recursive(header, *seen_headers, *out.functions, header, *state) {
       return_err("failed while collecting/lowering helper functions");
+  }
+  {
+    helpers_ok, helpers_err := ir_lower_collect_structs_from_helpers(header, seen_headers, *out.extra_structs, *state, true);
+    if !helpers_ok {
+      if helpers_err.count != 0 return_err("%", helpers_err);
+      return {out, false, ir_get_diagnostic(*state)};
+    }
   }
 
   if !ir_collect_compute_declared_structs_in_block(header.body_or_null.block, *out.extra_structs, *state) {
     return {out, false, ir_get_diagnostic(*state)};
   }
 
-  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], false, *state, .[], .[]) {
+  parameter_usings: [..] IR_Using_Source;
+  ir_collect_parameter_using_sources(header, *parameter_usings);
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], false, *state, parameter_usings, .[]) {
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
 
@@ -2512,9 +2528,6 @@ ir_lower_mesh_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
   assert(header != null);
   assert(header.body_or_null != null);
   assert(header.body_or_null.block != null);
-  if header.arguments.count != 0 {
-      return_err("initial mesh shader path expects zero arguments.");
-  }
   if header.returns.count != 0 {
       return_err("mesh shaders must have zero return values.");
   }
@@ -2522,17 +2535,33 @@ ir_lower_mesh_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
   out.source_name = ctx.name;
   out.entry_name = "MeshMain";
   out.kind = .Mesh;
+  {
+    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state, 0);
+    if !args_ok {
+      if args_err.count != 0 return_err("%", args_err);
+      return { {}, false, ir_get_diagnostic(*state) };
+    }
+  }
 
   seen_headers: [..] *Code_Procedure_Header;
   if !ir_shared_collect_functions_recursive(header, *seen_headers, *out.functions, header, *state) {
       return_err("failed while collecting/lowering helper functions");
+  }
+  {
+    helpers_ok, helpers_err := ir_lower_collect_structs_from_helpers(header, seen_headers, *out.extra_structs, *state, true);
+    if !helpers_ok {
+      if helpers_err.count != 0 return_err("%", helpers_err);
+      return {out, false, ir_get_diagnostic(*state)};
+    }
   }
 
   if !ir_collect_compute_declared_structs_in_block(header.body_or_null.block, *out.extra_structs, *state) {
     return {out, false, ir_get_diagnostic(*state)};
   }
 
-  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], false, *state, .[], .[]) {
+  parameter_usings: [..] IR_Using_Source;
+  ir_collect_parameter_using_sources(header, *parameter_usings);
+  if !ir_shared_lower_block(header.body_or_null.block, *out.body, .[], .[], false, *state, parameter_usings, .[]) {
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
 

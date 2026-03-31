@@ -253,8 +253,10 @@ atomic_max_u32 :: (dst: *u32, value: u32) -> u32 { return 0; }
 task_set_mesh_groups :: (group_count_x: u32, group_count_y: u32, group_count_z: u32) { }
 task_group_id_x :: () -> u32 { return 0; }
 task_payload_ptr :: ($T: Type) -> *T { return cast(*T) 0; }
+mesh_set_max_output_counts :: (vertex_count: u32, primitive_count: u32) { }
 mesh_set_output_counts :: (vertex_count: u32, primitive_count: u32) { }
 mesh_group_id_x :: () -> u32 { return 0; }
+mesh_group_id_y :: () -> u32 { return 0; }
 mesh_payload_ptr :: ($T: Type) -> *T { return cast(*T) 0; }
 mesh_set_vertex_position :: (vertex_index: u32, position: Vector4) { }
 mesh_set_vertex_color :: (vertex_index: u32, color: Vector3) { }
