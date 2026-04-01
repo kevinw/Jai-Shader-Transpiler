@@ -369,7 +369,7 @@ expr_text :: (expr: *IR_Expr) -> string {
   text, ok := ir_expr_to_slang_from_ir(expr);
   if !ok return "";
   return text;
-}
+} @jdll_export
 
 call_builtin_kind_for_expr :: (expr: *IR_Expr) -> IR_Call_Builtin_Kind {
   if !expr return .NONE;
@@ -2557,12 +2557,6 @@ spv_append_function_and_body :: (sb: *String_Builder, s: *IR_SPV_Gen_State, entr
   append_and_steal_buffers(sb, *s.op_lines);
   if !s.last_op_is_terminator a(sb, "OpReturn");
   a(sb, "OpFunctionEnd");
-}
-
-align_up :: (value: s64, alignment: s64) -> s64 {
-  if alignment <= 1 return value;
-  mask := alignment - 1;
-  return (value + mask) & ~mask;
 }
 
 host_blit_align_for_kind :: (kind: IR_SPV_Gen_Type) -> s64 {

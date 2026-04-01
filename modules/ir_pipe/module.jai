@@ -1,5 +1,7 @@
 // Auto-generated JDLL interface module 'ir_pipe'
 
+expr_text :: (expr: *IR_Expr) -> string #foreign ir_pipe_lib "_jdll_expr_text";
+ir_canonical_callee_name :: (name: string) -> string #foreign ir_pipe_lib "_jdll_ir_canonical_callee_name";
 ir_get_diagnostic :: (state: *IR_Lowering_State) -> IR_Diagnostic #foreign ir_pipe_lib "_jdll_ir_get_diagnostic";
 ir_set_diagnostic :: (state: *IR_Lowering_State, message: string, node: *Code_Node = null) #c_call #foreign ir_pipe_lib "_jdll_ir_set_diagnostic";
 ir_reset_diagnostic :: (state: *IR_Lowering_State) #foreign ir_pipe_lib "_jdll_ir_reset_diagnostic";
@@ -19,6 +21,8 @@ normalize_shader :: (shader: *IR_Shader) #foreign ir_pipe_lib "_jdll_normalize_s
 emit_spirv_cross_target_source :: (spv_path: string, entry_name: string, stage: IR_Shader_Kind, target: Toolchain_Target, output_path: string, use_metal_argument_buffers := false, source_entry_name := "main") -> bool #c_call #foreign ir_pipe_lib;
 to_spv_binary :: (shader: *IR_Shader) -> IR_Result([] u8) #foreign ir_pipe_lib "_jdll_to_spv_binary";
 to_spvasm :: (shader: *IR_Shader) -> IR_Result(string) #foreign ir_pipe_lib "_jdll_to_spvasm";
+ir_lower_mesh_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Mesh_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_mesh_from_shader_context";
+ir_lower_task_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Task_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_task_from_shader_context";
 ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Compute_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_compute_from_shader_context";
 ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Fragment_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_fragment_from_shader_context";
 ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Vertex_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_vertex_from_shader_context";

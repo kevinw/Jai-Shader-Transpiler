@@ -385,6 +385,12 @@ IR_Result :: struct ($R: Type) {
     diag: IR_Diagnostic;
 }
 
+align_up :: (value: s64, alignment: s64) -> s64 {
+  if alignment <= 1 return value;
+  mask := alignment - 1;
+  return (value + mask) & ~mask;
+}
+
 
 #scope_file
 #import "Compiler";
