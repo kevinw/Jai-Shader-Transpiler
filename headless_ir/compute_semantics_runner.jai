@@ -3,7 +3,7 @@
 // running them on the GPU and CPU and comparing results.
 // 
 
-ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; Vec3; Vec4; Vec4Box; }; }).[
+ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; Vec3; Vec4; Vec4Box; Vec4Large; TMFloat4Large; }; }).[
   {"simple", .Bare},
   {"loop", .Bare},
   {"locals", .Bare},
@@ -23,6 +23,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"matrix4_params_mul", .Bare},
   {"intrinsics", .Bare},
   {"float4_component_lvalue", .Bare},
+  {"swizzle_lvalue", .Bare},
   {"local_array_literal_read", .Bare},
   {"local_array_write_then_read", .Bare},
   {"bool_and_or", .Bare},
@@ -183,6 +184,9 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"struct_vec4_field_write", .Vec4Box},
   {"struct_buffer_element_constructor_assign", .Vec4Box},
   {"terrain_tetra_inside_outside_signature", .Bare},
+  {"terrain_tetra_emit_count_chain", .Vec4Large},
+  {"terrain_tetra_emit_count_chain_tm_float4", .TMFloat4Large},
+  {"terrain_tetra_flat_six_vertex_tm_float4", .TMFloat4Large},
   {"helper_scalar_arg_shadow_capture", .Bare},
   
   {"inner_proc", .Bare},
@@ -207,12 +211,21 @@ Compute_Vec4_Box :: struct {
   v: Vector4;
 }
 
+Compute_TM_Float4 :: struct {
+  x: float;
+  y: float;
+  z: float;
+  w: float;
+}
+
 Compute_Table_Kind :: enum {
   U32;
   BOID_STATE;
   VEC3;
   VEC4;
   VEC4_BOX;
+  VEC4_LARGE;
+  TM_FLOAT4_LARGE;
 }
 
 Compute_Semantics_In :: struct {
@@ -788,6 +801,15 @@ float4_component_lvalue :: (using in: Compute_Semantics_In, values: *u32) {
   v := Vector4.{1.0, 2.0, 3.0, 4.0};
   v.x = v.x + cast(float) idx;
   values[idx] = cast(u32) (v.x + v.y);
+} @compute_shader
+
+swizzle_lvalue :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := cast(float)thread_id.x;
+  v := Vector4.{1.0, 2.0, 3.0, 4.0};
+  v.xyz += Vector3.{idx, idx * 2, idx * 3};
+  v.xy += Vector2.{idx * 10, idx * 20};
+  values[thread_id.x] = cast(u32) (v.x + v.y + v.z);
 } @compute_shader
 
 float4_swizzle_xy :: (using in: Compute_Semantics_In, values: *u32) {
@@ -2582,6 +2604,479 @@ terrain_tetra_inside_outside_signature :: (using in: Compute_Semantics_In, value
   values[idx] = values[idx] + candidate + 1;
 } @compute_shader
 
+terrain_test_getp :: (i: u32, p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3) -> Vector3 {
+  if i == 0 return p0;
+  if i == 1 return p1;
+  if i == 2 return p2;
+  return p3;
+}
+
+terrain_test_getd :: (i: u32, d0: float, d1: float, d2: float, d3: float) -> float {
+  if i == 0 return d0;
+  if i == 1 return d1;
+  if i == 2 return d2;
+  return d3;
+}
+
+terrain_test_getg :: (i: u32, g0: Vector3, g1: Vector3, g2: Vector3, g3: Vector3) -> Vector3 {
+  if i == 0 return g0;
+  if i == 1 return g1;
+  if i == 2 return g2;
+  return g3;
+}
+
+terrain_test_safe_normalize :: (v: Vector3) -> Vector3 {
+  len2 := dot(v, v);
+  if len2 > 0.0000001 return v / sqrt(len2);
+  return .{0.0, 1.0, 0.0};
+}
+
+terrain_test_interp_iso :: (pa: Vector3, pb: Vector3, da: float, db: float) -> Vector3 {
+  denom := da - db;
+  if abs(denom) < 0.000001 return pa;
+  t := da / denom;
+  if t < 0.0 t = 0.0;
+  if t > 1.0 t = 1.0;
+  return pa + (pb - pa) * t;
+}
+
+terrain_test_interp_grad :: (ga: Vector3, gb: Vector3, da: float, db: float) -> Vector3 {
+  denom := da - db;
+  if abs(denom) < 0.000001 return terrain_test_safe_normalize(ga);
+  t := da / denom;
+  if t < 0.0 t = 0.0;
+  if t > 1.0 t = 1.0;
+  return terrain_test_safe_normalize(ga + (gb - ga) * t);
+}
+
+terrain_test_bit_sign :: (idx: u32, bit: u32) -> float {
+  if ((idx >> bit) & 1) != 0 return -1.0;
+  return 1.0;
+}
+
+terrain_test_emit_vertex :: (positions: *Vector4, normals: *Vector4, base: u32, out_count: u32, p: Vector3, n: Vector3) -> u32 {
+  if out_count >= 36 return out_count;
+  i := base + out_count;
+  positions[i] = .{p.x, p.y, p.z, 0.0};
+  normals[i] = .{n.x, n.y, n.z, 0.0};
+  return out_count + 1;
+}
+
+terrain_test_emit_triangle :: (positions: *Vector4, normals: *Vector4, base: u32, out_count: u32,
+                               p0: Vector3, n0: Vector3, p1: Vector3, n1: Vector3, p2: Vector3, n2: Vector3) -> u32 {
+  out_count = terrain_test_emit_vertex(positions, normals, base, out_count, p0, n0);
+  out_count = terrain_test_emit_vertex(positions, normals, base, out_count, p1, n1);
+  out_count = terrain_test_emit_vertex(positions, normals, base, out_count, p2, n2);
+  return out_count;
+}
+
+terrain_test_mesh_tetra :: (positions: *Vector4, normals: *Vector4, base: u32, out_count: u32,
+                            p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3,
+                            d0: float, d1: float, d2: float, d3: float,
+                            g0: Vector3, g1: Vector3, g2: Vector3, g3: Vector3) -> u32 {
+  inside: [4]u32;
+  outside: [4]u32;
+  inside_count: u32 = 0;
+  outside_count: u32 = 0;
+
+  if d0 < 0.0 { inside[inside_count] = 0; inside_count += 1; } else { outside[outside_count] = 0; outside_count += 1; }
+  if d1 < 0.0 { inside[inside_count] = 1; inside_count += 1; } else { outside[outside_count] = 1; outside_count += 1; }
+  if d2 < 0.0 { inside[inside_count] = 2; inside_count += 1; } else { outside[outside_count] = 2; outside_count += 1; }
+  if d3 < 0.0 { inside[inside_count] = 3; inside_count += 1; } else { outside[outside_count] = 3; outside_count += 1; }
+
+  if inside_count == 0 || inside_count == 4 return out_count;
+
+  if inside_count == {
+  case 1;
+    i0 := inside[0];
+    o0 := outside[0];
+    o1 := outside[1];
+    o2 := outside[2];
+
+    pi0 := terrain_test_getp(i0, p0, p1, p2, p3);
+    po0 := terrain_test_getp(o0, p0, p1, p2, p3);
+    po1 := terrain_test_getp(o1, p0, p1, p2, p3);
+    po2 := terrain_test_getp(o2, p0, p1, p2, p3);
+    di0 := terrain_test_getd(i0, d0, d1, d2, d3);
+    do0 := terrain_test_getd(o0, d0, d1, d2, d3);
+    do1 := terrain_test_getd(o1, d0, d1, d2, d3);
+    do2 := terrain_test_getd(o2, d0, d1, d2, d3);
+    gi0 := terrain_test_getg(i0, g0, g1, g2, g3);
+    go0 := terrain_test_getg(o0, g0, g1, g2, g3);
+    go1 := terrain_test_getg(o1, g0, g1, g2, g3);
+    go2 := terrain_test_getg(o2, g0, g1, g2, g3);
+
+    q0 := terrain_test_interp_iso(pi0, po0, di0, do0);
+    q1 := terrain_test_interp_iso(pi0, po1, di0, do1);
+    q2 := terrain_test_interp_iso(pi0, po2, di0, do2);
+    n0 := terrain_test_interp_grad(gi0, go0, di0, do0);
+    n1 := terrain_test_interp_grad(gi0, go1, di0, do1);
+    n2 := terrain_test_interp_grad(gi0, go2, di0, do2);
+    out_count = terrain_test_emit_triangle(positions, normals, base, out_count, q0, n0, q1, n1, q2, n2);
+  case 3;
+    o0 := outside[0];
+    i0 := inside[0];
+    i1 := inside[1];
+    i2 := inside[2];
+
+    po0 := terrain_test_getp(o0, p0, p1, p2, p3);
+    pi0 := terrain_test_getp(i0, p0, p1, p2, p3);
+    pi1 := terrain_test_getp(i1, p0, p1, p2, p3);
+    pi2 := terrain_test_getp(i2, p0, p1, p2, p3);
+    do0 := terrain_test_getd(o0, d0, d1, d2, d3);
+    di0 := terrain_test_getd(i0, d0, d1, d2, d3);
+    di1 := terrain_test_getd(i1, d0, d1, d2, d3);
+    di2 := terrain_test_getd(i2, d0, d1, d2, d3);
+    go0 := terrain_test_getg(o0, g0, g1, g2, g3);
+    gi0 := terrain_test_getg(i0, g0, g1, g2, g3);
+    gi1 := terrain_test_getg(i1, g0, g1, g2, g3);
+    gi2 := terrain_test_getg(i2, g0, g1, g2, g3);
+
+    q0 := terrain_test_interp_iso(po0, pi0, do0, di0);
+    q1 := terrain_test_interp_iso(po0, pi1, do0, di1);
+    q2 := terrain_test_interp_iso(po0, pi2, do0, di2);
+    n0 := terrain_test_interp_grad(go0, gi0, do0, di0);
+    n1 := terrain_test_interp_grad(go0, gi1, do0, di1);
+    n2 := terrain_test_interp_grad(go0, gi2, do0, di2);
+    out_count = terrain_test_emit_triangle(positions, normals, base, out_count, q0, n0, q2, n2, q1, n1);
+  case;
+    i0 := inside[0];
+    i1 := inside[1];
+    o0 := outside[0];
+    o1 := outside[1];
+
+    pi0 := terrain_test_getp(i0, p0, p1, p2, p3);
+    pi1 := terrain_test_getp(i1, p0, p1, p2, p3);
+    po0 := terrain_test_getp(o0, p0, p1, p2, p3);
+    po1 := terrain_test_getp(o1, p0, p1, p2, p3);
+    di0 := terrain_test_getd(i0, d0, d1, d2, d3);
+    di1 := terrain_test_getd(i1, d0, d1, d2, d3);
+    do0 := terrain_test_getd(o0, d0, d1, d2, d3);
+    do1 := terrain_test_getd(o1, d0, d1, d2, d3);
+    gi0 := terrain_test_getg(i0, g0, g1, g2, g3);
+    gi1 := terrain_test_getg(i1, g0, g1, g2, g3);
+    go0 := terrain_test_getg(o0, g0, g1, g2, g3);
+    go1 := terrain_test_getg(o1, g0, g1, g2, g3);
+
+    q0 := terrain_test_interp_iso(pi0, po0, di0, do0);
+    q1 := terrain_test_interp_iso(pi1, po0, di1, do0);
+    q2 := terrain_test_interp_iso(pi1, po1, di1, do1);
+    q3 := terrain_test_interp_iso(pi0, po1, di0, do1);
+    n0 := terrain_test_interp_grad(gi0, go0, di0, do0);
+    n1 := terrain_test_interp_grad(gi1, go0, di1, do0);
+    n2 := terrain_test_interp_grad(gi1, go1, di1, do1);
+    n3 := terrain_test_interp_grad(gi0, go1, di0, do1);
+
+    out_count = terrain_test_emit_triangle(positions, normals, base, out_count, q0, n0, q1, n1, q2, n2);
+    out_count = terrain_test_emit_triangle(positions, normals, base, out_count, q0, n0, q2, n2, q3, n3);
+  }
+
+  return out_count;
+}
+
+terrain_tetra_emit_count_chain :: (using in: Compute_Semantics_In, values: *u32, positions: *Vector4) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+
+  normals := positions;
+  base: u32 = idx * 36;
+
+  c0 := Vector3.{0.0, 0.0, 0.0};
+  c1 := Vector3.{1.0, 0.0, 0.0};
+  c2 := Vector3.{1.0, 1.0, 0.0};
+  c3 := Vector3.{0.0, 1.0, 0.0};
+  c4 := Vector3.{0.0, 0.0, 1.0};
+  c5 := Vector3.{1.0, 0.0, 1.0};
+  c6 := Vector3.{1.0, 1.0, 1.0};
+  c7 := Vector3.{0.0, 1.0, 1.0};
+
+  d0 := terrain_test_bit_sign(idx, 0);
+  d1 := terrain_test_bit_sign(idx, 1);
+  d2 := terrain_test_bit_sign(idx, 2);
+  d3 := terrain_test_bit_sign(idx, 3);
+  d4 := terrain_test_bit_sign(idx, 4);
+  d5 := terrain_test_bit_sign(idx, 5);
+  d6 := terrain_test_bit_sign(idx, (idx + 1) & 5);
+  d7 := terrain_test_bit_sign(idx, (idx + 2) & 5);
+
+  g0 := terrain_test_safe_normalize(.{0.7, 0.1, 0.3});
+  g1 := terrain_test_safe_normalize(.{0.2, 0.8, 0.1});
+  g2 := terrain_test_safe_normalize(.{0.6, 0.4, 0.2});
+  g3 := terrain_test_safe_normalize(.{0.1, 0.3, 0.9});
+  g4 := terrain_test_safe_normalize(.{0.3, 0.9, 0.2});
+  g5 := terrain_test_safe_normalize(.{0.8, 0.1, 0.5});
+  g6 := terrain_test_safe_normalize(.{0.4, 0.7, 0.6});
+  g7 := terrain_test_safe_normalize(.{0.5, 0.2, 0.8});
+
+  emitted: u32 = 0;
+  emitted = terrain_test_mesh_tetra(positions, normals, base, emitted, c0, c5, c1, c6, d0, d5, d1, d6, g0, g5, g1, g6);
+  emitted = terrain_test_mesh_tetra(positions, normals, base, emitted, c0, c1, c2, c6, d0, d1, d2, d6, g0, g1, g2, g6);
+  emitted = terrain_test_mesh_tetra(positions, normals, base, emitted, c0, c2, c3, c6, d0, d2, d3, d6, g0, g2, g3, g6);
+  emitted = terrain_test_mesh_tetra(positions, normals, base, emitted, c0, c3, c7, c6, d0, d3, d7, d6, g0, g3, g7, g6);
+  emitted = terrain_test_mesh_tetra(positions, normals, base, emitted, c0, c7, c4, c6, d0, d7, d4, d6, g0, g7, g4, g6);
+  emitted = terrain_test_mesh_tetra(positions, normals, base, emitted, c0, c4, c5, c6, d0, d4, d5, d6, g0, g4, g5, g6);
+
+  positions[base].w = cast(float) emitted;
+  values[idx] = cast(u32) floor(positions[base].w + 0.5) + 1;
+} @compute_shader
+
+terrain_test_emit_vertex_tm_float4 :: (positions: *Compute_TM_Float4, normals: *Compute_TM_Float4, base: u32, out_count: u32, p: Vector3, n: Vector3) -> u32 {
+  if out_count >= 36 return out_count;
+  i := base + out_count;
+  positions[i].x = p.x;
+  positions[i].y = p.y;
+  positions[i].z = p.z;
+  positions[i].w = 0.0;
+  normals[i].x = n.x;
+  normals[i].y = n.y;
+  normals[i].z = n.z;
+  normals[i].w = 0.0;
+  return out_count + 1;
+}
+
+terrain_test_emit_triangle_tm_float4 :: (positions: *Compute_TM_Float4, normals: *Compute_TM_Float4, base: u32, out_count: u32,
+                                         p0: Vector3, n0: Vector3, p1: Vector3, n1: Vector3, p2: Vector3, n2: Vector3) -> u32 {
+  out_count = terrain_test_emit_vertex_tm_float4(positions, normals, base, out_count, p0, n0);
+  out_count = terrain_test_emit_vertex_tm_float4(positions, normals, base, out_count, p1, n1);
+  out_count = terrain_test_emit_vertex_tm_float4(positions, normals, base, out_count, p2, n2);
+  return out_count;
+}
+
+terrain_test_mesh_tetra_tm_float4 :: (positions: *Compute_TM_Float4, normals: *Compute_TM_Float4, base: u32, out_count: u32,
+                                      p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3,
+                                      d0: float, d1: float, d2: float, d3: float,
+                                      g0: Vector3, g1: Vector3, g2: Vector3, g3: Vector3) -> u32 {
+  inside: [4]u32;
+  outside: [4]u32;
+  inside_count: u32 = 0;
+  outside_count: u32 = 0;
+
+  if d0 < 0.0 { inside[inside_count] = 0; inside_count += 1; } else { outside[outside_count] = 0; outside_count += 1; }
+  if d1 < 0.0 { inside[inside_count] = 1; inside_count += 1; } else { outside[outside_count] = 1; outside_count += 1; }
+  if d2 < 0.0 { inside[inside_count] = 2; inside_count += 1; } else { outside[outside_count] = 2; outside_count += 1; }
+  if d3 < 0.0 { inside[inside_count] = 3; inside_count += 1; } else { outside[outside_count] = 3; outside_count += 1; }
+
+  if inside_count == 0 || inside_count == 4 return out_count;
+
+  if inside_count == {
+  case 1;
+    i0 := inside[0];
+    o0 := outside[0];
+    o1 := outside[1];
+    o2 := outside[2];
+
+    pi0 := terrain_test_getp(i0, p0, p1, p2, p3);
+    po0 := terrain_test_getp(o0, p0, p1, p2, p3);
+    po1 := terrain_test_getp(o1, p0, p1, p2, p3);
+    po2 := terrain_test_getp(o2, p0, p1, p2, p3);
+    di0 := terrain_test_getd(i0, d0, d1, d2, d3);
+    do0 := terrain_test_getd(o0, d0, d1, d2, d3);
+    do1 := terrain_test_getd(o1, d0, d1, d2, d3);
+    do2 := terrain_test_getd(o2, d0, d1, d2, d3);
+    gi0 := terrain_test_getg(i0, g0, g1, g2, g3);
+    go0 := terrain_test_getg(o0, g0, g1, g2, g3);
+    go1 := terrain_test_getg(o1, g0, g1, g2, g3);
+    go2 := terrain_test_getg(o2, g0, g1, g2, g3);
+
+    q0 := terrain_test_interp_iso(pi0, po0, di0, do0);
+    q1 := terrain_test_interp_iso(pi0, po1, di0, do1);
+    q2 := terrain_test_interp_iso(pi0, po2, di0, do2);
+    n0 := terrain_test_interp_grad(gi0, go0, di0, do0);
+    n1 := terrain_test_interp_grad(gi0, go1, di0, do1);
+    n2 := terrain_test_interp_grad(gi0, go2, di0, do2);
+    out_count = terrain_test_emit_triangle_tm_float4(positions, normals, base, out_count, q0, n0, q1, n1, q2, n2);
+  case 3;
+    o0 := outside[0];
+    i0 := inside[0];
+    i1 := inside[1];
+    i2 := inside[2];
+
+    po0 := terrain_test_getp(o0, p0, p1, p2, p3);
+    pi0 := terrain_test_getp(i0, p0, p1, p2, p3);
+    pi1 := terrain_test_getp(i1, p0, p1, p2, p3);
+    pi2 := terrain_test_getp(i2, p0, p1, p2, p3);
+    do0 := terrain_test_getd(o0, d0, d1, d2, d3);
+    di0 := terrain_test_getd(i0, d0, d1, d2, d3);
+    di1 := terrain_test_getd(i1, d0, d1, d2, d3);
+    di2 := terrain_test_getd(i2, d0, d1, d2, d3);
+    go0 := terrain_test_getg(o0, g0, g1, g2, g3);
+    gi0 := terrain_test_getg(i0, g0, g1, g2, g3);
+    gi1 := terrain_test_getg(i1, g0, g1, g2, g3);
+    gi2 := terrain_test_getg(i2, g0, g1, g2, g3);
+
+    q0 := terrain_test_interp_iso(po0, pi0, do0, di0);
+    q1 := terrain_test_interp_iso(po0, pi1, do0, di1);
+    q2 := terrain_test_interp_iso(po0, pi2, do0, di2);
+    n0 := terrain_test_interp_grad(go0, gi0, do0, di0);
+    n1 := terrain_test_interp_grad(go0, gi1, do0, di1);
+    n2 := terrain_test_interp_grad(go0, gi2, do0, di2);
+    out_count = terrain_test_emit_triangle_tm_float4(positions, normals, base, out_count, q0, n0, q2, n2, q1, n1);
+  case;
+    i0 := inside[0];
+    i1 := inside[1];
+    o0 := outside[0];
+    o1 := outside[1];
+
+    pi0 := terrain_test_getp(i0, p0, p1, p2, p3);
+    pi1 := terrain_test_getp(i1, p0, p1, p2, p3);
+    po0 := terrain_test_getp(o0, p0, p1, p2, p3);
+    po1 := terrain_test_getp(o1, p0, p1, p2, p3);
+    di0 := terrain_test_getd(i0, d0, d1, d2, d3);
+    di1 := terrain_test_getd(i1, d0, d1, d2, d3);
+    do0 := terrain_test_getd(o0, d0, d1, d2, d3);
+    do1 := terrain_test_getd(o1, d0, d1, d2, d3);
+    gi0 := terrain_test_getg(i0, g0, g1, g2, g3);
+    gi1 := terrain_test_getg(i1, g0, g1, g2, g3);
+    go0 := terrain_test_getg(o0, g0, g1, g2, g3);
+    go1 := terrain_test_getg(o1, g0, g1, g2, g3);
+
+    q0 := terrain_test_interp_iso(pi0, po0, di0, do0);
+    q1 := terrain_test_interp_iso(pi1, po0, di1, do0);
+    q2 := terrain_test_interp_iso(pi1, po1, di1, do1);
+    q3 := terrain_test_interp_iso(pi0, po1, di0, do1);
+    n0 := terrain_test_interp_grad(gi0, go0, di0, do0);
+    n1 := terrain_test_interp_grad(gi1, go0, di1, do0);
+    n2 := terrain_test_interp_grad(gi1, go1, di1, do1);
+    n3 := terrain_test_interp_grad(gi0, go1, di0, do1);
+
+    out_count = terrain_test_emit_triangle_tm_float4(positions, normals, base, out_count, q0, n0, q1, n1, q2, n2);
+    out_count = terrain_test_emit_triangle_tm_float4(positions, normals, base, out_count, q0, n0, q2, n2, q3, n3);
+  }
+
+  return out_count;
+}
+
+terrain_tetra_emit_count_chain_tm_float4 :: (using in: Compute_Semantics_In, values: *u32, positions: *Compute_TM_Float4) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+
+  normals := positions;
+  base: u32 = idx * 36;
+
+  c0 := Vector3.{0.0, 0.0, 0.0};
+  c1 := Vector3.{1.0, 0.0, 0.0};
+  c2 := Vector3.{1.0, 1.0, 0.0};
+  c3 := Vector3.{0.0, 1.0, 0.0};
+  c4 := Vector3.{0.0, 0.0, 1.0};
+  c5 := Vector3.{1.0, 0.0, 1.0};
+  c6 := Vector3.{1.0, 1.0, 1.0};
+  c7 := Vector3.{0.0, 1.0, 1.0};
+
+  d0 := terrain_test_bit_sign(idx, 0);
+  d1 := terrain_test_bit_sign(idx, 1);
+  d2 := terrain_test_bit_sign(idx, 2);
+  d3 := terrain_test_bit_sign(idx, 3);
+  d4 := terrain_test_bit_sign(idx, 4);
+  d5 := terrain_test_bit_sign(idx, 5);
+  d6 := terrain_test_bit_sign(idx, (idx + 1) & 5);
+  d7 := terrain_test_bit_sign(idx, (idx + 2) & 5);
+
+  g0 := terrain_test_safe_normalize(.{0.7, 0.1, 0.3});
+  g1 := terrain_test_safe_normalize(.{0.2, 0.8, 0.1});
+  g2 := terrain_test_safe_normalize(.{0.6, 0.4, 0.2});
+  g3 := terrain_test_safe_normalize(.{0.1, 0.3, 0.9});
+  g4 := terrain_test_safe_normalize(.{0.3, 0.9, 0.2});
+  g5 := terrain_test_safe_normalize(.{0.8, 0.1, 0.5});
+  g6 := terrain_test_safe_normalize(.{0.4, 0.7, 0.6});
+  g7 := terrain_test_safe_normalize(.{0.5, 0.2, 0.8});
+
+  emitted: u32 = 0;
+  emitted = terrain_test_mesh_tetra_tm_float4(positions, normals, base, emitted, c0, c5, c1, c6, d0, d5, d1, d6, g0, g5, g1, g6);
+  emitted = terrain_test_mesh_tetra_tm_float4(positions, normals, base, emitted, c0, c1, c2, c6, d0, d1, d2, d6, g0, g1, g2, g6);
+  emitted = terrain_test_mesh_tetra_tm_float4(positions, normals, base, emitted, c0, c2, c3, c6, d0, d2, d3, d6, g0, g2, g3, g6);
+  emitted = terrain_test_mesh_tetra_tm_float4(positions, normals, base, emitted, c0, c3, c7, c6, d0, d3, d7, d6, g0, g3, g7, g6);
+  emitted = terrain_test_mesh_tetra_tm_float4(positions, normals, base, emitted, c0, c7, c4, c6, d0, d7, d4, d6, g0, g7, g4, g6);
+  emitted = terrain_test_mesh_tetra_tm_float4(positions, normals, base, emitted, c0, c4, c5, c6, d0, d4, d5, d6, g0, g4, g5, g6);
+
+  positions[base].w = cast(float) emitted;
+  values[idx] = cast(u32) floor(positions[base].w + 0.5) + 1;
+} @compute_shader
+
+terrain_tetra_flat_six_vertex_tm_float4 :: (using in: Compute_Semantics_In, values: *u32, table: *Compute_TM_Float4) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+
+  positions_base: u32 = idx * 72;
+  normals_base: u32 = positions_base + 36;
+
+  p0 := Vector3.{0.0, 0.0, 0.0};
+  p1 := Vector3.{1.0, 0.0, 0.0};
+  p2 := Vector3.{1.0, 1.0, 0.0};
+  p3 := Vector3.{0.0, 1.0, 0.0};
+
+  d0 := -1.0;
+  d1 := -0.4;
+  d2 :=  0.3;
+  d3 :=  0.8;
+
+  g0 := terrain_test_safe_normalize(.{0.7, 0.1, 0.3});
+  g1 := terrain_test_safe_normalize(.{0.2, 0.8, 0.1});
+  g2 := terrain_test_safe_normalize(.{0.6, 0.4, 0.2});
+  g3 := terrain_test_safe_normalize(.{0.1, 0.3, 0.9});
+
+  q0 := terrain_test_interp_iso(p0, p2, d0, d2);
+  q1 := terrain_test_interp_iso(p1, p2, d1, d2);
+  q2 := terrain_test_interp_iso(p1, p3, d1, d3);
+  q3 := terrain_test_interp_iso(p0, p3, d0, d3);
+  n0 := terrain_test_interp_grad(g0, g2, d0, d2);
+  n1 := terrain_test_interp_grad(g1, g2, d1, d2);
+  n2 := terrain_test_interp_grad(g1, g3, d1, d3);
+  n3 := terrain_test_interp_grad(g0, g3, d0, d3);
+
+  out_count: u32 = 0;
+
+  if out_count < 36 {
+    i := positions_base + out_count;
+    table[i].x = q0.x; table[i].y = q0.y; table[i].z = q0.z; table[i].w = 0.0;
+    ni := normals_base + out_count;
+    table[ni].x = n0.x; table[ni].y = n0.y; table[ni].z = n0.z; table[ni].w = 0.0;
+    out_count += 1;
+  }
+  if out_count < 36 {
+    i := positions_base + out_count;
+    table[i].x = q1.x; table[i].y = q1.y; table[i].z = q1.z; table[i].w = 0.0;
+    ni := normals_base + out_count;
+    table[ni].x = n1.x; table[ni].y = n1.y; table[ni].z = n1.z; table[ni].w = 0.0;
+    out_count += 1;
+  }
+  if out_count < 36 {
+    i := positions_base + out_count;
+    table[i].x = q2.x; table[i].y = q2.y; table[i].z = q2.z; table[i].w = 0.0;
+    ni := normals_base + out_count;
+    table[ni].x = n2.x; table[ni].y = n2.y; table[ni].z = n2.z; table[ni].w = 0.0;
+    out_count += 1;
+  }
+  if out_count < 36 {
+    i := positions_base + out_count;
+    table[i].x = q0.x; table[i].y = q0.y; table[i].z = q0.z; table[i].w = 0.0;
+    ni := normals_base + out_count;
+    table[ni].x = n0.x; table[ni].y = n0.y; table[ni].z = n0.z; table[ni].w = 0.0;
+    out_count += 1;
+  }
+  if out_count < 36 {
+    i := positions_base + out_count;
+    table[i].x = q2.x; table[i].y = q2.y; table[i].z = q2.z; table[i].w = 0.0;
+    ni := normals_base + out_count;
+    table[ni].x = n2.x; table[ni].y = n2.y; table[ni].z = n2.z; table[ni].w = 0.0;
+    out_count += 1;
+  }
+  if out_count < 36 {
+    i := positions_base + out_count;
+    table[i].x = q3.x; table[i].y = q3.y; table[i].z = q3.z; table[i].w = 0.0;
+    ni := normals_base + out_count;
+    table[ni].x = n3.x; table[ni].y = n3.y; table[ni].z = n3.z; table[ni].w = 0.0;
+    out_count += 1;
+  }
+
+  sig := cast(u32) floor(
+      table[positions_base + 5].x * 17.0 +
+      table[positions_base + 5].y * 31.0 +
+      table[normals_base + 5].z * 53.0 +
+      cast(float) out_count
+  );
+  values[idx] = sig + 1;
+} @compute_shader
+
 helper_scalar_arg_shadow_sig :: (d0: u32, d1: u32, d2: u32, d3: u32) -> u32 {
   // Distinct weights make accidental argument aliasing obvious.
   return d0 + d1 * 11 + d2 * 101 + d3 * 1009;
@@ -2690,8 +3185,10 @@ struct_with_enum :: (using in: Compute_Semantics_In, values: *u32) {
     control: Control = { brush_active = true };
     control.brush = .Carve;
     values[thread_id.x] = cast(u32)control.brush;
-    for 0..thread_id.x-1 {
-        toggle_brush_type(*control.brush);
+    if thread_id.x > 0 {
+      for 0..thread_id.x-1 {
+          toggle_brush_type(*control.brush);
+      }
     }
     values[thread_id.x] += cast(u32)control.brush;
 } @compute_shader
@@ -2796,6 +3293,9 @@ check_rgba8_pixel :: (pixels: [] u8, width: s64, x: s64, y: s64, r: u8, g: u8, b
 }
 
 run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F, proc_name: string, $WITH_TABLE := false, $TABLE_TYPE: Type = u32, $TABLE_KIND := Compute_Table_Kind.U32) {
+  pool := objc_new(NSAutoreleasePool);
+  defer NSAutoreleasePool.drain(pool);
+
   case_start := current_time_monotonic();
   timings: Compute_Case_Timings;
   suffix := ifx WITH_TABLE then " (table)" else "";
@@ -2808,11 +3308,9 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
     if !lib_compute && error == null fail("Failed to compile compute shader library: %", case_name);
     fail("Compute source compilation failed: %", case_name);
   }
-  defer release(lib_compute);
 
   fn_compute := find_compute_function(lib_compute, case_name);
   if !fn_compute fail("Failed to find compute entry point: %", case_name);
-  defer release(fn_compute);
 
   error = null;
   t0 = current_time_monotonic();
@@ -2832,8 +3330,16 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
 
   table_buffer: *MTLBuffer = null;
   table_size := cast(NSUInteger) 0;
+  table_element_count: s64 = ELEMENT_COUNT;
   #if WITH_TABLE {
-    table_size = cast(NSUInteger) (ELEMENT_COUNT * size_of(TABLE_TYPE));
+    if TABLE_KIND == .VEC4_LARGE {
+      table_element_count = ELEMENT_COUNT * 36;
+    } else #if TABLE_KIND == .TM_FLOAT4_LARGE {
+      table_element_count = ELEMENT_COUNT * 72;
+    }
+  }
+  #if WITH_TABLE {
+    table_size = cast(NSUInteger) (table_element_count * size_of(TABLE_TYPE));
     table_buffer = MTLDevice.newBufferWithLength_options(g_device, table_size, .MTLResourceStorageModeShared);
     if !table_buffer fail("Failed to create shared table buffer");
     defer release(table_buffer);
@@ -2849,12 +3355,18 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
   }
 
   expected: [ELEMENT_COUNT] u32;
-  table_data: [ELEMENT_COUNT] TABLE_TYPE;
+  table_data: [] TABLE_TYPE;
+  #if WITH_TABLE {
+    table_data = NewArray(table_element_count, TABLE_TYPE);
+  }
   for 0..ELEMENT_COUNT-1 {
     seed := ifx WITH_TABLE then cast(u32) (it * 11 + 9) else cast(u32) (it * 17 + 3);
     gpu_values[it] = seed;
     expected[it] = seed;
-    #if WITH_TABLE {
+  }
+
+  #if WITH_TABLE {
+    for 0..table_element_count-1 {
       #if TABLE_KIND == .U32 {
         table_seed := cast(u32) (it * 7 + 3);
         gpu_table[it] = cast(TABLE_TYPE) table_seed;
@@ -2875,7 +3387,7 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
         };
         gpu_table[it] = cast(TABLE_TYPE) vec;
         table_data[it] = cast(TABLE_TYPE) vec;
-      } else #if TABLE_KIND == .VEC4 {
+      } else #if TABLE_KIND == .VEC4 || TABLE_KIND == .VEC4_LARGE {
         vec := Vector4.{
           cast(float) it * 0.11 + 0.5,
           cast(float) ((it % 7) + 1) * 0.23,
@@ -2884,6 +3396,15 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
         };
         gpu_table[it] = cast(TABLE_TYPE) vec;
         table_data[it] = cast(TABLE_TYPE) vec;
+      } else #if TABLE_KIND == .TM_FLOAT4_LARGE {
+        value := Compute_TM_Float4.{
+          x = cast(float) it * 0.11 + 0.5,
+          y = cast(float) ((it % 7) + 1) * 0.23,
+          z = cast(float) ((it % 9) + 2) * 0.17,
+          w = cast(float) ((it % 5) + 3) * 0.19,
+        };
+        gpu_table[it] = cast(TABLE_TYPE) value;
+        table_data[it] = cast(TABLE_TYPE) value;
       } else #if TABLE_KIND == .VEC4_BOX {
         box := Compute_Vec4_Box.{
           v = .{
@@ -2914,8 +3435,8 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
     setComputePipelineState(encoder, xx pipeline_compute);
     setBuffer_offset_atIndex(encoder, xx out_buffer, 0, 0);
     #if WITH_TABLE setBuffer_offset_atIndex(encoder, xx table_buffer, 0, 1);
-    threads_per_grid := MTLSizeMake(ELEMENT_COUNT, 1, 1);
-    threads_per_group := MTLSizeMake(ELEMENT_COUNT, 1, 1);
+    threads_per_grid := MTLSizeMake(cast(NSUInteger) ELEMENT_COUNT, 1, 1);
+    threads_per_group := MTLSizeMake(cast(NSUInteger) ELEMENT_COUNT, 1, 1);
     dispatchThreads_threadsPerThreadgroup(encoder, threads_per_grid, threads_per_group);
   }
   MTLCommandEncoder.endEncoding(cast(*MTLCommandEncoder) encoder);
@@ -3005,6 +3526,18 @@ run_compute_case_with_vec4_table :: (source: string, case_name: string, $cpu_sha
   run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Vector4, .VEC4);
 }
 
+run_compute_case_with_large_vec4_table :: (source: string, case_name: string, $cpu_shader_proc: $F, call := #caller_code) #expand {
+  proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
+  if proc_name.count == 0 proc_name = "cpu_shader_proc";
+  run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Vector4, .VEC4_LARGE);
+}
+
+run_compute_case_with_large_tm_float4_table :: (source: string, case_name: string, $cpu_shader_proc: $F, call := #caller_code) #expand {
+  proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
+  if proc_name.count == 0 proc_name = "cpu_shader_proc";
+  run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Compute_TM_Float4, .TM_FLOAT4_LARGE);
+}
+
 run_compute_case_with_vec4_box_table :: (source: string, case_name: string, $cpu_shader_proc: $F, call := #caller_code) #expand {
   proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
   if proc_name.count == 0 proc_name = "cpu_shader_proc";
@@ -3016,6 +3549,9 @@ n :: ($proc: $F, call := #caller_code) #compile_time {
 }
 
 run_bindless_texture_write_case_metal :: () {
+  pool := objc_new(NSAutoreleasePool);
+  defer NSAutoreleasePool.drain(pool);
+
   metal_source := get_transpiled(.METAL, compute_bindless_write_2d);
   check_contains(metal_source, "kernel", "bindless compute write metal output");
 
@@ -3025,11 +3561,9 @@ run_bindless_texture_write_case_metal :: () {
     if !lib_compute && error == null fail("Failed to compile bindless write compute shader library");
     fail("Bindless write compute source compilation failed");
   }
-  defer release(lib_compute);
 
   fn_compute := find_compute_function(lib_compute, "compute_bindless_write_2d");
   if !fn_compute fail("Failed to find bindless write compute entry point");
-  defer release(fn_compute);
 
   error = null;
   pipeline_compute := MTLDevice.newComputePipelineStateWithFunction_error(g_device, xx fn_compute, *error);
@@ -3048,7 +3582,6 @@ run_bindless_texture_write_case_metal :: () {
   make_output_texture :: () -> *MTLTexture {
     texture_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm, 2, 2, NO);
     if !texture_desc fail("Failed to create bindless write texture descriptor");
-    defer release(texture_desc);
     MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageShaderWrite | .MTLTextureUsageShaderRead);
     MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
     texture := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(g_device, texture_desc);
@@ -3130,7 +3663,10 @@ run_gpu_cpu_tests :: () {
       case .Vec3;    test_runner_func = "run_compute_case_with_vec3_table";
       case .Vec4;    test_runner_func = "run_compute_case_with_vec4_table";
       case .Vec4Box; test_runner_func = "run_compute_case_with_vec4_box_table";
+      case .Vec4Large; test_runner_func = "run_compute_case_with_large_vec4_table";
+      case .TMFloat4Large; test_runner_func = "run_compute_case_with_large_tm_float4_table";
       }
+      print_to_builder(*sb, "if VERBOSE_TEST_LOGGING log(\"[RUN] %\");\n", it.name);
       print_to_builder(*sb, "%1(get_transpiled(.METAL, %2), \"%2\", %2);\ntotal_functions_run += 1;\n", test_runner_func, it.name);
     }
     return builder_to_string(*sb);

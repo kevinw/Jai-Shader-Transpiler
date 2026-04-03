@@ -619,7 +619,6 @@ run_red_triangle_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
@@ -796,7 +795,6 @@ run_matrix_params_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
@@ -992,7 +990,6 @@ run_instance_id_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
@@ -1129,7 +1126,6 @@ run_bindless_sample_case_metal :: () {
 
   // Upload a 2x2 non-uniform texture (left=red, right=green) and sample through bindless descriptors.
   sample_desc := MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped(.MTLPixelFormatRGBA8Unorm, 2, 2, NO);
-  defer release(sample_desc);
   MTLTextureDescriptor.setUsage(sample_desc, .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(sample_desc, .MTLStorageModeShared);
   sample_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, sample_desc);
@@ -1163,7 +1159,6 @@ run_bindless_sample_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
@@ -1355,7 +1350,6 @@ run_if_return_tail_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
@@ -1474,7 +1468,6 @@ run_switch_return_tail_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
@@ -1594,7 +1587,6 @@ run_discard_tail_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
@@ -1942,7 +1934,6 @@ run_local_struct_pointer_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);
@@ -2067,7 +2058,6 @@ run_global_fixed_array_case_metal :: () {
                                                                                                   cast(NSUInteger) WINDOW_W,
                                                                                                   cast(NSUInteger) WINDOW_H,
                                                                                                   NO);
-  defer release(texture_desc);
   MTLTextureDescriptor.setUsage(texture_desc, .MTLTextureUsageRenderTarget | .MTLTextureUsageShaderRead);
   MTLTextureDescriptor.setStorageMode(texture_desc, .MTLStorageModeShared);
   color_tex := cast(*MTLTexture) MTLDevice.newTextureWithDescriptor(device, texture_desc);

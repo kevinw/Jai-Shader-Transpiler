@@ -5,6 +5,18 @@ SAMPLE_3D_SAMPLERS_BINDING :: 0;
 WRITE_2D_TEXTURES_BINDING :: 1;
 WRITE_3D_TEXTURES_BINDING :: 1;
 
+spv_append_debug_source_files_text :: (sb: *String_Builder, state: *IR_SPV_Gen_State) {
+  for state.debug_source_files {
+    append(*sb, tprint("               % = OpString \"%\"\n", id_text(it.id), it.path));
+  }
+}
+
+spv_append_debug_source_files_binary :: (module: *SPV_Module, state: *IR_SPV_Gen_State) {
+  for state.debug_source_files {
+    spv_module_insert_string_after_sources(module, cast(u32) it.id, it.path);
+  }
+}
+
 ps_get_storage_struct_ptr_type :: (s: *IR_SPV_Gen_State, ps_infos: *[..] IR_SPV_PS_Struct_Info, storage_struct_ptr_types: *[..] IR_SPV_PS_Ptr_To_Ptr, struct_name: string) -> s64 {
   assert(s != null);
   assert(ps_infos != null);
@@ -510,6 +522,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   append_and_steal_buffers(*sb, *entry_point_sb);
   if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
   append(*sb, "               OpSource Unknown 100000\n");
+  spv_append_debug_source_files_text(sb, state);
   append(*sb, tprint("               OpName % \"%\"\n", id_text(state.id_main), entry_name));
   append(*sb, tprint("               OpName % \"%\"\n", id_text(root_var_id), root_arg.name));
   for state.input_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
@@ -987,6 +1000,7 @@ emit_graphics_physical_pointer_abi_binary :: (stage: IR_SPV_Gen_Stage,
 
   module.bound = cast(u32) state.next_id;
   spv_module_append_function_body(*module, *state, entry_label);
+  spv_append_debug_source_files_binary(*module, *state);
   return spv_serialize_module_binary(*module), true, diag;
 }
 
@@ -1224,6 +1238,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   append_and_steal_buffers(*sb, *entry_point_sb);
   if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
   append(*sb, "               OpSource Unknown 100000\n");
+  spv_append_debug_source_files_text(sb, state);
   append(*sb, tprint("               OpName % \"%\"\n", id_text(state.id_main), entry_name));
   for state.input_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   for state.output_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
@@ -1654,6 +1669,7 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
   _ = sb;
   module.bound = cast(u32) state.next_id;
   spv_module_append_function_body(*module, *state, entry_label);
+  spv_append_debug_source_files_binary(*module, *state);
   return spv_serialize_module_binary(*module), true, diag;
 }
 
@@ -1951,6 +1967,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   append_and_steal_buffers(*sb, *entry_point_sb);
   append(*sb, tprint("OpExecutionMode % LocalSize 1 1 1\n", id_text(state.id_main)));
   append(*sb, "OpSource Unknown 100000\n");
+  spv_append_debug_source_files_text(sb, state);
   append(*sb, tprint("OpName % \"ComputeMain\"\n", id_text(state.id_main)));
   append(*sb, tprint("OpName % \"gl_GlobalInvocationID\"\n", id_text(state.id_gl_global_invocation_id)));
   append(*sb, tprint("OpName % \"gl_LocalInvocationID\"\n", id_text(state.id_gl_local_invocation_id)));
@@ -2115,6 +2132,7 @@ emit_compute_generic_uint_buffer_binary :: (shader: *IR_Compute_Shader) -> (spv:
   _ = sb;
   module.bound = cast(u32) state.next_id;
   spv_module_append_function_body(*module, *state, entry_label);
+  spv_append_debug_source_files_binary(*module, *state);
   return spv_serialize_module_binary(*module), true, diag;
 }
 
@@ -2465,6 +2483,7 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
 
   module.bound = cast(u32) state.next_id;
   spv_module_append_function_body(*module, *state, entry_label);
+  spv_append_debug_source_files_binary(*module, *state);
   return spv_serialize_module_binary(*module), true, diag;
 }
 
@@ -2598,6 +2617,7 @@ emit_task_generic_binary :: (shader: *IR_Task_Shader) -> (spv: [] u8, ok: bool, 
 
   module.bound = cast(u32) state.next_id;
   spv_module_append_function_body(*module, *state, entry_label);
+  spv_append_debug_source_files_binary(*module, *state);
   return spv_serialize_module_binary(*module), true, diag;
 }
 

@@ -684,6 +684,11 @@ IR_SPV_Gen_Debug_Member_Name :: struct {
   name: string;
 }
 
+IR_SPV_Gen_Debug_Source_File :: struct {
+  id: s64;
+  path: string;
+}
+
 IR_SPV_Inline_Helper_Context :: struct {
   exit_label: s64;
   return_flag_ptr: s64;
@@ -743,8 +748,13 @@ IR_SPV_Gen_State :: struct {
   last_op_is_terminator: bool;
   debug_names: [..] IR_SPV_Gen_Debug_Name;
   debug_member_names: [..] IR_SPV_Gen_Debug_Member_Name;
+  debug_source_files: [..] IR_SPV_Gen_Debug_Source_File;
   stage: IR_SPV_Gen_Stage;
   debug_type_prefix: string;
+  current_debug_node: *Code_Node;
+  last_debug_file_id: s64;
+  last_debug_line: s64;
+  last_debug_column: s64;
   output_struct_type_name: string;
   input_vars: [..] IR_SPV_Gen_Interface_Var;
   output_vars: [..] IR_SPV_Gen_Interface_Var;
@@ -1232,6 +1242,7 @@ spv_module_append_function_constant_defs_binary :: (m: *SPV_Module, s: *IR_SPV_G
 
 // Emits forms like "OpStore id_1 id2"
 add_op :: (using s: *IR_SPV_Gen_State, name: string, args: ..s64, is_terminator := false) {
+  spv_emit_debug_line(s);
   if record_binary {
     opcode, opcode_ok := spv_lookup_opcode(name);
     if opcode_ok {
@@ -1256,6 +1267,7 @@ add_op :: (using s: *IR_SPV_Gen_State, name: string, args: ..s64, is_terminator 
 
 // Emits forms like "dest = OpLoad id_1"
 add_op :: (using s: *IR_SPV_Gen_State, dest: s64, name: string, args: ..s64, is_terminator := false) -> s64 {
+  spv_emit_debug_line(s);
   if record_binary {
     opcode, opcode_ok := spv_lookup_opcode(name);
     if opcode_ok {
@@ -1287,6 +1299,7 @@ add_op :: (using s: *IR_SPV_Gen_State, dest: s64, name: string, args: ..s64, is_
 }
 
 add_op :: (s: *IR_SPV_Gen_State, line: string, is_terminator := false) {
+  spv_emit_debug_line(s);
   if s.record_binary {
     assert(false, "SPIR-V binary backend: text op emission is no longer supported. Offending line: %", line);
   }
@@ -1337,6 +1350,7 @@ spv_emit_variable_decl :: (s: *IR_SPV_Gen_State, var_id: s64, ptr_type_id: s64, 
 }
 
 spv_emit_load :: (s: *IR_SPV_Gen_State, result_id: s64, type_id: s64, ptr_id: s64, alignment: u32 = 0) {
+  spv_emit_debug_line(s);
   if s.record_binary {
     words: [..]u32;
     array_add(*words, cast(u32) type_id, cast(u32) result_id, cast(u32) ptr_id);
@@ -1351,6 +1365,7 @@ spv_emit_load :: (s: *IR_SPV_Gen_State, result_id: s64, type_id: s64, ptr_id: s6
 }
 
 spv_emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, alignment: u32 = 0) {
+  spv_emit_debug_line(s);
   if s.record_binary {
     words: [..]u32;
     array_add(*words, cast(u32) ptr_id, cast(u32) value_id);
@@ -1365,6 +1380,7 @@ spv_emit_store :: (s: *IR_SPV_Gen_State, ptr_id: s64, value_id: s64, alignment: 
 }
 
 spv_emit_access_chain :: (s: *IR_SPV_Gen_State, result_id: s64, result_type_id: s64, base_id: s64, indices: []s64) {
+  spv_emit_debug_line(s);
   if s.record_binary {
     words: [..]u32;
     array_add(*words, cast(u32) result_type_id, cast(u32) result_id, cast(u32) base_id);
@@ -1545,6 +1561,45 @@ add_debug_member_name :: (s: *IR_SPV_Gen_State, type_id: s64, member_index: s64,
   array_add(*s.debug_member_names, .{type_id=type_id, member_index=member_index, name=safe_name});
 }
 
+get_or_add_debug_source_file :: (s: *IR_SPV_Gen_State, path: string) -> s64 {
+  if path.count == 0 return 0;
+  for s.debug_source_files if it.path == path return it.id;
+  id := new_id(s);
+  array_add(*s.debug_source_files, .{id = id, path = copy_string(path)});
+  return id;
+}
+
+spv_debug_location_from_node :: (s: *IR_SPV_Gen_State, node: *Code_Node) -> (file_id: s64, line: s64, column: s64, ok: bool) {
+  if !node return 0, 0, 0, false;
+  loc := make_location(node);
+  if loc.fully_pathed_filename.count == 0 return 0, 0, 0, false;
+  out_file_id := get_or_add_debug_source_file(s, loc.fully_pathed_filename);
+  if out_file_id == 0 return 0, 0, 0, false;
+  out_line := max(1, loc.line_number);
+  out_column := max(1, loc.character_number);
+  return out_file_id, out_line, out_column, true;
+}
+
+spv_emit_debug_line :: (s: *IR_SPV_Gen_State) {
+  file_id, line, column, ok := spv_debug_location_from_node(s, s.current_debug_node);
+  if !ok return;
+  if s.last_debug_file_id == file_id && s.last_debug_line == line && s.last_debug_column == column return;
+
+  if s.record_binary {
+    inst: SPV_Inst;
+    inst.opcode = SPV_OP_LINE;
+    array_add(*inst.words, cast(u32) file_id, cast(u32) line, cast(u32) column);
+    array_add(*s.op_insts, inst);
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("               OpLine % % %\n", id_text(file_id), line, column));
+  }
+
+  s.last_debug_file_id = file_id;
+  s.last_debug_line = line;
+  s.last_debug_column = column;
+}
+
 find_by_name :: (arr: *[]$T, name: string) -> *T {
   assert(arr != null);
   for * arr.* if it.name == name return it;
@@ -1632,6 +1687,56 @@ spv_extract_vector_member :: (s: *IR_SPV_Gen_State, vec_id: s64, vec_type: IR_SP
   scalar_value := new_id(s);
   spv_emit_composite_extract(s, scalar_value, s.id_float, vec_id, .[cast(u32) comp_index]);
   return scalar_value, .FLOAT, true, {};
+}
+
+spv_lvalue_swizzle_type :: (vec_type: IR_SPV_Gen_Type, access: IR_Member_Access_Kind, field_text: string) -> (IR_SPV_Gen_Type, bool, IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return .UNKNOWN, false, make_diag(msg, ..args); }
+
+  if access == .SWIZZLE_XY {
+    if vec_type != .FLOAT2 && vec_type != .FLOAT3 && vec_type != .FLOAT4 return_err("swizzle '%': expected float2/float3/float4, got %.", field_text, vec_type);
+    return .FLOAT2, true, {};
+  }
+
+  if access == .SWIZZLE_XYZ {
+    if vec_type != .FLOAT3 && vec_type != .FLOAT4 return_err("swizzle '%': expected float3/float4, got %.", field_text, vec_type);
+    return .FLOAT3, true, {};
+  }
+
+  return_err("unsupported swizzle lvalue '%'.", field_text);
+}
+
+spv_merge_swizzle_lvalue :: (s: *IR_SPV_Gen_State, base_value_id: s64, base_type: IR_SPV_Gen_Type, access: IR_Member_Access_Kind, swizzle_value_id: s64, field_text: string) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  return_err :: (msg: string, args: ..Any) #expand { `return 0, .UNKNOWN, false, make_diag(msg, ..args); }
+
+  swizzle_type, swizzle_ok, swizzle_diag := spv_lvalue_swizzle_type(base_type, access, field_text);
+  if !swizzle_ok return 0, .UNKNOWN, false, swizzle_diag;
+
+  if access == .SWIZZLE_XY {
+    if base_type == .FLOAT2 return swizzle_value_id, .FLOAT2, true, {};
+
+    out := new_id(s);
+    if base_type == .FLOAT3 {
+      spv_emit_vector_shuffle(s, out, s.id_float3, base_value_id, swizzle_value_id, .[3, 4, 2]);
+      return out, .FLOAT3, true, {};
+    }
+
+    if base_type == .FLOAT4 {
+      spv_emit_vector_shuffle(s, out, s.id_float4, base_value_id, swizzle_value_id, .[4, 5, 2, 3]);
+      return out, .FLOAT4, true, {};
+    }
+  }
+
+  if access == .SWIZZLE_XYZ {
+    if base_type == .FLOAT3 return swizzle_value_id, .FLOAT3, true, {};
+
+    if base_type == .FLOAT4 {
+      out := new_id(s);
+      spv_emit_vector_shuffle(s, out, s.id_float4, base_value_id, swizzle_value_id, .[4, 5, 6, 3]);
+      return out, .FLOAT4, true, {};
+    }
+  }
+
+  return_err("unsupported swizzle merge '%': base=% swizzle=%.", field_text, base_type, swizzle_type);
 }
 
 apply_buffer_base_index :: (s: *IR_SPV_Gen_State, buffer: *IR_SPV_Gen_Buffer, idx: s64) -> s64 {
@@ -5245,6 +5350,9 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
 
   diag: IR_Diagnostic;
   if !expr return_err("null IR expression.");
+  prev_debug_node := s.current_debug_node;
+  s.current_debug_node = expr.origin_node;
+  defer s.current_debug_node = prev_debug_node;
 
   if expr.kind == {
     case .LITERAL; {
@@ -6596,6 +6704,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
   return_err :: (msg: string, args: ..Any) #expand { `return false, false, make_diag(msg, ..args); }
   
   diag: IR_Diagnostic;
+  prev_debug_node := s.current_debug_node;
+  s.current_debug_node = stmt.origin_node;
+  defer s.current_debug_node = prev_debug_node;
   if !stmt return_err("null statement.");
   
   if stmt.kind == {
@@ -6884,6 +6995,66 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           }
           return true, false, diag;
         }
+      }
+
+      if stmt.binary_left && stmt.binary_left.kind == .MEMBER &&
+         (stmt.binary_left.member_access == .SWIZZLE_XY || stmt.binary_left.member_access == .SWIZZLE_XYZ) {
+        if !stmt.binary_left.left return_err("swizzle lvalue '%' missing base.", stmt.binary_left.text);
+
+        base_ptr, base_type, base_ok, base_diag := emit_lvalue_ptr(s, stmt.binary_left.left);
+        if !base_ok return false, false, base_diag;
+        lhs_type, lhs_ok, lhs_diag := spv_lvalue_swizzle_type(base_type, stmt.binary_left.member_access, stmt.binary_left.text);
+        if !lhs_ok return false, false, lhs_diag;
+        lhs_is_storage_buffer := lvalue_hits_storage_buffer(s, stmt.binary_left.left);
+
+        base_value := new_id(s);
+        emit_load(s, base_value, type_id_from_kind(s, base_type), base_ptr, base_type, needs_physical_align=lhs_is_storage_buffer);
+        lhs_value, extracted_type, extracted_ok, extracted_diag := spv_extract_vector_member(s, base_value, base_type, stmt.binary_left.member_access, stmt.binary_left.text);
+        if !extracted_ok return false, false, extracted_diag;
+        if extracted_type != lhs_type return_err("swizzle lvalue '%' extracted wrong type.", stmt.binary_left.text);
+
+        result_id: s64;
+        result_type := IR_SPV_Gen_Type.UNKNOWN;
+        result_ok := false;
+        result_diag: IR_Diagnostic;
+
+        if op == "=" {
+          rhs_id, rhs_type, rhs_ok, rhs_diag := emit_expr(s, stmt.binary_right);
+          if !rhs_ok return false, false, rhs_diag;
+          result_id, result_ok, result_diag = coerce_to_kind(s, rhs_id, rhs_type, lhs_type);
+          if !result_ok return false, false, result_diag;
+          result_type = lhs_type;
+        } else {
+          base_op: string = "";
+          if op == "+=" base_op = "+";
+          if op == "-=" base_op = "-";
+          if op == "*=" base_op = "*";
+          if op == "/=" base_op = "/";
+          if base_op.count == 0 return_err("unsupported swizzle compound assignment op '%'.", op);
+
+          rhs_id, rhs_type, rhs_ok, rhs_diag := emit_expr(s, stmt.binary_right);
+          if !rhs_ok return false, false, rhs_diag;
+
+          if lhs_type == .FLOAT2 {
+            rhs_vec := rhs_id;
+            if rhs_type == .FLOAT rhs_vec = splat_float2(s, rhs_id);
+            if rhs_type != .FLOAT && rhs_type != .FLOAT2 return_err("float2 swizzle compound assignment rhs must be float or float2.");
+            result_id, result_type, result_ok, result_diag = emit_float2_binary_op(s, base_op, lhs_value, rhs_vec);
+          } else {
+            assert(lhs_type == .FLOAT3);
+            rhs_vec := rhs_id;
+            if rhs_type == .FLOAT rhs_vec = splat_float3(s, rhs_id);
+            if rhs_type != .FLOAT && rhs_type != .FLOAT3 return_err("float3 swizzle compound assignment rhs must be float or float3.");
+            result_id, result_type, result_ok, result_diag = emit_float3_binary_op(s, base_op, lhs_value, rhs_vec);
+          }
+          if !result_ok return false, false, result_diag;
+          if result_type != lhs_type return_err("swizzle compound assignment produced wrong type.");
+        }
+
+        merged_value, merged_type, merged_ok, merged_diag := spv_merge_swizzle_lvalue(s, base_value, base_type, stmt.binary_left.member_access, result_id, stmt.binary_left.text);
+        if !merged_ok return false, false, merged_diag;
+        emit_store(s, base_ptr, merged_value, merged_type, needs_physical_align=lhs_is_storage_buffer);
+        return true, false, diag;
       }
 
       ptr_id, lhs_type, lhs_ok, lhs_diag := emit_lvalue_ptr(s, stmt.binary_left);

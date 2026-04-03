@@ -114,6 +114,33 @@ spv_module_append_source :: (m: *SPV_Module, source_language: u32, version: u32)
   spv_module_append_words(m, .DEBUG, SPV_OP_SOURCE, source_language, version);
 }
 
+spv_module_append_string :: (m: *SPV_Module, result_id: u32, text: string) {
+  spv_module_append_string_inst(m, .DEBUG, SPV_OP_STRING, .[result_id], text);
+}
+
+spv_module_insert_string_after_sources :: (m: *SPV_Module, result_id: u32, text: string) {
+  assert(m != null);
+  inst: SPV_Inst;
+  inst.opcode = SPV_OP_STRING;
+  array_add(*inst.words, result_id);
+  spv_append_string_words(*inst.words, text);
+
+  insert_index: s64 = 0;
+  for debug_inst, debug_index: m.debug {
+    if debug_inst.opcode == SPV_OP_SOURCE {
+      insert_index = debug_index + 1;
+      continue;
+    }
+    break;
+  }
+
+  array_insert_at(*m.debug, inst, insert_index);
+}
+
+spv_module_append_line :: (m: *SPV_Module, file_id: u32, line: u32, column: u32) {
+  spv_module_append_words(m, .FUNCTIONS, SPV_OP_LINE, file_id, line, column);
+}
+
 spv_module_append_entry_point :: (m: *SPV_Module, execution_model: u32, entry_id: u32, name: string, interface_ids: []u32) {
   assert(m != null);
   inst: SPV_Inst;
@@ -278,6 +305,17 @@ spv_ingest_text_line :: (m: *SPV_Module, ctx: *SPV_Text_Parse_Context, raw_line:
     version, version_ok := spv_parse_u32_token(operands[1]);
     if !source_ok || !version_ok return_err("Invalid OpSource line '%'.", line);
     array_add(*words, source_lang, version);
+  } else if opcode == SPV_OP_STRING {
+    if !has_result_id || operands.count != 1 return_err("OpString expects result id and 1 operand.");
+    array_add(*words, result_id);
+    spv_append_string_words(*words, operands[0]);
+  } else if opcode == SPV_OP_LINE {
+    if operands.count != 3 return_err("OpLine expects 3 operands.");
+    file_id, file_ok := spv_parse_id_token(operands[0]);
+    line_value, line_ok := spv_parse_u32_token(operands[1]);
+    column_value, column_ok := spv_parse_u32_token(operands[2]);
+    if !file_ok || !line_ok || !column_ok return_err("Invalid OpLine line '%'.", line);
+    array_add(*words, file_id, line_value, column_value);
   } else if opcode == SPV_OP_NAME {
     if operands.count != 2 return_err("OpName expects 2 operands.");
     target_id, target_ok := spv_parse_id_token(operands[0]);
@@ -546,7 +584,8 @@ spv_classify_instruction_section :: (ctx: *SPV_Text_Parse_Context, opcode: u16) 
   if opcode == SPV_OP_MEMORY_MODEL    return .MEMORY_MODEL;
   if opcode == SPV_OP_ENTRY_POINT     return .ENTRY_POINTS;
   if opcode == SPV_OP_EXECUTION_MODE  return .EXECUTION_MODES;
-  if opcode == SPV_OP_SOURCE || opcode == SPV_OP_NAME || opcode == SPV_OP_MEMBER_NAME return .DEBUG;
+  if opcode == SPV_OP_SOURCE || opcode == SPV_OP_NAME || opcode == SPV_OP_MEMBER_NAME || opcode == SPV_OP_STRING return .DEBUG;
+  if opcode == SPV_OP_LINE return .FUNCTIONS;
   if opcode == SPV_OP_DECORATE || opcode == SPV_OP_MEMBER_DECORATE return .ANNOTATIONS;
   if opcode == SPV_OP_FUNCTION || opcode == SPV_OP_LABEL || opcode == SPV_OP_FUNCTION_END ||
      opcode == SPV_OP_BRANCH || opcode == SPV_OP_BRANCH_CONDITIONAL || opcode == SPV_OP_SWITCH ||
@@ -780,6 +819,8 @@ spv_lookup_opcode :: (name: string) -> (u16, bool) {
   case "OpSource";                 return SPV_OP_SOURCE, true;
   case "OpName";                   return SPV_OP_NAME, true;
   case "OpMemberName";             return SPV_OP_MEMBER_NAME, true;
+  case "OpString";                 return SPV_OP_STRING, true;
+  case "OpLine";                   return SPV_OP_LINE, true;
   case "OpExtInstImport";          return SPV_OP_EXT_INST_IMPORT, true;
   case "OpExtInst";                return SPV_OP_EXT_INST, true;
   case "OpMemoryModel";            return SPV_OP_MEMORY_MODEL, true;
@@ -1029,6 +1070,8 @@ spv_lookup_glsl_extinst :: (name: string) -> (u32, bool) {
 SPV_OP_SOURCE                  :: 3;
 SPV_OP_NAME                    :: 5;
 SPV_OP_MEMBER_NAME             :: 6;
+SPV_OP_STRING                  :: 7;
+SPV_OP_LINE                    :: 8;
 SPV_OP_EXTENSION               :: 10;
 SPV_OP_EXT_INST_IMPORT         :: 11;
 SPV_OP_EXT_INST                :: 12;

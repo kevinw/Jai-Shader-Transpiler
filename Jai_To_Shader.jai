@@ -1460,8 +1460,9 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
   fragment_spvasm_path := tprint("%/%_frag.spvasm", build_dir, pair_ctx.name);
   vertex_spv_path := tprint("%/%_vert.spv", build_dir, pair_ctx.name);
   fragment_spv_path := tprint("%/%_frag.spv", build_dir, pair_ctx.name);
+  vertex_opt_spv_path := tprint("%/%_vert.opt.spv", build_dir, pair_ctx.name);
+  fragment_opt_spv_path := tprint("%/%_frag.opt.spv", build_dir, pair_ctx.name);
   pair_spv_path := tprint("%/%_pair.spv", build_dir, pair_ctx.name);
-  pair_opt_spv_path := tprint("%/%_pair.opt.spv", build_dir, pair_ctx.name);
   pair_spvasm_path := tprint("%/%_pair.spvasm", build_dir, pair_ctx.name);
   vertex_output_path := tprint("%/%_vert.metal", build_dir, pair_ctx.name);
   fragment_output_path := tprint("%/%_frag.metal", build_dir, pair_ctx.name);
@@ -1477,33 +1478,56 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
   if fragment_spv_binary.data free(fragment_spv_binary.data);
   jst_mirror_to_legacy_intermediate_if_needed(vertex_spv_path);
   jst_mirror_to_legacy_intermediate_if_needed(fragment_spv_path);
+
+  if !jst_optimize_spirv_binary_cached(vertex_spv_path, vertex_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-opt failed for pair vertex module.";
+    return "", false, diag;
+  }
+  if !jst_optimize_spirv_binary_cached(fragment_spv_path, fragment_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-opt failed for pair fragment module.";
+    return "", false, diag;
+  }
+  jst_mirror_to_legacy_intermediate_if_needed(vertex_opt_spv_path);
+  jst_mirror_to_legacy_intermediate_if_needed(fragment_opt_spv_path);
+
+  if !validate_spirv_binary(vertex_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-val failed for pair vertex module.";
+    return "", false, diag;
+  }
+  if !validate_spirv_binary(fragment_opt_spv_path) {
+    diag.message = "SPIR-V backend: spirv-val failed for pair fragment module.";
+    return "", false, diag;
+  }
+
   if !link_spirv_binaries(.[vertex_spv_path, fragment_spv_path], pair_spv_path) {
     diag.message = "SPIR-V backend: spirv-link failed for pair module.";
     return "", false, diag;
   }
   jst_mirror_to_legacy_intermediate_if_needed(pair_spv_path);
-  if !jst_optimize_spirv_binary_cached(pair_spv_path, pair_opt_spv_path) {
-    diag.message = "SPIR-V backend: spirv-opt failed for pair module.";
-    return "", false, diag;
-  }
-  jst_mirror_to_legacy_intermediate_if_needed(pair_opt_spv_path);
-  if !validate_spirv_binary(pair_opt_spv_path) {
-    diag.message = "SPIR-V backend: spirv-val failed for pair module.";
-    return "", false, diag;
-  }
+
   if jst_should_emit_spvasm_debug() {
-    if !jst_disassemble_spirv_binary_cached(pair_opt_spv_path, pair_spvasm_path) {
-      diag.message = "SPIR-V backend: spirv-dis failed for optimized pair module.";
+    if !jst_disassemble_spirv_binary_cached(vertex_opt_spv_path, vertex_spvasm_path) {
+      diag.message = "SPIR-V backend: spirv-dis failed for pair vertex module.";
       return "", false, diag;
     }
+    if !jst_disassemble_spirv_binary_cached(fragment_opt_spv_path, fragment_spvasm_path) {
+      diag.message = "SPIR-V backend: spirv-dis failed for pair fragment module.";
+      return "", false, diag;
+    }
+    if !jst_disassemble_spirv_binary_cached(pair_spv_path, pair_spvasm_path) {
+      diag.message = "SPIR-V backend: spirv-dis failed for pair module.";
+      return "", false, diag;
+    }
+    jst_mirror_to_legacy_intermediate_if_needed(vertex_spvasm_path);
+    jst_mirror_to_legacy_intermediate_if_needed(fragment_spvasm_path);
     jst_mirror_to_legacy_intermediate_if_needed(pair_spvasm_path);
   }
-  if !jst_emit_spirv_cross_target_source_cached(pair_opt_spv_path, metal_vertex_entry_name, .Vertex, .METAL, vertex_output_path, use_metal_argument_buffers, source_entry_name=ir_vertex.entry_name) {
+  if !jst_emit_spirv_cross_target_source_cached(vertex_opt_spv_path, metal_vertex_entry_name, .Vertex, .METAL, vertex_output_path, use_metal_argument_buffers, source_entry_name=ir_vertex.entry_name) {
     diag.message = "SPIR-V backend: pair vertex spirv-cross failed.";
     return "", false, diag;
   }
   jst_mirror_to_legacy_intermediate_if_needed(vertex_output_path);
-  if !jst_emit_spirv_cross_target_source_cached(pair_opt_spv_path, metal_fragment_entry_name, .Fragment, .METAL, fragment_output_path, use_metal_argument_buffers, source_entry_name=ir_fragment.entry_name) {
+  if !jst_emit_spirv_cross_target_source_cached(fragment_opt_spv_path, metal_fragment_entry_name, .Fragment, .METAL, fragment_output_path, use_metal_argument_buffers, source_entry_name=ir_fragment.entry_name) {
     diag.message = "SPIR-V backend: pair fragment spirv-cross failed.";
     return "", false, diag;
   }

@@ -277,6 +277,5 @@ is_number :: (T: Type) -> bool {
 is_even :: (v: float) -> bool { return (cast(s32) floor(v)) % 2 == 0; }
 is_even :: (v: float64) -> bool { return (cast(s32) floor(v)) % 2 == 0; }
 
-operator - :: (v: Vector2, scl: float) -> Vector2 {
-    return {v.x - scl, v.y - scl};
-}
+operator - :: (v: Vector2, scalar: float) -> Vector2 { return {v.x - scalar, v.y - scalar}; }
+operator + :: (v: Vector2, scalar: float) -> Vector2 { return {v.x + scalar, v.y + scalar}; }
