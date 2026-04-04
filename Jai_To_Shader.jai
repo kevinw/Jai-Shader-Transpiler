@@ -6,26 +6,15 @@
 // metal_bytes := get_transpiled(.METAL, pbr_vertex_main, pbr_fragment_main);
 // 
 
-offset_of :: ($T: Type, $member: string) -> int { // nocommit
-    for type_info(T).members {
-        if it.name == member return it.offset_in_bytes;
-    }
-
-    assert(false, "Type '%' does not have member '%'", T, member);
-    return -1;
-}
-
-VERBOSE      :: false;
-USE_SPIRV_OPT :: true;
+VERBOSE            :: false;
+USE_SPIRV_OPT      :: true;
 WRITE_SPVASM_DEBUG :: false;
-IR_INTERMEDIATE_DIR :: ".build/ir_intermediate"; // TODO: use get_build_options to determine a build-specific directory for this
-DEBUG_OUTDIR :: ".generated_shaders"; // TODO: use get_build_options to determine a build-specific directory for this
-JST_TOOL_VERSION_CACHE_DIR :: ".build/ir_tool_cache/tool_versions";
-JST_TOOL_ARTIFACT_CACHE_DIR :: ".build/ir_tool_cache/artifacts";
-JST_FINGERPRINT_FILE_CACHE_DIR :: ".build/ir_tool_cache/fingerprint_files";
-MY_MODULE_NAME :: "Jai-Shader-Transpiler";
 
-#load "jst_cache.jai";
+DEBUG_OUTDIR                   :: ".generated_shaders"; // TODO: use get_build_options to determine a build-specific directory for this
+IR_INTERMEDIATE_DIR            :: ".build/ir_intermediate"; // TODO: use get_build_options to determine a build-specific directory for this
+JST_TOOL_VERSION_CACHE_DIR     :: ".build/ir_tool_cache/tool_versions";
+JST_TOOL_ARTIFACT_CACHE_DIR    :: ".build/ir_tool_cache/artifacts";
+JST_FINGERPRINT_FILE_CACHE_DIR :: ".build/ir_tool_cache/fingerprint_files";
 
 Transpiled_Target :: enum {
   METAL;
@@ -61,6 +50,7 @@ Jai_To_Shader_Plugin :: struct {
       did_add_setup_source: bool;
     }
 }
+
 Transpiled_Lookup_Entry :: struct {
   target_name: string;
   primary_name: string;
@@ -69,12 +59,20 @@ Transpiled_Lookup_Entry :: struct {
   symbol_name: string;
 }
 
+offset_of :: ($T: Type, $member: string) -> int { // nocommit
+    for type_info(T).members {
+        if it.name == member return it.offset_in_bytes;
+    }
+
+    assert(false, "Type '%' does not have member '%'", T, member);
+    return -1;
+}
+
 get_plugin :: () -> *Jai_To_Shader_Plugin {
   using p := New(Jai_To_Shader_Plugin);
+  
   for get_build_options().compile_time_command_line {
-    if it == "-timings" {
-        // 
-    } else if it == "-output_shaders" {
+    if it == "-output_shaders" {
       output_shaders = true;
     } else if begins_with(it, "-shader_entry_ids=") {
       shader_entry_ids_filter = trim_ascii_whitespace(string.{ it.count - 18, it.data + 18});
@@ -255,12 +253,13 @@ get_transpiled_request_info_from_call :: (call: Code, loc: Source_Code_Location)
   key := tprint("pair|%|%|%", pair_note, shader_name, fragment_name);
   request_source := tprint("% :: %; @%(%)\n", request_name, shader_name, pair_note, fragment_name);
   
-  #if 0 {
+  #if 1 {
     log("-----");
     log("request_name:  %", request_name);
     log("pair_note:     %", pair_note);
     log("shader_name:   %", shader_name);
     log("fragment_name: %", fragment_name);
+    log("-----");
   }
   
   ensure_get_transpiled_request_registered(key, request_source);
@@ -323,10 +322,11 @@ get_transpiled :: (
 ) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
     #insert #run,stallable -> string {
         source_expr, meta_expr, _ := transpiled_shader_exprs_from_call(call, loc);
+        path_to_shader_module := compute_path_to_shader_bucket_module(get_current_workspace());
         return tprint(#string END
 G :: #import,file "%";
 return %, %;
-END, compute_path_to_shader_bucket_module(get_current_workspace()), source_expr, meta_expr);
+END, path_to_shader_module, source_expr, meta_expr);
     };
 }
 
@@ -2497,6 +2497,7 @@ FU :: #import "File_Utilities";
 Process :: #import "Process";
 
 #load "ir.jai";
+#load "jst_cache.jai";
 #load "build_timings.jai";
 #load "string_builder_util.jai";
 #load "write_shader_manifest.jai";
