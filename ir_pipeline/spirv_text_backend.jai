@@ -7565,9 +7565,9 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return true, true, diag;
       }
 
-      if s.stage == .COMPUTE {
+      if s.stage == .COMPUTE || s.stage == .TASK || s.stage == .MESH {
         if stmt.return_expr {
-          return_err("return with value is not supported yet for compute.");
+          return_err("return with value is not supported yet for % stage.", s.stage);
         }
         spv_emit_terminator0(s, "OpReturn");
         return true, true, diag;
