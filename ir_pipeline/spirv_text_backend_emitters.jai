@@ -7,7 +7,7 @@ WRITE_3D_TEXTURES_BINDING :: 1;
 
 spv_append_debug_source_files_text :: (sb: *String_Builder, state: *IR_SPV_Gen_State) {
   for state.debug_source_files {
-    append(*sb, tprint("               % = OpString \"%\"\n", id_text(it.id), it.path));
+    append(sb, tprint("               % = OpString \"%\"\n", id_text(it.id), it.path));
   }
 }
 
@@ -522,7 +522,7 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   append_and_steal_buffers(*sb, *entry_point_sb);
   if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
   append(*sb, "               OpSource Unknown 100000\n");
-  spv_append_debug_source_files_text(sb, state);
+  spv_append_debug_source_files_text(*sb, *state);
   append(*sb, tprint("               OpName % \"%\"\n", id_text(state.id_main), entry_name));
   append(*sb, tprint("               OpName % \"%\"\n", id_text(root_var_id), root_arg.name));
   for state.input_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
@@ -1238,7 +1238,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   append_and_steal_buffers(*sb, *entry_point_sb);
   if stage == .FRAGMENT append(*sb, tprint("               OpExecutionMode % OriginUpperLeft\n", id_text(state.id_main)));
   append(*sb, "               OpSource Unknown 100000\n");
-  spv_append_debug_source_files_text(sb, state);
+  spv_append_debug_source_files_text(*sb, *state);
   append(*sb, tprint("               OpName % \"%\"\n", id_text(state.id_main), entry_name));
   for state.input_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
   for state.output_vars append(*sb, tprint("               OpName % \"%\"\n", id_text(it.var_id), it.name));
@@ -1967,7 +1967,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   append_and_steal_buffers(*sb, *entry_point_sb);
   append(*sb, tprint("OpExecutionMode % LocalSize 1 1 1\n", id_text(state.id_main)));
   append(*sb, "OpSource Unknown 100000\n");
-  spv_append_debug_source_files_text(sb, state);
+  spv_append_debug_source_files_text(*sb, *state);
   append(*sb, tprint("OpName % \"ComputeMain\"\n", id_text(state.id_main)));
   append(*sb, tprint("OpName % \"gl_GlobalInvocationID\"\n", id_text(state.id_gl_global_invocation_id)));
   append(*sb, tprint("OpName % \"gl_LocalInvocationID\"\n", id_text(state.id_gl_local_invocation_id)));

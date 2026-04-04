@@ -118,6 +118,13 @@ canonical_transpiled_target_expr_string :: (expr: string) -> (string, bool) {
   return "", false;
 }
 
+entry_id_target_name_from_canonical_target_expr :: (expr: string) -> string #compile_time {
+  canonical, ok := canonical_transpiled_target_expr_string(expr);
+  if !ok || canonical.count == 0 return "";
+  if canonical[0] != #char "." return canonical;
+  return .{ canonical.count - 1, canonical.data + 1 };
+}
+
 resolve_transpiled_target_expr_string :: (node: *Code_Node, depth: s64 = 0) -> (string, bool) #compile_time {
   if !node return "", false;
   if depth > 4 {
@@ -174,6 +181,7 @@ ensure_get_transpiled_request_registered :: (key: string, source: string) #compi
 
 Transpiled_Request_Info :: struct {
   request_name: string;
+  entry_id: string;
   source_symbol_name: string;
   function_constants_type_name: string;
   function_constant_info_name: string;
@@ -237,6 +245,7 @@ get_transpiled_request_info_from_call :: (call: Code, loc: Source_Code_Location)
     ensure_get_transpiled_request_registered(key, request_source);
     return .{
       request_name = request_name,
+      entry_id = "",
       source_symbol_name = tprint("G.lookup_transpiled(\"%\", \"%\", \"\")", canonical_target_expr, shader_name),
       function_constants_type_name = function_constants_type_name_for_request(request_name),
       function_constant_info_name = function_constant_info_name_for_request(request_name),
@@ -250,11 +259,12 @@ get_transpiled_request_info_from_call :: (call: Code, loc: Source_Code_Location)
 
   request_name := tprint("transpiled_pair_%_%_%", target_ident, shader_name, fragment_name);
   to_lower_in_place(request_name);
+  entry_id := tprint("pair|%|%|%", entry_id_target_name_from_canonical_target_expr(canonical_target_expr), shader_name, fragment_name);
   key := tprint("pair|%|%|%", pair_note, shader_name, fragment_name);
   request_source := tprint("% :: %; @%(%)\n", request_name, shader_name, pair_note, fragment_name);
   
-  #if 1 {
-    log("-----");
+  #if 0 {
+    log("----- (original api)");
     log("request_name:  %", request_name);
     log("pair_note:     %", pair_note);
     log("shader_name:   %", shader_name);
@@ -266,6 +276,7 @@ get_transpiled_request_info_from_call :: (call: Code, loc: Source_Code_Location)
 
   return .{
     request_name = request_name,
+    entry_id = entry_id,
     source_symbol_name = tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, shader_name, fragment_name),
     function_constants_type_name = function_constants_type_name_for_request(request_name),
     function_constant_info_name = function_constant_info_name_for_request(request_name),
@@ -275,6 +286,7 @@ get_transpiled_request_info_from_call :: (call: Code, loc: Source_Code_Location)
 
 Shader_Meta :: struct {
     request_name: string;
+    entry_id: string;
     function_constants_type_name: string;
 }
 
@@ -309,9 +321,254 @@ transpiled_shader_exprs_from_call :: (call: Code, loc: Source_Code_Location) -> 
     if info.request_name.count == 0 return "", "", "";
 
     source_expr := info.source_symbol_name;
-    meta_expr := tprint("Shader_Meta.{request_name = \"%\", function_constants_type_name = \"%\"}", info.request_name, info.function_constants_type_name);
+    meta_expr := tprint("Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", info.request_name, info.entry_id, info.function_constants_type_name);
     constants_expr := tprint("%.{}", info.function_constants_type_name);
     return source_expr, meta_expr, constants_expr;
+}
+
+Code_Procedure_Discovery :: struct {
+    decl_name: string;
+    proc_header: *Code_Procedure_Header;
+    ident_name: string;
+}
+
+discover_procedure_info :: (code: Code, required_note: string, loc: Source_Code_Location = #caller_location) -> Code_Procedure_Discovery {
+    return_fail :: (msg: string) #expand {
+        compiler_report(tprint("Jai Shader Transpiler: %", msg), loc=loc);
+        `return .{};
+    }
+
+    code_node := compiler_get_nodes(code);
+    if code_node.kind != .IDENT {
+        return_fail(tprint("Expected a procedure identifier, got %.", code_node.kind));
+    }
+    
+    code_ident := cast(*Code_Ident)code_node;
+    resolved_decl := code_ident.resolved_declaration;
+    if resolved_decl == null {
+        return_fail("Expected a resolved declaration for function passed to get_transpiled2, but got null.");
+    }
+    if (resolved_decl.flags & .IS_CONSTANT) == 0 {
+        return_fail("Expected a constant declaration for get_transpiled2 procedure argument.");
+    }
+    
+    if resolved_decl.kind != .DECLARATION {
+        return_fail(tprint("Expected ident passed to get_transpiled2 to resolve to a .DECLARATION, got %.", resolved_decl.kind));
+    }
+    code_declaration := cast(*Code_Declaration)resolved_decl;
+    if (code_declaration.flags & .IS_CONSTANT) == 0 {
+        return_fail("Expected a constant declaration for get_transpiled2 procedure argument.");
+    }
+    
+    if code_declaration.expression == null {
+        return_fail(tprint("Procedure declaration '%' had null expression.", code_declaration.name));
+    }
+    if code_declaration.expression.kind != .PROCEDURE_HEADER {
+        return_fail(tprint("Expected a .PROCEDURE_HEADER expression for '%', got %.", code_declaration.name, code_declaration.expression.kind));
+    }
+    proc_header := cast(*Code_Procedure_Header)code_declaration.expression;
+
+    found_required_note := false;
+    for proc_header.notes if it.text == required_note {
+        found_required_note = true;
+    }
+    
+    if !found_required_note {
+        return_fail(tprint("Expected note '%' on procedure '%'.", required_note, code_declaration.name));
+    }
+
+    return .{
+        decl_name = code_declaration.name,
+        proc_header = proc_header,
+        ident_name = code_ident.name,
+    };
+}
+
+get_transpiled2_expand_pair :: (
+    vert_name: string,
+    frag_name: string,
+    canonical_target_expr: string,
+    target_ident: string,
+    pair_note: string,
+    supports_pair: bool,
+    loc: Source_Code_Location = #caller_location,
+) -> string #compile_time {
+    if canonical_target_expr.count == 0 {
+        compiler_report("Jai Shader Transpiler: get_transpiled2 target must resolve to .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.", loc=loc);
+        return "return \"\", .{};";
+    }
+
+    if !supports_pair {
+        compiler_report("Jai Shader Transpiler: get_transpiled2 currently only supports paired graphics shaders for this target.", loc=loc);
+        return "return \"\", .{};";
+    }
+
+    if vert_name.count == 0 || frag_name.count == 0 {
+        return "return \"\", .{};";
+    }
+
+    request_name := tprint("transpiled_pair_%_%_%", target_ident, vert_name, frag_name);
+    to_lower_in_place(request_name);
+    key := tprint("pair|%|%|%", pair_note, vert_name, frag_name);
+    request_source := tprint("% :: %; @%(%)\n", request_name, vert_name, pair_note, frag_name);
+    ensure_get_transpiled_request_registered(key, request_source);
+
+    source_expr := tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, vert_name, frag_name);
+    entry_id := tprint("pair|%|%|%", entry_id_target_name_from_canonical_target_expr(canonical_target_expr), vert_name, frag_name);
+    meta_expr := tprint("Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, entry_id, function_constants_type_name_for_request(request_name));
+    path_to_shader_module := compute_path_to_shader_bucket_module(get_current_workspace());
+    return tprint(#string END
+G :: #import,file "%";
+return %, %;
+END, path_to_shader_module, source_expr, meta_expr);
+}
+
+get_transpiled2_exprs_from_call :: (call: Code, loc: Source_Code_Location) -> (string, string) #compile_time {
+    return_fail :: (msg: string) #expand {
+        compiler_report(tprint("Jai Shader Transpiler: %", msg), loc=loc);
+        `return "", "";
+    }
+
+    root := compiler_get_nodes(call);
+    if root.kind != .PROCEDURE_CALL {
+        return_fail("get_transpiled2 must be called directly.");
+    }
+
+    pc := cast(*Code_Procedure_Call) root;
+    if pc.arguments_unsorted.count != 2 && pc.arguments_unsorted.count != 3 {
+        return_fail("get_transpiled2 expects (vert, frag) or (vert, frag, target).");
+    }
+
+    vert_name := shader_name_from_call_arg(pc.arguments_unsorted[0].expression);
+    frag_name := shader_name_from_call_arg(pc.arguments_unsorted[1].expression);
+    if !vert_name || !frag_name {
+        return_fail("get_transpiled2 shader arguments must be procedure identifiers.");
+    }
+
+    packed_names := tprint("%|%", vert_name, frag_name);
+
+    if pc.arguments_unsorted.count == 2 {
+        #if OS == .MACOS return packed_names, ".METAL";
+        else             return packed_names, ".VULKAN_GLSL";
+    }
+
+    target_expr := trim_ascii_whitespace(expression_to_source_string(pc.arguments_unsorted[2].expression));
+    resolved_target_expr, resolved_target_ok := resolve_transpiled_target_expr_string(pc.arguments_unsorted[2].expression);
+    target_parse_expr := ifx resolved_target_ok then resolved_target_expr else target_expr;
+    canonical_target_expr, canonical_target_ok := canonical_transpiled_target_expr_string(target_parse_expr);
+    if !canonical_target_ok {
+        return_fail("get_transpiled2 target must resolve to .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.");
+    }
+    return packed_names, canonical_target_expr;
+}
+
+split_packed_shader_names :: (packed_names: string) -> (string, string, bool) #compile_time {
+    sep_index: s64 = -1;
+    for packed_names {
+        if it == #char "|" {
+            sep_index = it_index;
+            break;
+        }
+    }
+    if sep_index < 0 return "", "", false;
+    left := string.{sep_index, packed_names.data};
+    right := string.{packed_names.count - sep_index - 1, packed_names.data + sep_index + 1};
+    return left, right, true;
+}
+
+get_transpiled2_named_exprs :: (vert_name: string, frag_name: string, loc: Source_Code_Location = #caller_location) -> (source_expr: string, meta_expr: string, ok: bool) #compile_time {
+    if vert_name.count == 0 || frag_name.count == 0 return "", "", false;
+
+    #if OS == .MACOS {
+        canonical_target_expr := ".METAL";
+        request_name := tprint("transpiled_pair_metal_%_%", vert_name, frag_name);
+        to_lower_in_place(request_name);
+        ensure_get_transpiled_request_registered(
+            tprint("pair|%|%|%", "shader_pair_to_metal", vert_name, frag_name),
+            tprint("% :: %; @%(%)\n", request_name, vert_name, "shader_pair_to_metal", frag_name),
+        );
+        source_expr := tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, vert_name, frag_name);
+        meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("pair|%|%|%", entry_id_target_name_from_canonical_target_expr(canonical_target_expr), vert_name, frag_name), function_constants_type_name_for_request(request_name));
+        return source_expr, meta_expr, true;
+    }
+    else {
+        canonical_target_expr := ".VULKAN_GLSL";
+        request_name := tprint("transpiled_pair_vulkan_glsl_%_%", vert_name, frag_name);
+        to_lower_in_place(request_name);
+        ensure_get_transpiled_request_registered(
+            tprint("pair|%|%|%", "shader_pair_to_vulkan", vert_name, frag_name),
+            tprint("% :: %; @%(%)\n", request_name, vert_name, "shader_pair_to_vulkan", frag_name),
+        );
+        source_expr := tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, vert_name, frag_name);
+        meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("pair|%|%|%", entry_id_target_name_from_canonical_target_expr(canonical_target_expr), vert_name, frag_name), function_constants_type_name_for_request(request_name));
+        return source_expr, meta_expr, true;
+    }
+}
+
+get_transpiled_compute_named_exprs :: (compute_name: string, loc: Source_Code_Location = #caller_location) -> (source_expr: string, meta_expr: string, ok: bool) #compile_time {
+    if compute_name.count == 0 return "", "", false;
+
+    #if OS == .MACOS {
+        canonical_target_expr := ".METAL";
+        request_name := tprint("transpiled_single_metal_%", compute_name);
+        to_lower_in_place(request_name);
+        ensure_get_transpiled_request_registered(
+            tprint("single|%|%", "shader_to_metal", compute_name),
+            tprint("% :: %; @%\n", request_name, compute_name, "shader_to_metal"),
+        );
+        source_expr := tprint("G.lookup_transpiled(\"%\", \"%\", \"\")", canonical_target_expr, compute_name);
+        meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("single|%|%|%", entry_id_target_name_from_canonical_target_expr(canonical_target_expr), "compute", compute_name), function_constants_type_name_for_request(request_name));
+        return source_expr, meta_expr, true;
+    }
+    else {
+        canonical_target_expr := ".VULKAN_GLSL";
+        request_name := tprint("transpiled_single_vulkan_glsl_%", compute_name);
+        to_lower_in_place(request_name);
+        ensure_get_transpiled_request_registered(
+            tprint("single|%|%", "shader_to_vulkan", compute_name),
+            tprint("% :: %; @%\n", request_name, compute_name, "shader_to_vulkan"),
+        );
+        source_expr := tprint("G.lookup_transpiled(\"%\", \"%\", \"\")", canonical_target_expr, compute_name);
+        meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("single|%|%|%", entry_id_target_name_from_canonical_target_expr(canonical_target_expr), "compute", compute_name), function_constants_type_name_for_request(request_name));
+        return source_expr, meta_expr, true;
+    }
+}
+
+get_transpiled2 :: (vert: $V, frag: $F, target: Transpiled_Target, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
+    #insert #run,stallable -> string {
+        packed_names, canonical_target_expr := get_transpiled2_exprs_from_call(call, loc);
+        if packed_names.count == 0 || canonical_target_expr.count == 0 return "return \"\", .{};";
+        vert_name, frag_name, split_ok := split_packed_shader_names(packed_names);
+        assert(split_ok, "get_transpiled2 internal name packing failed.");
+
+        if canonical_target_expr == {
+        case ".METAL";       return get_transpiled2_expand_pair(vert_name, frag_name, canonical_target_expr, "metal", "shader_pair_to_metal", true, loc);
+        case ".HLSL";        return get_transpiled2_expand_pair(vert_name, frag_name, canonical_target_expr, "hlsl", "", false, loc);
+        case ".OPENGL_GLSL"; return get_transpiled2_expand_pair(vert_name, frag_name, canonical_target_expr, "opengl_glsl", "shader_pair_to_glsl", true, loc);
+        case ".VULKAN_GLSL"; return get_transpiled2_expand_pair(vert_name, frag_name, canonical_target_expr, "vulkan_glsl", "shader_pair_to_vulkan", true, loc);
+        }
+        compiler_report("Jai Shader Transpiler: get_transpiled2 target must resolve to .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.", loc=loc);
+        return "return \"\", .{};";
+    };
+}
+
+// target is implied by the OS
+get_transpiled2 :: (vert: $V, frag: $F, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
+    #insert #run,stallable -> string {
+        packed_names, canonical_target_expr := get_transpiled2_exprs_from_call(call, loc);
+        if packed_names.count == 0 || canonical_target_expr.count == 0 return "return \"\", .{};";
+        vert_name, frag_name, split_ok := split_packed_shader_names(packed_names);
+        assert(split_ok, "get_transpiled2 internal name packing failed.");
+
+        if canonical_target_expr == {
+        case ".METAL";       return get_transpiled2_expand_pair(vert_name, frag_name, canonical_target_expr, "metal", "shader_pair_to_metal", true, loc);
+        case ".HLSL";        return get_transpiled2_expand_pair(vert_name, frag_name, canonical_target_expr, "hlsl", "", false, loc);
+        case ".OPENGL_GLSL"; return get_transpiled2_expand_pair(vert_name, frag_name, canonical_target_expr, "opengl_glsl", "shader_pair_to_glsl", true, loc);
+        case ".VULKAN_GLSL"; return get_transpiled2_expand_pair(vert_name, frag_name, canonical_target_expr, "vulkan_glsl", "shader_pair_to_vulkan", true, loc);
+        }
+        compiler_report("Jai Shader Transpiler: get_transpiled2 target must resolve to .METAL, .HLSL, .OPENGL_GLSL, or .VULKAN_GLSL.", loc=loc);
+        return "return \"\", .{};";
+    };
 }
 
 get_transpiled :: (
