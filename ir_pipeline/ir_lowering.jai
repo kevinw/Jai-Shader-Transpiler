@@ -458,8 +458,45 @@ ir_decl_has_note :: (decl: *Code_Declaration, note_name: string) -> bool {
   return false;
 }
 
-ir_decl_is_function_constant :: (decl: *Code_Declaration) -> bool {
-  return ir_decl_has_note(decl, "function_constant");
+ir_code_struct_has_note :: (st: *Code_Struct, note_name: string) -> bool {
+  if !st || note_name.count == 0 return false;
+  for st.notes if it.text == note_name return true;
+  return false;
+}
+
+ir_resolve_struct_node_from_type_expr :: (node: *Code_Node, depth: s64 = 0) -> *Code_Struct {
+  if !node || depth > 8 return null;
+  if node.kind == .STRUCT return cast(*Code_Struct) node;
+  if node.kind == .DECLARATION {
+    decl := cast(*Code_Declaration) node;
+    if decl.expression return ir_resolve_struct_node_from_type_expr(decl.expression, depth + 1);
+    return null;
+  }
+  if node.kind == .IDENT {
+    ident := cast(*Code_Ident) node;
+    if ident.resolved_declaration return ir_resolve_struct_node_from_type_expr(cast(*Code_Node) ident.resolved_declaration, depth + 1);
+    return null;
+  }
+  if node.kind == .TYPE_INSTANTIATION {
+    inst := cast(*Code_Type_Instantiation) node;
+    if inst.type_valued_expression return ir_resolve_struct_node_from_type_expr(inst.type_valued_expression, depth + 1);
+    return null;
+  }
+  return null;
+}
+
+ir_function_constants_struct_from_arg :: (arg: *Code_Declaration) -> (*Type_Info_Struct, *Code_Struct, bool) {
+  if !arg || !arg.type_inst || !arg.type_inst.result || arg.type_inst.result.type != .STRUCT return null, null, false;
+  struct_node := ir_resolve_struct_node_from_type_expr(arg.type_inst.type_valued_expression);
+  type_decl: *Code_Declaration;
+  if arg.type_inst.type_valued_expression && arg.type_inst.type_valued_expression.kind == .IDENT {
+    ident := cast(*Code_Ident) arg.type_inst.type_valued_expression;
+    type_decl = ident.resolved_declaration;
+  }
+  has_note := ir_code_struct_has_note(struct_node, "function_constants");
+  if !has_note && type_decl has_note = ir_decl_has_note(type_decl, "function_constants");
+  if !struct_node || !has_note return null, null, false;
+  return cast(*Type_Info_Struct) arg.type_inst.result, struct_node, true;
 }
 
 ir_function_constant_type_from_type_info :: (type: *Type_Info) -> (IR_Function_Constant_Type, bool) {
@@ -505,28 +542,50 @@ ir_function_constant_type_from_type_info :: (type: *Type_Info) -> (IR_Function_C
   return .BOOL, false;
 }
 
-ir_validate_function_constant_declaration :: (decl: *Code_Declaration, state: *IR_Lowering_State) -> (IR_Function_Constant, bool) {
+ir_validate_function_constant_value :: (name: string,
+                                        type: *Type_Info,
+                                        expression: *Code_Node,
+                                        source_node: *Code_Node,
+                                        state: *IR_Lowering_State,
+                                        source_struct_name: string = "",
+                                        source_arg_name: string = "") -> (IR_Function_Constant, bool) {
   out: IR_Function_Constant;
-  if !decl return out, false;
-  if !ir_decl_is_function_constant(decl) return out, false;
+  if !source_node return out, false;
 
-  if !decl.expression {
-    ir_set_diagnostic(state, "IR lowering: @function_constant requires an initializer.", decl);
+  if !expression {
+    if source_struct_name.count != 0 {
+      ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' requires an initializer.", source_struct_name, name), source_node);
+    } else {
+      ir_set_diagnostic(state, "IR lowering: @function_constant requires an initializer.", source_node);
+    }
     return out, false;
   }
 
-  type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
   function_constant_type, type_ok := ir_function_constant_type_from_type_info(type);
   if !type_ok {
-    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has unsupported type. Supported types are bool, integer scalar widths, enums backed by integer scalars, float, Vector2, Vector3, and Vector4.", decl.name), decl);
+    if source_struct_name.count != 0 {
+      ir_set_diagnostic(state,
+                        tprint("IR lowering: @function_constants field '%.%' has unsupported type. Supported types are bool, integer scalar widths, enums backed by integer scalars, float, Vector2, Vector3, and Vector4.",
+                               source_struct_name,
+                               name),
+                        source_node);
+    } else {
+      ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has unsupported type. Supported types are bool, integer scalar widths, enums backed by integer scalars, float, Vector2, Vector3, and Vector4.", name), source_node);
+    }
     return out, false;
   }
 
   lowering_ctx := IR_Lowering_Context.{state = state};
-  lowered_default, lowered_default_ok := ir_lower_expr(decl.expression, lowering_ctx);
+  lowered_default, lowered_default_ok := ir_lower_expr(expression, lowering_ctx);
   if !lowered_default_ok {
     if state.first_error.message.count == 0 {
-      ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time constant default value.", decl.name), decl.expression);
+      if source_struct_name.count != 0 {
+        ir_set_diagnostic(state,
+                          tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time constant default value.", source_struct_name, name),
+                          expression);
+      } else {
+        ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time constant default value.", name), expression);
+      }
     }
     return out, false;
   }
@@ -541,12 +600,20 @@ ir_validate_function_constant_declaration :: (decl: *Code_Declaration, state: *I
       case .FLOAT4; vector_constant_ok = true;
       }
       if !vector_constant_ok {
-        ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time scalar literal default value.", decl.name), decl.expression);
+        if source_struct_name.count != 0 {
+          ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time scalar literal default value.", source_struct_name, name), expression);
+        } else {
+          ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time scalar literal default value.", name), expression);
+        }
         return out, false;
       }
     }
   case;
-    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time constant literal or vector constructor default value.", decl.name), decl.expression);
+    if source_struct_name.count != 0 {
+      ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time constant literal or vector constructor default value.", source_struct_name, name), expression);
+    } else {
+      ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time constant literal or vector constructor default value.", name), expression);
+    }
     return out, false;
   }
 
@@ -554,22 +621,73 @@ ir_validate_function_constant_declaration :: (decl: *Code_Declaration, state: *I
   if lowered_default.kind == .CONSTRUCTOR {
     expression_builder: String_Builder;
     expression_builder.allocator = temp;
-    Program_Print.print_expression(*expression_builder, decl.expression);
+    Program_Print.print_expression(*expression_builder, expression);
     default_value_text = compact_text(builder_to_string(*expression_builder,, temp));
   }
   if default_value_text.count == 0 {
-    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has an unsupported literal default value.", decl.name), decl.expression);
+    if source_struct_name.count != 0 {
+      ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' has an unsupported literal default value.", source_struct_name, name), expression);
+    } else {
+      ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has an unsupported literal default value.", name), expression);
+    }
     return out, false;
   }
 
   out = .{
-    name = decl.name,
+    name = name,
     type = function_constant_type,
     default_value_text = default_value_text,
-    declaration = decl,
-    location = make_location(decl),
+    source_struct_name = source_struct_name,
+    source_arg_name = source_arg_name,
+    location = make_location(source_node),
   };
   return out, true;
+}
+
+ir_lookup_struct_field_declaration :: (st: *Code_Struct, field_name: string) -> *Code_Declaration {
+  if !st || !st.block || field_name.count == 0 return null;
+  for st.block.members {
+    if it.kind != .DECLARATION continue;
+    decl := cast(*Code_Declaration) it;
+    if decl.name == field_name return decl;
+  }
+  return null;
+}
+
+ir_collect_function_constants_from_struct_arg :: (arg: *Code_Declaration,
+                                                  st: *Type_Info_Struct,
+                                                  struct_node: *Code_Struct,
+                                                  out_constants: *[..] IR_Function_Constant,
+                                                  state: *IR_Lowering_State) -> bool {
+  if !arg || !st || !struct_node return false;
+
+  struct_name := get_struct_type_name(st);
+  if struct_name.count == 0 {
+    ir_set_diagnostic(state, "IR lowering: @function_constants struct arguments must use a named struct type.", arg);
+    return false;
+  }
+
+  for *st.members {
+    field_decl := ir_lookup_struct_field_declaration(struct_node, it.name);
+    if !field_decl {
+      ir_set_diagnostic(state,
+                        tprint("IR lowering: @function_constants field '%.%' is missing a source declaration.", struct_name, it.name),
+                        cast(*Code_Node) struct_node);
+      return false;
+    }
+
+    lowered, ok := ir_validate_function_constant_value(it.name,
+                                                       it.type,
+                                                       field_decl.expression,
+                                                       cast(*Code_Node) field_decl,
+                                                       state,
+                                                       struct_name,
+                                                       arg.name);
+    if !ok return false;
+    array_add(out_constants, lowered);
+  }
+
+  return true;
 }
 
 ir_struct_has_pointer_members :: (type: *Type_Info) -> bool {
@@ -963,7 +1081,7 @@ ir_lower_expr :: (node: *Code_Node,
           return out, true;
         }
 
-        if ir_decl_is_compile_constant(ident.resolved_declaration) && !ir_decl_is_function_constant(ident.resolved_declaration) {
+        if ir_decl_is_compile_constant(ident.resolved_declaration) {
           inlined, inlined_ok := ir_lower_expr(ident.resolved_declaration.expression, ctx, active_usings, active_aliases, expected_type);
           if inlined_ok return inlined, true;
         }
@@ -2000,144 +2118,6 @@ ir_collect_compute_declared_structs_in_block :: (block: *Code_Block, out_extra_s
   return true;
 }
 
-ir_function_constant_already_collected :: (constants: [] IR_Function_Constant, decl: *Code_Declaration) -> bool {
-  if !decl return false;
-  for constants if it.declaration == decl return true;
-  return false;
-}
-
-ir_try_collect_function_constant_decl :: (decl: *Code_Declaration, out_constants: *[..] IR_Function_Constant, state: *IR_Lowering_State) -> bool {
-  if !decl || !ir_decl_is_function_constant(decl) return true;
-  if ir_function_constant_already_collected(out_constants.*, decl) return true;
-  lowered, ok := ir_validate_function_constant_declaration(decl, state);
-  if !ok return false;
-  array_add(out_constants, lowered);
-  return true;
-}
-
-ir_collect_function_constants_in_node :: (node: *Code_Node, out_constants: *[..] IR_Function_Constant, state: *IR_Lowering_State) -> bool {
-  if !node return true;
-
-  if node.kind == {
-    case .IDENT; {
-      ident := cast(*Code_Ident) node;
-      if ident.resolved_declaration return ir_try_collect_function_constant_decl(ident.resolved_declaration, out_constants, state);
-      return true;
-    }
-    case .DECLARATION; {
-      decl := cast(*Code_Declaration) node;
-      if !ir_try_collect_function_constant_decl(decl, out_constants, state) return false;
-      if decl.expression return ir_collect_function_constants_in_node(decl.expression, out_constants, state);
-      return true;
-    }
-    case .PROCEDURE_CALL; {
-      pc := cast(*Code_Procedure_Call) node;
-      if !ir_collect_function_constants_in_node(pc.procedure_expression, out_constants, state) return false;
-      if !ir_collect_function_constants_in_node(pc.resolved_procedure_expression, out_constants, state) return false;
-      for pc.arguments_sorted if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      for pc.arguments_unsorted if it.expression && !ir_collect_function_constants_in_node(it.expression, out_constants, state) return false;
-      return true;
-    }
-    case .BINARY_OPERATOR; {
-      bn := cast(*Code_Binary_Operator) node;
-      if !ir_collect_function_constants_in_node(bn.left, out_constants, state) return false;
-      if !ir_collect_function_constants_in_node(bn.right, out_constants, state) return false;
-      return true;
-    }
-    case .UNARY_OPERATOR; {
-      un := cast(*Code_Unary_Operator) node;
-      return ir_collect_function_constants_in_node(un.subexpression, out_constants, state);
-    }
-    case .IF; {
-      op := cast(*Code_If) node;
-      if !ir_collect_function_constants_in_node(op.condition, out_constants, state) return false;
-      if op.then_block for op.then_block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      if op.else_block for op.else_block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      return true;
-    }
-    case .CASE; {
-      op := cast(*Code_Case) node;
-      if !ir_collect_function_constants_in_node(op.condition, out_constants, state) return false;
-      if op.then_block for op.then_block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      return true;
-    }
-    case .FOR; {
-      op := cast(*Code_For) node;
-      if !ir_collect_function_constants_in_node(op.iteration_expression, out_constants, state) return false;
-      if !ir_collect_function_constants_in_node(op.iteration_expression_right, out_constants, state) return false;
-      if op.block for op.block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      return true;
-    }
-    case .WHILE; {
-      op := cast(*Code_While) node;
-      if !ir_collect_function_constants_in_node(op.condition, out_constants, state) return false;
-      if op.block for op.block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      return true;
-    }
-    case .RETURN; {
-      op := cast(*Code_Return) node;
-      for op.arguments_sorted if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      return true;
-    }
-    case .BLOCK; {
-      block := cast(*Code_Block) node;
-      for block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      return true;
-    }
-    case .COMPOUND_DECLARATION; {
-      op := cast(*Code_Compound_Declaration) node;
-      if op.comma_separated_assignment {
-        for op.comma_separated_assignment.arguments {
-          if it.node && !ir_collect_function_constants_in_node(it.node, out_constants, state) return false;
-        }
-      }
-      return true;
-    }
-    case .COMMA_SEPARATED_ARGUMENTS; {
-      op := cast(*Code_Comma_Separated_Arguments) node;
-      for op.arguments if it.node && !ir_collect_function_constants_in_node(it.node, out_constants, state) return false;
-      return true;
-    }
-    case .LITERAL; {
-      lit := cast(*Code_Literal) node;
-      if lit.value_type == .STRUCT {
-        for lit.struct_literal_info.arguments if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      } else if lit.value_type == .ARRAY {
-        for lit.array_literal_info.array_members if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-      }
-      return true;
-    }
-    case .EXTRACT; {
-      op := cast(*Code_Extract) node;
-      if op.from return ir_collect_function_constants_in_node(op.from, out_constants, state);
-      return true;
-    }
-  }
-
-  return true;
-}
-
-ir_collect_function_constants_recursive :: (header: *Code_Procedure_Header,
-                                           seen_headers: *[..] *Code_Procedure_Header,
-                                           out_constants: *[..] IR_Function_Constant,
-                                           main_header: *Code_Procedure_Header,
-                                           state: *IR_Lowering_State) -> bool {
-  if !header || !header.body_or_null || !header.body_or_null.block return false;
-  if ir_shared_header_in_list(seen_headers, header) return true;
-  array_add(seen_headers, header);
-
-  for header.body_or_null.block.statements if !ir_collect_function_constants_in_node(it, out_constants, state) return false;
-
-  called: [..] *Code_Procedure_Header;
-  for header.body_or_null.block.statements ir_shared_collect_calls_in_node(it, *called);
-  for called {
-    if it == main_header continue;
-    if !ir_collect_function_constants_recursive(it, seen_headers, out_constants, main_header, state) return false;
-  }
-
-  return true;
-}
-
 ir_sort_function_constants_deterministic :: (constants: *[..] IR_Function_Constant) {
   if constants.count <= 1 return;
   string_less :: (a: string, b: string) -> bool {
@@ -2175,12 +2155,25 @@ ir_lower_extra_args_readonly :: (
     header: *Code_Procedure_Header,
     out_args: *[..] IR_Function_Arg,
     extra_structs: *[..] IR_Struct,
+    out_function_constants: *[..] IR_Function_Constant,
     state: *IR_Lowering_State,
     start_arg_index: s64 = 1,
 ) -> (ok: bool, error_msg: string) {
+    function_constants_arg_name: string;
     for i: start_arg_index..header.arguments.count-1 {
         arg := header.arguments[i];
         arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
+        function_constants_struct, function_constants_struct_node, function_constants_ok := ir_function_constants_struct_from_arg(arg);
+        if function_constants_ok {
+            if function_constants_arg_name.count != 0 {
+                return false, "only one @function_constants struct argument is supported per shader entry";
+            }
+            function_constants_arg_name = arg.name;
+            if !ir_collect_function_constants_from_struct_arg(arg, function_constants_struct, function_constants_struct_node, out_function_constants, state) {
+                return false, "";
+            }
+            continue;
+        }
         arg_ok := ir_collect_nested_structs_for_shader_arg_type(arg_type, extra_structs);
         if !arg_ok return false, tprint("unsupported extra argument '%'", arg.name);
         arg_ir_type, arg_ir_type_ok := ir_type_from_type_info(arg_type);
@@ -2276,7 +2269,7 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
   out.input = in_struct;
   out.output = out_struct;
   {
-    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state, 1);
+    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *out.function_constants, *state, 1);
     if !args_ok {
       if args_err.count != 0 return_err("%", args_err);
       return { {}, false, ir_get_diagnostic(*state) };
@@ -2310,10 +2303,6 @@ ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Res
   lowering_ctx.output_struct = *out.output;
   if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, lowering_ctx, true, parameter_usings) {
       return_err("failed while lowering function body");
-  }
-  function_constant_seen_headers: [..] *Code_Procedure_Header;
-  if !ir_collect_function_constants_recursive(ctx.header, *function_constant_seen_headers, *out.function_constants, ctx.header, *state) {
-      return_err("failed while collecting function constants");
   }
   ir_sort_function_constants_deterministic(*out.function_constants);
   return {out, true, ir_get_diagnostic(*state)};
@@ -2395,7 +2384,7 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   out.input = in_struct;
   out.output = out_struct;
   {
-    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state, 1);
+    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *out.function_constants, *state, 1);
     if !args_ok {
       if args_err.count != 0 return_err("%", args_err);
       return { {}, false, ir_get_diagnostic(*state) };
@@ -2431,10 +2420,6 @@ ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_R
   lowering_ctx.output_struct = *out.output;
   if !ir_shared_lower_block(ctx.header.body_or_null.block, *out.body, lowering_ctx, true, parameter_usings) {
       return_err("failed while lowering function body", node=ctx.header.body_or_null.block);
-  }
-  function_constant_seen_headers: [..] *Code_Procedure_Header;
-  if !ir_collect_function_constants_recursive(ctx.header, *function_constant_seen_headers, *out.function_constants, ctx.header, *state) {
-      return_err("failed while collecting function constants");
   }
   ir_sort_function_constants_deterministic(*out.function_constants);
 
@@ -2485,6 +2470,16 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
   for i: 1..header.arguments.count-1 {
     arg := header.arguments[i];
     arg_type := ifx arg.type_inst then arg.type_inst.result else ifx arg.expression then arg.expression.type else null;
+    function_constants_struct, function_constants_struct_node, function_constants_ok := ir_function_constants_struct_from_arg(arg);
+    if function_constants_ok {
+        if out.function_constants.count != 0 {
+            return_err("only one @function_constants struct argument is supported per shader entry");
+        }
+        if !ir_collect_function_constants_from_struct_arg(arg, function_constants_struct, function_constants_struct_node, *out.function_constants, *state) {
+            return {out, false, ir_get_diagnostic(*state)};
+        }
+        continue;
+    }
     if !arg_type || arg_type.type != .POINTER {
         return_err("argument '%' must be a pointer/buffer", arg.name);
     }
@@ -2537,10 +2532,6 @@ ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Re
   if !ir_shared_lower_block(header.body_or_null.block, *out.body, lowering_ctx, false, parameter_usings) {
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
-  function_constant_seen_headers: [..] *Code_Procedure_Header;
-  if !ir_collect_function_constants_recursive(header, *function_constant_seen_headers, *out.function_constants, header, *state) {
-      return_err("failed while collecting function constants");
-  }
   ir_sort_function_constants_deterministic(*out.function_constants);
   return {out, true, ir_get_diagnostic(*state)};
 } @jdll_export
@@ -2566,7 +2557,7 @@ ir_lower_task_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
   out.entry_name = "TaskMain";
   out.kind = .Task;
   {
-    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state, 0);
+    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *out.function_constants, *state, 0);
     if !args_ok {
       if args_err.count != 0 return_err("%", args_err);
       return { {}, false, ir_get_diagnostic(*state) };
@@ -2597,10 +2588,6 @@ ir_lower_task_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
 
-  function_constant_seen_headers: [..] *Code_Procedure_Header;
-  if !ir_collect_function_constants_recursive(header, *function_constant_seen_headers, *out.function_constants, header, *state) {
-      return_err("failed while collecting function constants");
-  }
   ir_sort_function_constants_deterministic(*out.function_constants);
   return {out, true, ir_get_diagnostic(*state)};
 } @jdll_export
@@ -2626,7 +2613,7 @@ ir_lower_mesh_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
   out.entry_name = "MeshMain";
   out.kind = .Mesh;
   {
-    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *state, 0);
+    args_ok, args_err := ir_lower_extra_args_readonly(ctx.header, *out.args, *out.extra_structs, *out.function_constants, *state, 0);
     if !args_ok {
       if args_err.count != 0 return_err("%", args_err);
       return { {}, false, ir_get_diagnostic(*state) };
@@ -2657,10 +2644,6 @@ ir_lower_mesh_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
       return_err("failed while lowering function body", node=header.body_or_null.block);
   }
 
-  function_constant_seen_headers: [..] *Code_Procedure_Header;
-  if !ir_collect_function_constants_recursive(header, *function_constant_seen_headers, *out.function_constants, header, *state) {
-      return_err("failed while collecting function constants");
-  }
   ir_sort_function_constants_deterministic(*out.function_constants);
 
   return {out, true, ir_get_diagnostic(*state)};

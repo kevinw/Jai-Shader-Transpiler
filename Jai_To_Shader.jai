@@ -6,6 +6,8 @@
 // metal_bytes := get_transpiled(.METAL, pbr_vertex_main, pbr_fragment_main);
 // 
 
+using,only(getenv) POSIX_Getenv :: #import "POSIX";
+
 VERBOSE            :: false;
 USE_SPIRV_OPT      :: true;
 WRITE_SPVASM_DEBUG :: false;
@@ -15,6 +17,42 @@ IR_INTERMEDIATE_DIR            :: ".build/ir_intermediate"; // TODO: use get_bui
 JST_TOOL_VERSION_CACHE_DIR     :: ".build/ir_tool_cache/tool_versions";
 JST_TOOL_ARTIFACT_CACHE_DIR    :: ".build/ir_tool_cache/artifacts";
 JST_FINGERPRINT_FILE_CACHE_DIR :: ".build/ir_tool_cache/fingerprint_files";
+
+jst_logged_shader_outputs: Table(string, bool);
+
+jst_env_var_is_truthy :: (name: string) -> bool {
+  value_c := POSIX_Getenv.getenv(temp_c_string(name));
+  if !value_c return false;
+  value := to_string(value_c, c_style_strlen(value_c));
+  if value.count == 0 return false;
+
+  parsed, ok := string_to_int(value);
+  if ok return cast(s64) parsed != 0;
+
+  if value == "false" return false;
+  if value == "FALSE" return false;
+  if value == "off" return false;
+  if value == "OFF" return false;
+  if value == "no" return false;
+  if value == "NO" return false;
+  return true;
+}
+
+jst_log_shader_output_path :: (path: string, label := "emitted shader") {
+  if path.count == 0 return;
+  if !jst_env_var_is_truthy("JST_LOG_SHADER_OUTPUTS") return;
+  abs_path, ok := get_absolute_path(path);
+  dedupe_key := path;
+  if ok dedupe_key = abs_path;
+  found, _ := table_find(*jst_logged_shader_outputs, dedupe_key);
+  if found return;
+  table_add(*jst_logged_shader_outputs, dedupe_key, true);
+  if ok {
+    log("JST_LOG_SHADER_OUTPUTS: % -> %", label, abs_path);
+  } else {
+    log("JST_LOG_SHADER_OUTPUTS: % -> %", label, path);
+  }
+}
 
 Transpiled_Target :: enum {
   METAL;
@@ -926,6 +964,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
                   compiler_report(tprint("Jai Shader Transpiler: failed to write Metal source '%'.", ctx.metal_output_source_path), make_location(ctx.main_fn.header));
                   continue;
                 }
+                jst_log_shader_output_path(ctx.metal_output_source_path, "manifest shader");
               }
               if ctx.type == .Vertex ctx.metal_vertex_entry_name = copy_string(it.entry_name);
               if ctx.type == .Fragment ctx.metal_fragment_entry_name = copy_string(it.entry_name);
@@ -964,6 +1003,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
               if !ok {
                 log_error("Error writing file to '%'", filename);
               } else {
+                jst_log_shader_output_path(filename, "generated shader");
                 #if VERBOSE log("Transpiled Jai to %", filename);
               }
             }
@@ -1149,6 +1189,17 @@ function_constant_decl_already_present :: (constants: [] IR_Function_Constant, d
   return false;
 }
 
+function_constant_identity_matches :: (a: IR_Function_Constant, b: IR_Function_Constant) -> bool {
+  if a.declaration && b.declaration return a.declaration == b.declaration;
+  if a.source_struct_name.count == 0 || b.source_struct_name.count == 0 return false;
+  return a.source_struct_name == b.source_struct_name && a.name == b.name;
+}
+
+function_constant_already_present :: (constants: [] IR_Function_Constant, candidate: IR_Function_Constant) -> bool {
+  for constants if function_constant_identity_matches(it, candidate) return true;
+  return false;
+}
+
 function_constant_spec_slot_count :: (type: IR_Function_Constant_Type) -> u32 {
   if type == {
     case .FLOAT2; return 2;
@@ -1169,8 +1220,8 @@ assign_single_function_constant_spec_ids :: (shader: *IR_Shader) {
 
 assign_pair_function_constant_spec_ids :: (vertex: *IR_Vertex_Shader, fragment: *IR_Fragment_Shader, out_pair_constants: *[..] IR_Function_Constant) {
   array_reset(out_pair_constants);
-  if vertex for vertex.function_constants if !function_constant_decl_already_present(out_pair_constants.*, it.declaration) array_add(out_pair_constants, it);
-  if fragment for fragment.function_constants if !function_constant_decl_already_present(out_pair_constants.*, it.declaration) array_add(out_pair_constants, it);
+  if vertex for vertex.function_constants if !function_constant_already_present(out_pair_constants.*, it) array_add(out_pair_constants, it);
+  if fragment for fragment.function_constants if !function_constant_already_present(out_pair_constants.*, it) array_add(out_pair_constants, it);
 
   next_spec_id: u32 = 0;
   for i: 0..out_pair_constants.count-1 {
@@ -1182,7 +1233,7 @@ assign_pair_function_constant_spec_ids :: (vertex: *IR_Vertex_Shader, fragment: 
     for i: 0..vertex.function_constants.count-1 {
       fc := *vertex.function_constants[i];
       for pair_fc: out_pair_constants.* {
-        if fc.declaration != pair_fc.declaration continue;
+        if !function_constant_identity_matches(fc, pair_fc) continue;
         fc.spec_id = pair_fc.spec_id;
         break;
       }
@@ -1192,7 +1243,7 @@ assign_pair_function_constant_spec_ids :: (vertex: *IR_Vertex_Shader, fragment: 
     for i: 0..fragment.function_constants.count-1 {
       fc := *fragment.function_constants[i];
       for pair_fc: out_pair_constants.* {
-        if fc.declaration != pair_fc.declaration continue;
+        if !function_constant_identity_matches(fc, pair_fc) continue;
         fc.spec_id = pair_fc.spec_id;
         break;
       }
@@ -1228,17 +1279,21 @@ emit_generated_function_constant_decl :: (plugin: *Jai_To_Shader_Plugin,
   if generated_symbol_already_emitted(plugin, struct_name) return;
 
   sb: String_Builder;
-  for constants {
-    alias_name := tprint("__%_%_type", base_name, it.name);
-    append(*sb, tprint("% :: type_of(%);\n", alias_name, it.name));
+  if constants.count > 0 && constants[0].source_struct_name.count != 0 {
+    append(*sb, tprint("% :: type_of(%.{});\n\n", struct_name, constants[0].source_struct_name));
+  } else {
+    for constants {
+      alias_name := tprint("__%_%_type", base_name, it.name);
+      append(*sb, tprint("% :: type_of(%);\n", alias_name, it.name));
+    }
+    if constants.count > 0 append(*sb, "\n");
+    append(*sb, tprint("% :: struct {\n", struct_name));
+    for constants {
+      type_name := tprint("__%_%_type", base_name, it.name);
+      append(*sb, tprint("  %: % = %;\n", it.name, type_name, it.default_value_text));
+    }
+    append(*sb, "}\n\n");
   }
-  if constants.count > 0 append(*sb, "\n");
-  append(*sb, tprint("% :: struct {\n", struct_name));
-  for constants {
-    type_name := tprint("__%_%_type", base_name, it.name);
-    append(*sb, tprint("  %: % = %;\n", it.name, type_name, it.default_value_text));
-  }
-  append(*sb, "}\n\n");
   append(*sb, tprint("% :: shader_function_constant_info.[\n", info_name));
   for constants {
     type_enum_str := tprint(".%", it.type);
@@ -1560,6 +1615,7 @@ finalize_single_spirv_external_job :: (job: *SPV_External_Single_Job, add_genera
     target_source = ir_prepend_generated_comment(target_source, ir_source_file_from_context(job.ctx), ir_pipeline_label_spirv(job.target));
   }
   write_entire_file(job.output_path, target_source);
+  jst_log_shader_output_path(job.output_path, "final shader");
 
   return target_source, true, diag;
 }
@@ -1850,6 +1906,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     }
     return "", false, diag;
   }
+  jst_log_shader_output_path(output_path, "final pair shader");
 
   pair_ctx.metal_vertex_entry_name = copy_string(metal_vertex_entry_name);
   pair_ctx.metal_fragment_entry_name = copy_string(metal_fragment_entry_name);
@@ -1864,6 +1921,7 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
       }
       return "", false, diag;
     }
+    jst_log_shader_output_path(pair_ctx.metal_output_source_path, "manifest pair shader");
   }
 
   decl := tprint("% :: #string END\n%\nEND", source_symbol_name_from_pair_context(pair_ctx), merged_source);
@@ -2104,6 +2162,7 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
     task_source_read = ir_metal_enable_unsafe_runtime_array_indexing(task_source_read);
     task_source_read = ir_prepend_generated_comment(task_source_read, ir_source_file_from_mesh_context(mesh_ctx), ir_pipeline_label_spirv(.METAL));
     _ = write_entire_file(task_output_path, task_source_read);
+    jst_log_shader_output_path(task_output_path, "task stage shader");
     task_source = task_source_read;
   }
 
@@ -2213,11 +2272,14 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   frag_source = ir_prepend_generated_comment(frag_source, ir_source_file_from_mesh_context(mesh_ctx), ir_pipeline_label_spirv(.METAL));
   _ = write_entire_file(mesh_output_path, mesh_source);
   _ = write_entire_file(frag_output_path, frag_source);
+  jst_log_shader_output_path(mesh_output_path, "mesh stage shader");
+  jst_log_shader_output_path(frag_output_path, "fragment stage shader");
 
   combined_source := ifx task_source.count != 0
       then tprint("%\n%\n%", task_source, mesh_source, frag_source)
       else tprint("%\n%", mesh_source, frag_source);
   _ = write_entire_file(combined_output_path, combined_source);
+  jst_log_shader_output_path(combined_output_path, "final mesh shader bundle");
 
   mesh_ctx.metal_output_source_path = copy_string(combined_output_path);
   mesh_ctx.metal_output_air_path = copy_string(tprint("%.air", combined_output_path));

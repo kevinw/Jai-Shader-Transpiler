@@ -658,6 +658,8 @@ IR_SPV_Gen_Const_F16 :: struct {
 IR_SPV_Gen_Function_Constant :: struct {
   name: string;
   declaration: *Code_Declaration;
+  source_struct_name: string;
+  source_arg_name: string;
   type: IR_Function_Constant_Type;
   default_value_text: string;
   spec_id: u32;
@@ -1128,11 +1130,21 @@ find_function_constant_by_name :: (s: *IR_SPV_Gen_State, name: string) -> *IR_SP
   return null;
 }
 
+find_function_constant_by_member :: (s: *IR_SPV_Gen_State, base_name: string, member_name: string) -> *IR_SPV_Gen_Function_Constant {
+  if base_name.count == 0 || member_name.count == 0 return null;
+  for *s.function_constants if it.source_arg_name == base_name && it.name == member_name return it;
+  return null;
+}
+
 register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Function_Constant) -> (ok: bool, diag: IR_Diagnostic) {
   return_err :: (msg: string, args: ..Any) #expand { `return false, make_diag(msg, ..args); }
 
   for shader_constants {
-    if find_function_constant_by_decl(s, it.declaration) != null continue;
+    if it.declaration {
+      if find_function_constant_by_decl(s, it.declaration) != null continue;
+    } else if it.source_arg_name.count != 0 {
+      if find_function_constant_by_member(s, it.source_arg_name, it.name) != null continue;
+    }
     source_kind: IR_Type_Kind;
     if it.type == {
       case .BOOL;   source_kind = .BOOL;
@@ -1165,6 +1177,8 @@ register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Fu
     array_add(*s.function_constants, .{
       name = it.name,
       declaration = it.declaration,
+      source_struct_name = it.source_struct_name,
+      source_arg_name = it.source_arg_name,
       type = type_kind,
       default_value_text = it.default_value_text,
       spec_id = it.spec_id,
@@ -5600,6 +5614,26 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
     }
 
     case .MEMBER; {
+      if expr.left && expr.left.kind == .IDENT {
+        function_constant := find_function_constant_by_member(s, expr.left.text, expr.text);
+        if function_constant {
+          if function_constant.type == {
+            case .BOOL;  return function_constant.id, .BOOL, true, diag;
+            case .U8;    return function_constant.id, .UINT8, true, diag;
+            case .S8;    return function_constant.id, .INT8, true, diag;
+            case .U16;   return function_constant.id, .UINT16, true, diag;
+            case .S16;   return function_constant.id, .INT16, true, diag;
+            case .U32;   return function_constant.id, .UINT, true, diag;
+            case .S32;   return function_constant.id, .INT, true, diag;
+            case .U64;   return function_constant.id, .UINT64, true, diag;
+            case .S64;   return function_constant.id, .INT64, true, diag;
+            case .FLOAT; return function_constant.id, .FLOAT, true, diag;
+            case .FLOAT2; return function_constant.id, .FLOAT2, true, diag;
+            case .FLOAT3; return function_constant.id, .FLOAT3, true, diag;
+            case .FLOAT4; return function_constant.id, .FLOAT4, true, diag;
+          }
+        }
+      }
       path := expr_text(expr);
       if expr.builtin_ref.component >= 0 && expr.builtin_ref.component <= 2 {
         if expr.builtin_ref.kind == .DISPATCH_THREAD_ID {

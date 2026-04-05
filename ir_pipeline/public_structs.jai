@@ -93,6 +93,8 @@ IR_Function_Constant :: struct {
   type: IR_Function_Constant_Type;
   default_value_text: string;
   declaration: *Code_Declaration;
+  source_struct_name: string;
+  source_arg_name: string;
   location: Source_Code_Location;
   spec_id: u32;
 }

@@ -130,13 +130,16 @@ IR_Headless_Vertex_Out :: struct {
   color: Vector4; @semantic_COLOR0
 }
 
-ir_headless_use_alt_color: bool = false; @function_constant
-ir_headless_constant_color: Vector3 = .{1, 0, 0}; @function_constant
 IR_Headless_Function_Constant_Mode :: enum u8 {
   Red :: 0;
   Green :: 1;
 }
-ir_headless_function_mode: IR_Headless_Function_Constant_Mode = IR_Headless_Function_Constant_Mode.Green; @function_constant
+
+IR_Headless_Function_Constants :: struct {
+  use_alt_color: bool = false;
+  constant_color: Vector3 = .{1, 0, 0};
+  function_mode: IR_Headless_Function_Constant_Mode = .Green;
+} @function_constants
 
 ir_headless_vertex_main :: (using input: IR_Headless_Vertex_In, using un: IR_Headless_Vertex_Uniforms) -> IR_Headless_Vertex_Out {
   using out: IR_Headless_Vertex_Out;
@@ -170,18 +173,18 @@ ir_headless_vertex_uint_div_main :: (using input: IR_Headless_Vertex_In, using u
   return out;
 } @vertex_shader
 
-ir_headless_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
-  if ir_headless_use_alt_color return Vector4.{0.0, 1.0, 0.0, 1.0};
+ir_headless_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out, using constants: IR_Headless_Function_Constants) -> Vector4 @SV_Target {
+  if use_alt_color return Vector4.{0.0, 1.0, 0.0, 1.0};
   return Vector4.{1.0, 0.0, 0.0, 1.0};
 } @fragment_shader
 
-ir_headless_narrow_enum_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
-  if ir_headless_function_mode == .Green return Vector4.{0.0, 1.0, 0.0, 1.0};
+ir_headless_narrow_enum_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out, using constants: IR_Headless_Function_Constants) -> Vector4 @SV_Target {
+  if function_mode == .Green return Vector4.{0.0, 1.0, 0.0, 1.0};
   return Vector4.{1.0, 0.0, 0.0, 1.0};
 } @fragment_shader
 
-ir_headless_vector_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
-  return Vector4.{ir_headless_constant_color.x, ir_headless_constant_color.y, ir_headless_constant_color.z, 1.0};
+ir_headless_vector_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out, using constants: IR_Headless_Function_Constants) -> Vector4 @SV_Target {
+  return Vector4.{constant_color.x, constant_color.y, constant_color.z, 1.0};
 } @fragment_shader
 
 ir_headless_global_fixed_lut :: u32.[1, 3, 7, 15, 31, 63, 127, 255];
