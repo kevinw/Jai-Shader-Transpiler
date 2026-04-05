@@ -3,6 +3,7 @@
 // Shared lowering helpers used by the ir_lower_*_from_shader_context functions below.
 
 #load "./public_structs.jai";
+Program_Print :: #import "Program_Print";
 
 
 ir_reset_diagnostic :: (using state: *IR_Lowering_State) {
@@ -94,11 +95,15 @@ ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
       inttype := cast(*Type_Info_Integer) type;
       if inttype.signed {
         if type.runtime_size == 8 return "int64_t", true;
-        if type.runtime_size == 4 || type.runtime_size == 2 || type.runtime_size == 1 return "int32_t", true;
+        if type.runtime_size == 4 return "int32_t", true;
+        if type.runtime_size == 2 return "int16_t", true;
+        if type.runtime_size == 1 return "int8_t", true;
         return "", false;
       } else {
         if type.runtime_size == 8 return "uint64_t", true;
-        if type.runtime_size == 4 || type.runtime_size == 2 || type.runtime_size == 1 return "uint", true;
+        if type.runtime_size == 4 return "uint", true;
+        if type.runtime_size == 2 return "uint16_t", true;
+        if type.runtime_size == 1 return "uint8_t", true;
         return "", false;
       }
     }
@@ -120,6 +125,10 @@ ir_type_to_shader_name :: (type: *Type_Info) -> (string, bool) {
 
 ir_type_kind_from_slang_name :: (name: string) -> IR_Type_Kind {
   if name == "bool" return .BOOL;
+  if name == "int8_t" return .I8;
+  if name == "uint8_t" || name == "u8" return .U8;
+  if name == "int16_t" return .I16;
+  if name == "uint16_t" || name == "u16" return .U16;
   if name == "int" || name == "int32_t" return .I32;
   if name == "uint" || name == "u32" return .U32;
   if name == "int64_t" return .I64;
@@ -458,13 +467,30 @@ ir_function_constant_type_from_type_info :: (type: *Type_Info) -> (IR_Function_C
         log_error("ir_function_constant_type_from_type_info: passed a null type");
         return .BOOL, false;
     }
+
+  if type.type == .ENUM {
+    enum_type := cast(*Type_Info_Enum) type;
+    if !enum_type.internal_type return .BOOL, false;
+    function_constant_type, ok := ir_function_constant_type_from_type_info(enum_type.internal_type);
+    return function_constant_type, ok;
+  }
     
   if type.type == {
     case .BOOL; return .BOOL, true;
     case .INTEGER;
       integer := cast(*Type_Info_Integer) type;
-      if integer.runtime_size != 4 return .BOOL, false;
-      return (ifx integer.signed then .S32 else .U32), true;
+      if integer.signed {
+        if integer.runtime_size == 1 return .S8, true;
+        if integer.runtime_size == 2 return .S16, true;
+        if integer.runtime_size == 4 return .S32, true;
+        if integer.runtime_size == 8 return .S64, true;
+      } else {
+        if integer.runtime_size == 1 return .U8, true;
+        if integer.runtime_size == 2 return .U16, true;
+        if integer.runtime_size == 4 return .U32, true;
+        if integer.runtime_size == 8 return .U64, true;
+      }
+      return .BOOL, false;
     case .FLOAT;
       fp := cast(*Type_Info_Float) type;
       if fp.runtime_size == 4 return .FLOAT, true;
@@ -492,16 +518,45 @@ ir_validate_function_constant_declaration :: (decl: *Code_Declaration, state: *I
   type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
   function_constant_type, type_ok := ir_function_constant_type_from_type_info(type);
   if !type_ok {
-    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has unsupported type. Supported types are bool, u32, s32, float, Vector2, Vector3, and Vector4.", decl.name), decl);
+    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has unsupported type. Supported types are bool, integer scalar widths, enums backed by integer scalars, float, Vector2, Vector3, and Vector4.", decl.name), decl);
     return out, false;
   }
 
-  if decl.expression.kind != .LITERAL {
-    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a literal default value.", decl.name), decl.expression);
+  lowering_ctx := IR_Lowering_Context.{state = state};
+  lowered_default, lowered_default_ok := ir_lower_expr(decl.expression, lowering_ctx);
+  if !lowered_default_ok {
+    if state.first_error.message.count == 0 {
+      ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time constant default value.", decl.name), decl.expression);
+    }
+    return out, false;
+  }
+  if lowered_default.kind == {
+  case .LITERAL;
+  case .CONSTRUCTOR;
+    if lowered_default.kind == .CONSTRUCTOR {
+      vector_constant_ok := false;
+      if function_constant_type == {
+      case .FLOAT2; vector_constant_ok = true;
+      case .FLOAT3; vector_constant_ok = true;
+      case .FLOAT4; vector_constant_ok = true;
+      }
+      if !vector_constant_ok {
+        ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time scalar literal default value.", decl.name), decl.expression);
+        return out, false;
+      }
+    }
+  case;
+    ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time constant literal or vector constructor default value.", decl.name), decl.expression);
     return out, false;
   }
 
-  default_value_text := compact_text(ir_lowering_expression_to_source_string(decl.expression));
+  default_value_text := compact_text(lowered_default.text);
+  if lowered_default.kind == .CONSTRUCTOR {
+    expression_builder: String_Builder;
+    expression_builder.allocator = temp;
+    Program_Print.print_expression(*expression_builder, decl.expression);
+    default_value_text = compact_text(builder_to_string(*expression_builder,, temp));
+  }
   if default_value_text.count == 0 {
     ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' has an unsupported literal default value.", decl.name), decl.expression);
     return out, false;
@@ -550,6 +605,12 @@ ir_uniform_field_layout_for_type :: (type: *Type_Info) -> (align: s64, size: s64
 
   if field_ir_type.kind == .BOOL || field_ir_type.kind == .I32 || field_ir_type.kind == .U32 || field_ir_type.kind == .F32 {
     return 4, 4, true, "";
+  }
+  if field_ir_type.kind == .I8 || field_ir_type.kind == .U8 {
+    return 1, 1, true, "";
+  }
+  if field_ir_type.kind == .I16 || field_ir_type.kind == .U16 || field_ir_type.kind == .F16 {
+    return 2, 2, true, "";
   }
   if field_ir_type.kind == .I64 || field_ir_type.kind == .U64 {
     // Keep this in lock-step with current backend behavior.

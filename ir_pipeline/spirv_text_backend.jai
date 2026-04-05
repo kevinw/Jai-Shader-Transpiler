@@ -461,6 +461,10 @@ match_branch_condition_outer :: (expr: *IR_Expr) -> (u32, bool) {
 IR_SPV_Gen_Type :: enum {
   UNKNOWN;
   STRUCT;
+  INT8;
+  UINT8;
+  INT16;
+  UINT16;
   INT;
   UINT;
   INT64;
@@ -604,10 +608,30 @@ IR_SPV_Gen_Const_U32 :: struct {
   id: Id;
 }
 
+IR_SPV_Gen_Const_U8 :: struct {
+  value: u8;
+  id: Id;
+}
+
+IR_SPV_Gen_Const_U16 :: struct {
+  value: u16;
+  id: Id;
+}
+
 Id :: s64;
 
 IR_SPV_Gen_Const_I32 :: struct {
   value: s32;
+  id: Id;
+}
+
+IR_SPV_Gen_Const_I8 :: struct {
+  value: s8;
+  id: Id;
+}
+
+IR_SPV_Gen_Const_I16 :: struct {
+  value: s16;
   id: Id;
 }
 
@@ -723,6 +747,10 @@ IR_SPV_Gen_State :: struct {
   local_array_types: [..] IR_SPV_Gen_Local_Array;
   global_const_arrays: [..] IR_SPV_Gen_Global_Const_Array;
   local_structs: [..] IR_SPV_Gen_Local_Struct;
+  const_u8: [..] IR_SPV_Gen_Const_U8;
+  const_i8: [..] IR_SPV_Gen_Const_I8;
+  const_u16: [..] IR_SPV_Gen_Const_U16;
+  const_i16: [..] IR_SPV_Gen_Const_I16;
   const_u32: [..] IR_SPV_Gen_Const_U32;
   const_i32: [..] IR_SPV_Gen_Const_I32;
   const_i64: [..] IR_SPV_Gen_Const_I64;
@@ -771,6 +799,10 @@ IR_SPV_Gen_State :: struct {
   
   using const_ids: struct {
     id_uint_0: s64;
+    id_uint8_0: s64;
+    id_int8_0: s64;
+    id_uint16_0: s64;
+    id_int16_0: s64;
     id_int_0: s64;
     id_int64_0: s64;
     id_uint64_0: s64;
@@ -785,6 +817,10 @@ IR_SPV_Gen_State :: struct {
     id_extinst: s64;
     id_void: s64;
     id_fn_void: s64;
+    id_uint8: s64;
+    id_int8: s64;
+    id_uint16: s64;
+    id_int16: s64;
     id_uint: s64;
     id_half: s64;
     id_float: s64;
@@ -804,6 +840,10 @@ IR_SPV_Gen_State :: struct {
     id_gl_local_invocation_id: s64;
     id_gl_workgroup_id: s64;
     id_gl_local_invocation_index: s64;
+    id_ptr_input_uint8: s64;
+    id_ptr_input_int8: s64;
+    id_ptr_input_uint16: s64;
+    id_ptr_input_int16: s64;
     id_ptr_input_uint: s64;
     id_ptr_input_half: s64;
     id_int: s64;
@@ -812,6 +852,10 @@ IR_SPV_Gen_State :: struct {
     id_runtimearr_uint: s64;
     id_buffer_struct: s64;
     id_ptr_storage_buffer_struct: s64;
+    id_ptr_storage_uint8: s64;
+    id_ptr_storage_int8: s64;
+    id_ptr_storage_uint16: s64;
+    id_ptr_storage_int16: s64;
     id_ptr_storage_uint: s64;
     id_ptr_storage_int: s64;
     id_ptr_storage_int64: s64;
@@ -828,10 +872,18 @@ IR_SPV_Gen_State :: struct {
     id_ptr_input_float2: s64;
     id_ptr_input_float3: s64;
     id_ptr_input_float4: s64;
+    id_ptr_output_uint8: s64;
+    id_ptr_output_int8: s64;
+    id_ptr_output_uint16: s64;
+    id_ptr_output_int16: s64;
     id_ptr_output_float: s64;
     id_ptr_output_float2: s64;
     id_ptr_output_float3: s64;
     id_ptr_output_float4: s64;
+    id_ptr_uniform_int8: s64;
+    id_ptr_uniform_uint8: s64;
+    id_ptr_uniform_int16: s64;
+    id_ptr_uniform_uint16: s64;
     id_ptr_uniform_half: s64;
     id_ptr_uniform_float: s64;
     id_ptr_uniform_float2: s64;
@@ -872,6 +924,10 @@ IR_SPV_Gen_State :: struct {
     id_ptr_uniformconst_storage_image3d: s64;
     id_write_2d_textures_var: s64;
     id_write_3d_textures_var: s64;
+    id_ptr_func_int8: s64;
+    id_ptr_func_uint8: s64;
+    id_ptr_func_int16: s64;
+    id_ptr_func_uint16: s64;
     id_ptr_func_float: s64;
     id_ptr_func_float2: s64;
     id_ptr_func_float3: s64;
@@ -983,8 +1039,14 @@ new_id :: (s: *IR_SPV_Gen_State) -> s64 {
 spv_function_constant_kind_from_ir_type :: (type: IR_Type) -> (IR_Function_Constant_Type, bool) {
   if type.kind == {
     case .BOOL; return .BOOL, true;
+    case .U8;   return .U8, true;
+    case .I8;   return .S8, true;
+    case .U16;  return .U16, true;
+    case .I16;  return .S16, true;
     case .U32;  return .U32, true;
     case .I32;  return .S32, true;
+    case .U64;  return .U64, true;
+    case .I64;  return .S64, true;
     case .F32;  return .FLOAT, true;
     case .F32x2; return .FLOAT2, true;
     case .F32x3; return .FLOAT3, true;
@@ -1074,8 +1136,14 @@ register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Fu
     source_kind: IR_Type_Kind;
     if it.type == {
       case .BOOL;   source_kind = .BOOL;
+      case .U8;     source_kind = .U8;
+      case .S8;     source_kind = .I8;
+      case .U16;    source_kind = .U16;
+      case .S16;    source_kind = .I16;
       case .U32;    source_kind = .U32;
       case .S32;    source_kind = .I32;
+      case .U64;    source_kind = .U64;
+      case .S64;    source_kind = .I64;
       case .FLOAT;  source_kind = .F32;
       case .FLOAT2; source_kind = .F32x2;
       case .FLOAT3; source_kind = .F32x3;
@@ -1146,6 +1214,22 @@ spv_append_function_constant_defs :: (sb: *String_Builder, s: *IR_SPV_Gen_State)
         } else {
           return_err("function constant '%' expected bool literal, got '%'.", it.name, it.default_value_text);
         }
+      case .U8;
+        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        if !value_ok || value64 < 0 || value64 > 0xFF return_err("function constant '%' expected u8 literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_uint8), cast(u8) value64));
+      case .S8;
+        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        if !value_ok || value64 < -128 || value64 > 127 return_err("function constant '%' expected s8 literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int8), cast(s8) value64));
+      case .U16;
+        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        if !value_ok || value64 < 0 || value64 > 0xFFFF return_err("function constant '%' expected u16 literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_uint16), cast(u16) value64));
+      case .S16;
+        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        if !value_ok || value64 < -32768 || value64 > 32767 return_err("function constant '%' expected s16 literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int16), cast(s16) value64));
       case .U32;
         value, value_ok := parse_u32_literal_text(it.default_value_text);
         if !value_ok return_err("function constant '%' expected u32 literal, got '%'.", it.name, it.default_value_text);
@@ -1154,6 +1238,14 @@ spv_append_function_constant_defs :: (sb: *String_Builder, s: *IR_SPV_Gen_State)
         value64, value_ok := parse_i64_literal_text(it.default_value_text);
         if !value_ok return_err("function constant '%' expected s32 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int), cast(s32) value64));
+      case .U64;
+        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        if !value_ok || value64 < 0 return_err("function constant '%' expected u64 literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_uint64), cast(u64) value64));
+      case .S64;
+        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        if !value_ok return_err("function constant '%' expected s64 literal, got '%'.", it.name, it.default_value_text);
+        append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int64), value64));
       case .FLOAT;
         value_text, value_ok := parse_f32_literal_text(it.default_value_text);
         if !value_ok return_err("function constant '%' expected float literal, got '%'.", it.name, it.default_value_text);
@@ -1189,6 +1281,22 @@ spv_module_append_function_constant_defs_binary :: (m: *SPV_Module, s: *IR_SPV_G
       } else {
         return_err("function constant '%' expected bool literal, got '%'.", it.name, it.default_value_text);
       }
+    case .U8;
+      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      if !value_ok || value64 < 0 || value64 > 0xFF return_err("function constant '%' expected u8 literal, got '%'.", it.name, it.default_value_text);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_uint8, cast(u32) it.id, cast(u32) cast(u8) value64);
+    case .S8;
+      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      if !value_ok || value64 < -128 || value64 > 127 return_err("function constant '%' expected s8 literal, got '%'.", it.name, it.default_value_text);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int8, cast(u32) it.id, cast(u32) cast(u8) cast(s8) value64);
+    case .U16;
+      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      if !value_ok || value64 < 0 || value64 > 0xFFFF return_err("function constant '%' expected u16 literal, got '%'.", it.name, it.default_value_text);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_uint16, cast(u32) it.id, cast(u32) cast(u16) value64);
+    case .S16;
+      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      if !value_ok || value64 < -32768 || value64 > 32767 return_err("function constant '%' expected s16 literal, got '%'.", it.name, it.default_value_text);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int16, cast(u32) it.id, cast(u32) cast(u16) cast(s16) value64);
     case .U32;
       value, value_ok := parse_u32_literal_text(it.default_value_text);
       if !value_ok return_err("function constant '%' expected u32 literal, got '%'.", it.name, it.default_value_text);
@@ -1197,6 +1305,20 @@ spv_module_append_function_constant_defs_binary :: (m: *SPV_Module, s: *IR_SPV_G
       value64, value_ok := parse_i64_literal_text(it.default_value_text);
       if !value_ok return_err("function constant '%' expected s32 literal, got '%'.", it.name, it.default_value_text);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int, cast(u32) it.id, cast(u32) cast(s32) value64);
+    case .U64;
+      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      if !value_ok || value64 < 0 return_err("function constant '%' expected u64 literal, got '%'.", it.name, it.default_value_text);
+      bits := cast(u64) value64;
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_uint64, cast(u32) it.id,
+                              cast,no_check(u32) (bits & cast(u64) 0xFFFF_FFFF),
+                              cast,no_check(u32) ((bits >> 32) & cast(u64) 0xFFFF_FFFF));
+    case .S64;
+      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      if !value_ok return_err("function constant '%' expected s64 literal, got '%'.", it.name, it.default_value_text);
+      bits := cast(u64) value64;
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int64, cast(u32) it.id,
+                              cast,no_check(u32) (bits & cast(u64) 0xFFFF_FFFF),
+                              cast,no_check(u32) ((bits >> 32) & cast(u64) 0xFFFF_FFFF));
     case .FLOAT;
       value_text, value_ok := parse_f32_literal_text(it.default_value_text);
       if !value_ok return_err("function constant '%' expected float literal, got '%'.", it.name, it.default_value_text);
@@ -2130,10 +2252,38 @@ get_u32_const :: (s: *IR_SPV_Gen_State, value: u32) -> s64 {
   return id;
 }
 
+get_u8_const :: (s: *IR_SPV_Gen_State, value: u8) -> s64 {
+  for s.const_u8 if it.value == value return it.id;
+  id := new_id(s);
+  array_add(*s.const_u8, .{value=value, id=id});
+  return id;
+}
+
+get_u16_const :: (s: *IR_SPV_Gen_State, value: u16) -> s64 {
+  for s.const_u16 if it.value == value return it.id;
+  id := new_id(s);
+  array_add(*s.const_u16, .{value=value, id=id});
+  return id;
+}
+
 get_i32_const :: (s: *IR_SPV_Gen_State, value: s32) -> s64 {
   for s.const_i32 if it.value == value return it.id;
   id := new_id(s);
   array_add(*s.const_i32, .{value=value, id=id});
+  return id;
+}
+
+get_i8_const :: (s: *IR_SPV_Gen_State, value: s8) -> s64 {
+  for s.const_i8 if it.value == value return it.id;
+  id := new_id(s);
+  array_add(*s.const_i8, .{value=value, id=id});
+  return id;
+}
+
+get_i16_const :: (s: *IR_SPV_Gen_State, value: s16) -> s64 {
+  for s.const_i16 if it.value == value return it.id;
+  id := new_id(s);
+  array_add(*s.const_i16, .{value=value, id=id});
   return id;
 }
 
@@ -2211,6 +2361,10 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
   s.use_physical_storage = use_physical_storage;
   
   s.id_uint_0      = get_u32_const(s, 0);
+  s.id_uint8_0     = get_u8_const(s, 0);
+  s.id_int8_0      = get_i8_const(s, 0);
+  s.id_uint16_0    = get_u16_const(s, 0);
+  s.id_int16_0     = get_i16_const(s, 0);
   s.id_int_0       = get_i32_const(s, 0);
   s.id_int64_0     = get_i64_const(s, 0);
   s.id_uint64_0    = get_u64_const(s, 0);
@@ -2665,7 +2819,9 @@ spv_append_function_and_body :: (sb: *String_Builder, s: *IR_SPV_Gen_State, entr
 }
 
 host_blit_align_for_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
+  if kind == .INT8 || kind == .UINT8 return 1;
   if kind == .FLOAT16 return 2;
+  if kind == .INT16 || kind == .UINT16 return 2;
   if kind == .INT64 || kind == .UINT64 return 8;
   if kind == .FLOAT2X2 || kind == .FLOAT3X3 || kind == .FLOAT4X4 return 4;
   if kind == .INT || kind == .UINT || kind == .FLOAT || kind == .FLOAT2 ||
@@ -3678,11 +3834,11 @@ spv_emit_scalar_conversion :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR
       add_op(s, out, "OpFConvert", s.id_float, value_id);
       return out, true, {};
     }
-    if src_type == .UINT || src_type == .UINT64 {
+    if src_type == .UINT8 || src_type == .UINT16 || src_type == .UINT || src_type == .UINT64 {
       add_op(s, out, "OpConvertUToF", s.id_float, value_id);
       return out, true, {};
     }
-    if src_type == .INT || src_type == .INT64 {
+    if src_type == .INT8 || src_type == .INT16 || src_type == .INT || src_type == .INT64 {
       add_op(s, out, "OpConvertSToF", s.id_float, value_id);
       return out, true, {};
     }
@@ -3693,11 +3849,11 @@ spv_emit_scalar_conversion :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR
       add_op(s, out, "OpFConvert", s.id_half, value_id);
       return out, true, {};
     }
-    if src_type == .UINT || src_type == .UINT64 {
+    if src_type == .UINT8 || src_type == .UINT16 || src_type == .UINT || src_type == .UINT64 {
       add_op(s, out, "OpConvertUToF", s.id_half, value_id);
       return out, true, {};
     }
-    if src_type == .INT || src_type == .INT64 {
+    if src_type == .INT8 || src_type == .INT16 || src_type == .INT || src_type == .INT64 {
       add_op(s, out, "OpConvertSToF", s.id_half, value_id);
       return out, true, {};
     }
@@ -3707,7 +3863,19 @@ spv_emit_scalar_conversion :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR
     if src_type == .BOOL {
       one_id: s64 = 0;
       zero_id: s64 = 0;
-      if dst_type == .INT {
+      if dst_type == .INT8 {
+        one_id = get_i8_const(s, 1);
+        zero_id = get_i8_const(s, 0);
+      } else if dst_type == .UINT8 {
+        one_id = get_u8_const(s, 1);
+        zero_id = get_u8_const(s, 0);
+      } else if dst_type == .INT16 {
+        one_id = get_i16_const(s, 1);
+        zero_id = get_i16_const(s, 0);
+      } else if dst_type == .UINT16 {
+        one_id = get_u16_const(s, 1);
+        zero_id = get_u16_const(s, 0);
+      } else if dst_type == .INT {
         one_id = get_i32_const(s, 1);
         zero_id = get_i32_const(s, 0);
       } else if dst_type == .UINT {
@@ -3752,7 +3920,15 @@ spv_emit_scalar_conversion :: (s: *IR_SPV_Gen_State, value_id: s64, src_type: IR
       src_type_id := type_id_from_kind(s, src_type);
       if src_type_id == 0 return 0, false, make_diag("unsupported integer-to-bool conversion source type %.", src_type);
       zero_id: s64 = 0;
-      if src_type == .INT {
+      if src_type == .INT8 {
+        zero_id = get_i8_const(s, 0);
+      } else if src_type == .UINT8 {
+        zero_id = get_u8_const(s, 0);
+      } else if src_type == .INT16 {
+        zero_id = get_i16_const(s, 0);
+      } else if src_type == .UINT16 {
+        zero_id = get_u16_const(s, 0);
+      } else if src_type == .INT {
         zero_id = get_i32_const(s, 0);
       } else if src_type == .UINT {
         zero_id = get_u32_const(s, 0);
@@ -4312,6 +4488,10 @@ emit_atomic_reduce_u32_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr, reduce_
 
 spv_kind_from_ir_type_kind :: (kind: IR_Type_Kind) -> IR_SPV_Gen_Type {
   if kind == .BOOL return .BOOL;
+  if kind == .I8 return .INT8;
+  if kind == .U8 return .UINT8;
+  if kind == .I16 return .INT16;
+  if kind == .U16 return .UINT16;
   if kind == .I32 return .INT;
   if kind == .U32 return .UINT;
   if kind == .I64 return .INT64;
@@ -4772,6 +4952,22 @@ spv_get_scalar_const_id_from_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr, expe
     if text == "true" return s.id_bool_true, true;
     if text == "false" return s.id_bool_false, true;
     return 0, false;
+  case .UINT8;
+    value, value_ok := parse_i64_literal_expr(expr);
+    if !value_ok || value < 0 || value > 0xFF return 0, false;
+    return get_u8_const(s, cast(u8) value), true;
+  case .INT8;
+    value, value_ok := parse_i64_literal_expr(expr);
+    if !value_ok || value < -128 || value > 127 return 0, false;
+    return get_i8_const(s, cast(s8) value), true;
+  case .UINT16;
+    value, value_ok := parse_i64_literal_expr(expr);
+    if !value_ok || value < 0 || value > 0xFFFF return 0, false;
+    return get_u16_const(s, cast(u16) value), true;
+  case .INT16;
+    value, value_ok := parse_i64_literal_expr(expr);
+    if !value_ok || value < -32768 || value > 32767 return 0, false;
+    return get_i16_const(s, cast(s16) value), true;
   case .UINT;
     value, value_ok := parse_u32_literal_expr(expr);
     if !value_ok return 0, false;
@@ -5380,8 +5576,14 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if function_constant {
           if function_constant.type == {
             case .BOOL;  return function_constant.id, .BOOL, true, diag;
+            case .U8;    return function_constant.id, .UINT8, true, diag;
+            case .S8;    return function_constant.id, .INT8, true, diag;
+            case .U16;   return function_constant.id, .UINT16, true, diag;
+            case .S16;   return function_constant.id, .INT16, true, diag;
             case .U32;   return function_constant.id, .UINT, true, diag;
             case .S32;   return function_constant.id, .INT, true, diag;
+            case .U64;   return function_constant.id, .UINT64, true, diag;
+            case .S64;   return function_constant.id, .INT64, true, diag;
             case .FLOAT; return function_constant.id, .FLOAT, true, diag;
             case .FLOAT2; return function_constant.id, .FLOAT2, true, diag;
             case .FLOAT3; return function_constant.id, .FLOAT3, true, diag;
@@ -6712,7 +6914,8 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
   if stmt.kind == {
     case .DECL; {
       decl_type := spv_kind_from_ir_type(stmt.decl_type);
-      if decl_type == .INT || decl_type == .UINT || decl_type == .INT64 || decl_type == .UINT64 ||
+      if decl_type == .INT8 || decl_type == .UINT8 || decl_type == .INT16 || decl_type == .UINT16 ||
+         decl_type == .INT || decl_type == .UINT || decl_type == .INT64 || decl_type == .UINT64 ||
          decl_type == .BOOL || decl_type == .FLOAT16 || decl_type == .FLOAT || decl_type == .FLOAT2 || decl_type == .FLOAT3 || decl_type == .FLOAT4 ||
          decl_type == .FLOAT2X2 || decl_type == .FLOAT3X3 || decl_type == .FLOAT4X4 {
         ptr_id := new_id(s);
@@ -7240,7 +7443,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         if !cond_ok return false, false, cond_diag;
         switch_type = .UINT;
       }
-      if switch_type != .UINT && switch_type != .INT {
+      if !is_integral_kind(switch_type) {
         return_err("switch condition must be integer.");
       }
 

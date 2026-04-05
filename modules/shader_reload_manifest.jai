@@ -9,6 +9,9 @@ Shader_Reload_Manifest_Entry :: struct {
     target: string;
     primary_name: string;
     secondary_name: string;
+    tertiary_name: string;
+    metal_task_entry: string;
+    metal_mesh_entry: string;
     metal_vertex_entry: string;
     metal_fragment_entry: string;
     metal_compute_entry: string;
@@ -131,6 +134,9 @@ shader_reload_manifest_load :: (manifest: *Shader_Reload_Manifest, path: string)
                 case "target"; target = value;
                 case "primary_name"; primary_name = value;
                 case "secondary_name"; secondary_name = value;
+                case "tertiary_name"; tertiary_name = value;
+                case "metal_task_entry"; metal_task_entry = value;
+                case "metal_mesh_entry"; metal_mesh_entry = value;
                 case "metal_vertex_entry"; metal_vertex_entry = value;
                 case "metal_fragment_entry"; metal_fragment_entry = value;
                 case "metal_compute_entry"; metal_compute_entry = value;

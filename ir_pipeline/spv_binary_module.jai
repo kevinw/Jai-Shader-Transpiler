@@ -933,8 +933,12 @@ spv_lookup_capability :: (name: string) -> (u32, bool) {
   if name == {
   case "Shader";                             return SPV_CAPABILITY_SHADER, true;
   case "MeshShadingEXT";                     return SPV_CAPABILITY_MESH_SHADING_EXT, true;
+  case "Int8";                               return SPV_CAPABILITY_INT8, true;
+  case "Int16";                              return SPV_CAPABILITY_INT16, true;
   case "Int64";                              return SPV_CAPABILITY_INT64, true;
   case "Float16";                            return SPV_CAPABILITY_FLOAT16, true;
+  case "StorageBuffer8BitAccess";            return SPV_CAPABILITY_STORAGE_BUFFER8_BIT_ACCESS, true;
+  case "StorageBuffer16BitAccess";           return SPV_CAPABILITY_STORAGE_BUFFER16_BIT_ACCESS, true;
   case "StorageImageWriteWithoutFormat";     return SPV_CAPABILITY_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT, true;
   case "PhysicalStorageBufferAddresses";     return SPV_CAPABILITY_PHYSICAL_STORAGE_BUFFER_ADDRESSES, true;
   }
@@ -1181,7 +1185,11 @@ SPV_OP_SET_MESH_OUTPUTS_EXT    :: 5295;
 
 SPV_CAPABILITY_SHADER                          :: 1;
 SPV_CAPABILITY_FLOAT16                         :: 9;
+SPV_CAPABILITY_INT16                           :: 22;
 SPV_CAPABILITY_INT64                           :: 11;
+SPV_CAPABILITY_INT8                            :: 39;
+SPV_CAPABILITY_STORAGE_BUFFER16_BIT_ACCESS     :: 4433;
+SPV_CAPABILITY_STORAGE_BUFFER8_BIT_ACCESS      :: 4448;
 SPV_CAPABILITY_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT :: 56;
 SPV_CAPABILITY_PHYSICAL_STORAGE_BUFFER_ADDRESSES :: 5347;
 SPV_CAPABILITY_MESH_SHADING_EXT                :: 5283;

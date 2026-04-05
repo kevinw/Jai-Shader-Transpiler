@@ -14,6 +14,10 @@ IR_Shader_Header_Context :: struct {
 IR_Type_Kind :: enum {
   UNKNOWN;
   BOOL;
+  I8;
+  U8;
+  I16;
+  U16;
   I32;
   U32;
   I64;
@@ -70,8 +74,14 @@ IR_Struct :: struct {
 
 IR_Function_Constant_Type :: enum {
   BOOL;
+  U8;
+  S8;
+  U16;
+  S16;
   U32;
   S32;
+  U64;
+  S64;
   FLOAT;
   FLOAT2;
   FLOAT3;

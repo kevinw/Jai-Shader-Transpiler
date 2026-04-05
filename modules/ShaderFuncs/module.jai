@@ -279,3 +279,5 @@ is_even :: (v: float64) -> bool { return (cast(s32) floor(v)) % 2 == 0; }
 
 operator - :: (v: Vector2, scalar: float) -> Vector2 { return {v.x - scalar, v.y - scalar}; }
 operator + :: (v: Vector2, scalar: float) -> Vector2 { return {v.x + scalar, v.y + scalar}; }
+
+operator - :: (v: Vector4, scalar: float) -> Vector4 { return {v.x - scalar, v.y - scalar, v.z - scalar, v.w - scalar}; }

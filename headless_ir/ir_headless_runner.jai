@@ -46,6 +46,17 @@ check_not_contains :: (source: string, pattern: string, where: string) {
   }
 }
 
+check_contains_any :: (source: string, patterns: [] string, where: string) {
+  if !source fail("Test Failure: source was empty for %", where);
+  for patterns {
+    ok, _ := contains(source, it);
+    if ok return;
+  }
+  DEBUG_PATH :: "/tmp/test_failure_source.temp";
+  write_entire_file(DEBUG_PATH, source);
+  fail("Test Failure: Expected one of the requested patterns in %\n(source at %)", where, DEBUG_PATH);
+}
+
 check_generated_file_contains :: (path: string, pattern: string, where: string) {
   if !file_exists(path) fail("Expected generated file missing: %", path);
   source, ok := read_entire_file(path);
@@ -121,6 +132,11 @@ IR_Headless_Vertex_Out :: struct {
 
 ir_headless_use_alt_color: bool = false; @function_constant
 ir_headless_constant_color: Vector3 = .{1, 0, 0}; @function_constant
+IR_Headless_Function_Constant_Mode :: enum u8 {
+  Red :: 0;
+  Green :: 1;
+}
+ir_headless_function_mode: IR_Headless_Function_Constant_Mode = IR_Headless_Function_Constant_Mode.Green; @function_constant
 
 ir_headless_vertex_main :: (using input: IR_Headless_Vertex_In, using un: IR_Headless_Vertex_Uniforms) -> IR_Headless_Vertex_Out {
   using out: IR_Headless_Vertex_Out;
@@ -156,6 +172,11 @@ ir_headless_vertex_uint_div_main :: (using input: IR_Headless_Vertex_In, using u
 
 ir_headless_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
   if ir_headless_use_alt_color return Vector4.{0.0, 1.0, 0.0, 1.0};
+  return Vector4.{1.0, 0.0, 0.0, 1.0};
+} @fragment_shader
+
+ir_headless_narrow_enum_function_constant_fragment_main :: (using input: IR_Headless_Vertex_Out) -> Vector4 @SV_Target {
+  if ir_headless_function_mode == .Green return Vector4.{0.0, 1.0, 0.0, 1.0};
   return Vector4.{1.0, 0.0, 0.0, 1.0};
 } @fragment_shader
 
@@ -263,6 +284,21 @@ IR_Headless_Enum_Mode :: enum u32 {
   Box :: 1;
 }
 
+IR_Headless_Storage_Enum_U8 :: enum u8 {
+  Zero :: 0;
+  One :: 1;
+}
+
+IR_Headless_Storage_Enum_S16 :: enum s16 {
+  Neg :: -3;
+  Pos :: 7;
+}
+
+IR_Headless_Storage_Enum_U16 :: enum u16 {
+  Small :: 5;
+  Large :: 12;
+}
+
 IR_Headless_Fragment_Enum_Params :: struct {
   mode: IR_Headless_Enum_Mode;
   _pad0_x: float;
@@ -286,6 +322,16 @@ UVector3 :: struct {
 
 IR_Headless_Compute_Root :: struct {
   values: *u32;
+}
+
+IR_Headless_Compute_Enum_Row :: struct {
+  a: IR_Headless_Storage_Enum_U8;
+  b: IR_Headless_Storage_Enum_S16;
+  c: IR_Headless_Storage_Enum_U16;
+}
+
+IR_Headless_Compute_Enum_Table :: struct {
+  rows: *IR_Headless_Compute_Enum_Row;
 }
 
 IR_Headless_Compute_PingPong_Root :: struct {
@@ -468,6 +514,12 @@ ir_headless_fragment_enum_helper_call_main :: (using input: IR_Headless_Vertex_O
   out_color = .{v, input.color.y, input.color.z, 1.0};
   return out;
 } @fragment_shader
+
+ir_headless_compute_enum_storage_main :: (using input: IR_Headless_Compute_In, root: *IR_Headless_Compute_Enum_Table) {
+  if thread_id.x >= 1 return;
+  row := root.rows[0];
+  _ = cast(u32) row.a + cast,no_check(u32) cast(s32) row.b + cast(u32) row.c;
+} @compute_shader
 
 ir_headless_fragment_casted_fixed_alias_params_main :: (using input: IR_Headless_Vertex_Out, params: *IR_Headless_Fragment_Casted_Subscript_Params) -> IR_Headless_Fragment_Out {
   using out: IR_Headless_Fragment_Out;
@@ -924,6 +976,18 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
                                "SpecId 0",
                                "function-constant fragment SPIR-V output");
 
+  narrow_enum_function_constant_fragment := get_transpiled(.METAL, ir_headless_narrow_enum_function_constant_fragment_main);
+  check_contains(narrow_enum_function_constant_fragment, "function_constant(0)", "narrow enum function-constant fragment metal output");
+  check_contains_any(narrow_enum_function_constant_fragment, .["constant uchar&", "constant uchar &", "uchar "], "narrow enum function-constant fragment metal type");
+  check_generated_file_contains(tprint("%/ir_headless_narrow_enum_function_constant_fragment_main_frag.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpTypeInt 8 0",
+                               "narrow enum function-constant fragment SPIR-V narrow int output");
+  check_generated_file_contains(tprint("%/ir_headless_narrow_enum_function_constant_fragment_main_frag.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "Int8",
+                               "narrow enum function-constant fragment SPIR-V Int8 capability");
+
   vector_function_constant_fragment := get_transpiled(.METAL, ir_headless_vector_function_constant_fragment_main);
   check_contains(vector_function_constant_fragment, "function_constant(0)", "vector function-constant fragment metal output");
   check_contains(vector_function_constant_fragment, "float3", "vector function-constant fragment metal type");
@@ -960,6 +1024,32 @@ ir_headless_make_vec4 :: (x: float) -> Vector4 {
                                "enum helper-call fragment-params pair SPIR-V output");
   enum_helper_pair_path := tprint("%/ir_pair_fragment_enum_helper_call.metal", HEADLESS_IR_DIR);
   write_and_compile_metal_if_macos(enum_helper_pair_path, enum_helper_pair);
+
+  enum_storage_compute := get_transpiled(.METAL, ir_headless_compute_enum_storage_main);
+  check_contains(enum_storage_compute, "kernel", "enum storage compute metal output");
+  check_contains_any(enum_storage_compute, .["uchar ", "uchar\n", "uchar\t"], "enum storage compute metal u8 field type");
+  check_contains_any(enum_storage_compute, .["short ", "short\n", "short\t"], "enum storage compute metal s16 field type");
+  check_contains_any(enum_storage_compute, .["ushort ", "ushort\n", "ushort\t"], "enum storage compute metal u16 field type");
+  check_generated_file_contains(tprint("%/ir_headless_compute_enum_storage_main_comp.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpTypeInt 8 0",
+                               "enum storage compute SPIR-V u8 type");
+  check_generated_file_contains(tprint("%/ir_headless_compute_enum_storage_main_comp.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpTypeInt 16 0",
+                               "enum storage compute SPIR-V u16 type");
+  check_generated_file_contains(tprint("%/ir_headless_compute_enum_storage_main_comp.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "OpTypeInt 16 1",
+                               "enum storage compute SPIR-V s16 type");
+  check_generated_file_contains(tprint("%/ir_headless_compute_enum_storage_main_comp.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "StorageBuffer8BitAccess",
+                               "enum storage compute SPIR-V storage-buffer u8 capability");
+  check_generated_file_contains(tprint("%/ir_headless_compute_enum_storage_main_comp.spvasm",
+                                       HEADLESS_IR_INTERMEDIATE_DIR),
+                               "StorageBuffer16BitAccess",
+                               "enum storage compute SPIR-V storage-buffer 16-bit capability");
 
   casted_alias_pair := get_transpiled(.METAL, ir_headless_vertex_main, ir_headless_fragment_casted_fixed_alias_params_main);
   check_contains(casted_alias_pair, "fragment", "casted-fixed-alias fragment-params pair metal output");

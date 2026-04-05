@@ -330,6 +330,7 @@ manifest_make_pair_entry :: (ctx: *Shader_Write_Pair_Context, workspace_root: st
   out.output_metallib_path = copy_string(ctx.metal_output_metallib_path);
   out.primary_name = copy_string(ctx.vertex_fn.header.name);
   out.secondary_name = copy_string(ctx.fragment_fn.header.name);
+  out.tertiary_name = "";
   out.metal_vertex_entry = copy_string(ctx.metal_vertex_entry_name);
   out.metal_fragment_entry = copy_string(ctx.metal_fragment_entry_name);
   v_sig := manifest_header_signature(ctx.vertex_fn.header);
@@ -339,6 +340,44 @@ manifest_make_pair_entry :: (ctx: *Shader_Write_Pair_Context, workspace_root: st
 
   seen_headers: [..] *Code_Procedure_Header;
   manifest_collect_header_dependencies(ctx.vertex_fn.header, workspace_root, *out.dependencies, *seen_headers);
+  manifest_collect_header_dependencies(ctx.fragment_fn.header, workspace_root, *out.dependencies, *seen_headers);
+  return out;
+}
+
+manifest_make_mesh_entry :: (ctx: *Shader_Write_Mesh_Context, workspace_root: string) -> Shader_Reload_Manifest_Entry {
+  out: Shader_Reload_Manifest_Entry;
+  if !ctx || !ctx.mesh_fn || !ctx.fragment_fn || !ctx.mesh_fn.header || !ctx.fragment_fn.header return out;
+
+  target := manifest_target_from_language(ctx.language, ctx.glsl_target);
+  task_name := ifx ctx.task_fn && ctx.task_fn.header then ctx.task_fn.header.name else "";
+  mesh_name := ctx.mesh_fn.header.name;
+  fragment_name := ctx.fragment_fn.header.name;
+
+  out.request_name = copy_string(ctx.name);
+  out.entry_id = tprint("mesh|%|%|%|%", target, task_name, mesh_name, fragment_name);
+  out.shader_kind = "mesh";
+  out.stage = ifx task_name.count != 0 then "task_mesh" else "mesh";
+  out.target = target;
+  out.output_source_path = manifest_output_source_path(out.request_name, out.target);
+  if ctx.metal_output_source_path.count != 0 out.output_source_path = copy_string(ctx.metal_output_source_path);
+  out.output_air_path = copy_string(ctx.metal_output_air_path);
+  out.output_metallib_path = copy_string(ctx.metal_output_metallib_path);
+  out.primary_name = copy_string(task_name);
+  out.secondary_name = copy_string(mesh_name);
+  out.tertiary_name = copy_string(fragment_name);
+  out.metal_task_entry = copy_string(ctx.metal_task_entry_name);
+  out.metal_mesh_entry = copy_string(ctx.metal_mesh_entry_name);
+  out.metal_fragment_entry = copy_string(ctx.metal_fragment_entry_name);
+
+  task_sig := ifx ctx.task_fn && ctx.task_fn.header then manifest_header_signature(ctx.task_fn.header) else "";
+  mesh_sig := manifest_header_signature(ctx.mesh_fn.header);
+  fragment_sig := manifest_header_signature(ctx.fragment_fn.header);
+  out.signature = tprint("kind=mesh;target=%;task={%};mesh={%};fragment={%}", out.target, task_sig, mesh_sig, fragment_sig);
+  out.signature_hash = tprint("%", manifest_hash_u64(out.signature));
+
+  seen_headers: [..] *Code_Procedure_Header;
+  if ctx.task_fn && ctx.task_fn.header manifest_collect_header_dependencies(ctx.task_fn.header, workspace_root, *out.dependencies, *seen_headers);
+  manifest_collect_header_dependencies(ctx.mesh_fn.header, workspace_root, *out.dependencies, *seen_headers);
   manifest_collect_header_dependencies(ctx.fragment_fn.header, workspace_root, *out.dependencies, *seen_headers);
   return out;
 }
@@ -372,6 +411,9 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
     append(*sb, tprint("target %\n", it.target));
     append(*sb, tprint("primary_name %\n", it.primary_name));
     append(*sb, tprint("secondary_name %\n", it.secondary_name));
+    append(*sb, tprint("tertiary_name %\n", it.tertiary_name));
+    append(*sb, tprint("metal_task_entry %\n", it.metal_task_entry));
+    append(*sb, tprint("metal_mesh_entry %\n", it.metal_mesh_entry));
     append(*sb, tprint("metal_vertex_entry %\n", it.metal_vertex_entry));
     append(*sb, tprint("metal_fragment_entry %\n", it.metal_fragment_entry));
     append(*sb, tprint("metal_compute_entry %\n", it.metal_compute_entry));

@@ -3,7 +3,7 @@
 // running them on the GPU and CPU and comparing results.
 // 
 
-ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; Vec3; Vec4; Vec4Box; Vec4Large; TMFloat4Large; }; }).[
+ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; EnumStorage; Boids; Vec3; Vec4; Vec4Box; Vec4Large; TMFloat4Large; }; }).[
   {"simple", .Bare},
   {"loop", .Bare},
   {"locals", .Bare},
@@ -198,6 +198,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; Boids; V
   {"local_enum", .Bare},
   {"struct_with_enum", .Bare},
   {"enum_types", .Bare},
+  {"enum_storage_buffer_widths", .EnumStorage},
 ];
 
 ELEMENT_COUNT :: 64;
@@ -221,6 +222,7 @@ Compute_TM_Float4 :: struct {
 Compute_Table_Kind :: enum {
   U32;
   BOID_STATE;
+  ENUM_STORAGE;
   VEC3;
   VEC4;
   VEC4_BOX;
@@ -3220,6 +3222,36 @@ enum_types :: (using in: Compute_Semantics_In, values: *u32) {
     values[thread_id.x] += cast,no_check(u32)e1 + cast,no_check(u32)e2 + cast,no_check(u32)e3;
 } @compute_shader
 
+Enum_Table_U8 :: enum u8 {
+    A :: 1;
+    B :: 2;
+    C :: 3;
+}
+
+Enum_Table_S16 :: enum s16 {
+    Minus :: -7;
+    Zero :: 0;
+    Plus :: 11;
+}
+
+Enum_Table_U16 :: enum u16 {
+    Low :: 5;
+    Mid :: 9;
+    High :: 13;
+}
+
+Enum_Storage_Table :: struct {
+    small: Enum_Table_U8;
+    signed_mid: Enum_Table_S16;
+    mid: Enum_Table_U16;
+}
+
+enum_storage_buffer_widths :: (using in: Compute_Semantics_In, values: *u32, table: *Enum_Storage_Table) {
+    if thread_id.x >= ELEMENT_COUNT return;
+    entry := table[thread_id.x % 3];
+    values[thread_id.x] = cast(u32) entry.small + cast,no_check(u32) cast(s32) entry.signed_mid + cast(u32) entry.mid;
+} @compute_shader
+
 run_cpu_compute_dispatch :: (thread_count: s64, shader_proc: $F, values: *u32) #expand {
   for 0..thread_count-1 {
     `in := Compute_Semantics_In.{
@@ -3379,6 +3411,14 @@ run_compute_case_impl :: (source: string, case_name: string, cpu_shader_proc: $F
         boid := Compute_Boid_State.{pos = .{x = px, y = py}, vel = .{x = vx, y = vy}};
         gpu_table[it] = cast(TABLE_TYPE) boid;
         table_data[it] = cast(TABLE_TYPE) boid;
+      } else #if TABLE_KIND == .ENUM_STORAGE {
+        value := Enum_Storage_Table.{
+          small = cast(Enum_Table_U8) cast(u8) ((it % 5) + 1),
+          signed_mid = cast(Enum_Table_S16) cast(s16) ((it % 17) - 8),
+          mid = cast(Enum_Table_U16) cast(u16) (it * 11 + 23),
+        };
+        gpu_table[it] = cast(TABLE_TYPE) value;
+        table_data[it] = cast(TABLE_TYPE) value;
       } else #if TABLE_KIND == .VEC3 {
         vec := Vector3.{
           cast(float) it * 0.09 + 0.35,
@@ -3506,6 +3546,12 @@ run_compute_case_with_table :: (source: string, case_name: string, $cpu_shader_p
   proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
   if proc_name.count == 0 proc_name = "cpu_shader_proc";
   run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, u32, .U32);
+}
+
+run_compute_case_with_enum_storage_table :: (source: string, case_name: string, $cpu_shader_proc: $F, call := #caller_code) #expand {
+  proc_name := #run proc_name_from_caller_arg_compile_time(call, 2);
+  if proc_name.count == 0 proc_name = "cpu_shader_proc";
+  run_compute_case_impl(source, case_name, cpu_shader_proc, proc_name, true, Enum_Storage_Table, .ENUM_STORAGE);
 }
 
 run_compute_case_with_boid_table :: (source: string, case_name: string, $cpu_shader_proc: $F, call := #caller_code) #expand {
@@ -3659,6 +3705,7 @@ run_gpu_cpu_tests :: () {
       if #complete it.type == {
       case .Bare;    test_runner_func = "run_compute_case";
       case .Table;   test_runner_func = "run_compute_case_with_table";
+      case .EnumStorage; test_runner_func = "run_compute_case_with_enum_storage_table";
       case .Boids;   test_runner_func = "run_compute_case_with_boid_table";
       case .Vec3;    test_runner_func = "run_compute_case_with_vec3_table";
       case .Vec4;    test_runner_func = "run_compute_case_with_vec4_table";

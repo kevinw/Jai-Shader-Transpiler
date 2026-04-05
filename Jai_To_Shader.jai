@@ -534,6 +534,36 @@ get_transpiled_compute_named_exprs :: (compute_name: string, loc: Source_Code_Lo
     }
 }
 
+get_transpiled_mesh_pipeline_named_exprs :: (mesh_name: string, fragment_name: string, loc: Source_Code_Location = #caller_location) -> (bundle_expr: string, meta_expr: string, ok: bool) #compile_time {
+    if mesh_name.count == 0 || fragment_name.count == 0 return "", "", false;
+
+    request_name := tprint("transpiled_mesh_metal_%_%", mesh_name, fragment_name);
+    to_lower_in_place(request_name);
+    ensure_get_transpiled_request_registered(
+        tprint("mesh|%||%|%", "METAL", mesh_name, fragment_name),
+        tprint("% :: %; @shader_mesh_to_metal(%)\n", request_name, mesh_name, fragment_name),
+    );
+
+    bundle_expr := tprint("G.lookup_transpiled_mesh(\".METAL\", \"\", \"%\", \"%\")", mesh_name, fragment_name);
+    meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("mesh|METAL||%|%", mesh_name, fragment_name), function_constants_type_name_for_request(request_name));
+    return bundle_expr, meta_expr, true;
+}
+
+get_transpiled_task_mesh_pipeline_named_exprs :: (task_name: string, mesh_name: string, fragment_name: string, loc: Source_Code_Location = #caller_location) -> (bundle_expr: string, meta_expr: string, ok: bool) #compile_time {
+    if task_name.count == 0 || mesh_name.count == 0 || fragment_name.count == 0 return "", "", false;
+
+    request_name := tprint("transpiled_mesh_metal_%_%_%", task_name, mesh_name, fragment_name);
+    to_lower_in_place(request_name);
+    ensure_get_transpiled_request_registered(
+        tprint("mesh|%|%|%|%", "METAL", task_name, mesh_name, fragment_name),
+        tprint("% :: %; @shader_task_mesh_to_metal(\"%,%\")\n", request_name, task_name, mesh_name, fragment_name),
+    );
+
+    bundle_expr := tprint("G.lookup_transpiled_mesh(\".METAL\", \"%\", \"%\", \"%\")", task_name, mesh_name, fragment_name);
+    meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("mesh|METAL|%|%|%", task_name, mesh_name, fragment_name), function_constants_type_name_for_request(request_name));
+    return bundle_expr, meta_expr, true;
+}
+
 get_transpiled2 :: (vert: $V, frag: $F, target: Transpiled_Target, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
     #insert #run,stallable -> string {
         packed_names, canonical_target_expr := get_transpiled2_exprs_from_call(call, loc);
@@ -657,7 +687,7 @@ get_transpiled_mesh_pipeline :: (
         ensure_get_transpiled_request_registered(key, request_source);
 
         source_expr := tprint("G.lookup_transpiled_mesh(\".METAL\", \"\", \"%\", \"%\")", mesh_name, fragment_name);
-        meta_expr := tprint("Shader_Meta.{request_name = \"%\", function_constants_type_name = \"%\"}", request_name, function_constants_type_name_for_request(request_name));
+        meta_expr := tprint("Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("mesh|METAL||%|%", mesh_name, fragment_name), function_constants_type_name_for_request(request_name));
         return tprint(#string END
 G :: #import,file "%";
 bundle := %;
@@ -718,7 +748,7 @@ get_transpiled_task_mesh_pipeline :: (
         ensure_get_transpiled_request_registered(key, request_source);
 
         source_expr := tprint("G.lookup_transpiled_mesh(\".METAL\", \"%\", \"%\", \"%\")", task_name, mesh_name, fragment_name);
-        meta_expr := tprint("Shader_Meta.{request_name = \"%\", function_constants_type_name = \"%\"}", request_name, function_constants_type_name_for_request(request_name));
+        meta_expr := tprint("Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("mesh|METAL|%|%|%", task_name, mesh_name, fragment_name), function_constants_type_name_for_request(request_name));
         return tprint(#string END
 G :: #import,file "%";
 bundle := %;
@@ -853,6 +883,9 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             add_code(plugin, s2, "waiting_meshes");
             mark_generated_symbol_emitted(plugin, source_symbol);
           }
+
+          manifest_entry := manifest_make_mesh_entry(mesh_ctx, workspace_root);
+          if manifest_entry.request_name.count != 0 array_add(*plugin.manifest_entries, manifest_entry);
           remove mesh_ctx;
         }
 
@@ -998,8 +1031,14 @@ _add_source :: (p: *Metaprogram_Plugin) {
 
 shader_function_constant_type :: enum {
     BOOL;
+    U8;
+    S8;
+    U16;
+    S16;
     U32;
     S32;
+    U64;
+    S64;
     FLOAT;
     FLOAT2;
     FLOAT3;
@@ -1189,18 +1228,14 @@ emit_generated_function_constant_decl :: (plugin: *Jai_To_Shader_Plugin,
   if generated_symbol_already_emitted(plugin, struct_name) return;
 
   sb: String_Builder;
+  for constants {
+    alias_name := tprint("__%_%_type", base_name, it.name);
+    append(*sb, tprint("% :: type_of(%);\n", alias_name, it.name));
+  }
+  if constants.count > 0 append(*sb, "\n");
   append(*sb, tprint("% :: struct {\n", struct_name));
   for constants {
-    type_name := "bool";
-    if #complete it.type == {
-      case .BOOL;   type_name = "bool";
-      case .U32;    type_name = "u32";
-      case .S32;    type_name = "s32";
-      case .FLOAT;  type_name = "float";
-      case .FLOAT2; type_name = "Vector2";
-      case .FLOAT3; type_name = "Vector3";
-      case .FLOAT4; type_name = "Vector4";
-    }
+    type_name := tprint("__%_%_type", base_name, it.name);
     append(*sb, tprint("  %: % = %;\n", it.name, type_name, it.default_value_text));
   }
   append(*sb, "}\n\n");
@@ -2001,6 +2036,7 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   }
 
   task_source := "";
+  metal_task_entry_name := "";
   payload_struct_name := "";
   payload_size_bytes: s64 = 0;
   payload_memory_length: s64 = 0;
@@ -2032,7 +2068,7 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
     task_spv_path := tprint("%/%_task.spv", build_dir, mesh_ctx.name);
     task_opt_spv_path := tprint("%/%_task.opt.spv", build_dir, mesh_ctx.name);
     task_output_path := tprint("%/%_task.metal", build_dir, mesh_ctx.name);
-    metal_task_entry_name := "objectMain";
+    metal_task_entry_name = tprint("%_ObjectMain", mesh_ctx.name);
 
     if !write_entire_file(task_spv_path, task_spv.data, task_spv.count) {
       if task_spv.data free(task_spv.data);
@@ -2118,8 +2154,9 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   frag_opt_spv_path := tprint("%/%_frag.opt.spv", build_dir, mesh_ctx.name);
   mesh_output_path := tprint("%/%_mesh.metal", build_dir, mesh_ctx.name);
   frag_output_path := tprint("%/%_frag.metal", build_dir, mesh_ctx.name);
-  metal_mesh_entry_name := "meshMain";
-  metal_fragment_entry_name := "fragmentMain";
+  combined_output_path := tprint("%/%_mesh_pipeline.metal", build_dir, mesh_ctx.name);
+  metal_mesh_entry_name := tprint("%_MeshMain", mesh_ctx.name);
+  metal_fragment_entry_name := tprint("%_FragmentMain", mesh_ctx.name);
 
   if !write_entire_file(mesh_spv_path, mesh_spv.data, mesh_spv.count) || !write_entire_file(frag_spv_path, frag_spv.data, frag_spv.count) {
     if mesh_spv.data free(mesh_spv.data);
@@ -2176,6 +2213,17 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   frag_source = ir_prepend_generated_comment(frag_source, ir_source_file_from_mesh_context(mesh_ctx), ir_pipeline_label_spirv(.METAL));
   _ = write_entire_file(mesh_output_path, mesh_source);
   _ = write_entire_file(frag_output_path, frag_source);
+
+  combined_source := ifx task_source.count != 0
+      then tprint("%\n%\n%", task_source, mesh_source, frag_source)
+      else tprint("%\n%", mesh_source, frag_source);
+  _ = write_entire_file(combined_output_path, combined_source);
+
+  mesh_ctx.metal_output_source_path = copy_string(combined_output_path);
+  mesh_ctx.metal_output_air_path = copy_string(tprint("%.air", combined_output_path));
+  mesh_ctx.metal_task_entry_name = ifx task_source.count != 0 then copy_string(metal_task_entry_name) else "";
+  mesh_ctx.metal_mesh_entry_name = copy_string(metal_mesh_entry_name);
+  mesh_ctx.metal_fragment_entry_name = copy_string(metal_fragment_entry_name);
 
   bundle_symbol := source_symbol_name_for_request(mesh_ctx.name);
   decl := tprint(#string END
@@ -2715,6 +2763,12 @@ Shader_Write_Mesh_Context :: struct {
   task_fn: *Code_Procedure_Body;
   mesh_fn: *Code_Procedure_Body;
   fragment_fn: *Code_Procedure_Body;
+  metal_output_source_path: string;
+  metal_output_air_path: string;
+  metal_output_metallib_path: string;
+  metal_task_entry_name: string;
+  metal_mesh_entry_name: string;
+  metal_fragment_entry_name: string;
 }
 
 member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
