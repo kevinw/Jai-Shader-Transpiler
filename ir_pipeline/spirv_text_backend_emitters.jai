@@ -2368,8 +2368,8 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   module: SPV_Module;
   spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_SHADER);
   spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_MESH_SHADING_EXT);
-  if state_uses_int8(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT8);
-  if state_uses_int16(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT16);
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT8);
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT16);
   if state_uses_int64(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT64);
   if state_uses_storage_buffer_int8(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_STORAGE_BUFFER8_BIT_ACCESS);
   if state_uses_storage_buffer_int16(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_STORAGE_BUFFER16_BIT_ACCESS);
@@ -2526,8 +2526,8 @@ emit_task_generic_binary :: (shader: *IR_Task_Shader) -> (spv: [] u8, ok: bool, 
   module: SPV_Module;
   spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_SHADER);
   spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_MESH_SHADING_EXT);
-  if state_uses_int8(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT8);
-  if state_uses_int16(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT16);
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT8);
+  spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT16);
   if state_uses_int64(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_INT64);
   if state_uses_storage_buffer_int8(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_STORAGE_BUFFER8_BIT_ACCESS);
   if state_uses_storage_buffer_int16(*state) spv_module_append_words(*module, .CAPABILITIES, SPV_OP_CAPABILITY, SPV_CAPABILITY_STORAGE_BUFFER16_BIT_ACCESS);

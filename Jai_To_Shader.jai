@@ -516,7 +516,7 @@ split_packed_shader_names :: (packed_names: string) -> (string, string, bool) #c
 
 get_transpiled2_named_exprs :: (vert_name: string, frag_name: string, loc: Source_Code_Location = #caller_location) -> (source_expr: string, meta_expr: string, ok: bool) #compile_time {
     if vert_name.count == 0 || frag_name.count == 0 return "", "", false;
-
+    
     #if OS == .MACOS {
         canonical_target_expr := ".METAL";
         request_name := tprint("transpiled_pair_metal_%_%", vert_name, frag_name);
@@ -527,9 +527,14 @@ get_transpiled2_named_exprs :: (vert_name: string, frag_name: string, loc: Sourc
         );
         source_expr := tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, vert_name, frag_name);
         meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("pair|%|%|%", entry_id_target_name_from_canonical_target_expr(canonical_target_expr), vert_name, frag_name), function_constants_type_name_for_request(request_name));
+        
+        #if 0 {
+            log("----- source_expr:\n%\n------", source_expr);
+            log("----- meta_expr:\n%\n------", meta_expr);
+        }
+        
         return source_expr, meta_expr, true;
-    }
-    else {
+    } else {
         canonical_target_expr := ".VULKAN_GLSL";
         request_name := tprint("transpiled_pair_vulkan_glsl_%_%", vert_name, frag_name);
         to_lower_in_place(request_name);
@@ -813,12 +818,13 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       tc := cast(*Message_Typechecked) message;
       for tc.procedure_bodies {
         proc := it.expression;
-        already := false;
         for note: proc.header.notes {
             if note.text == {
             case "compute_shader"; #through;
             case "vertex_shader"; #through;
+            case "vertex"; #through;
             case "fragment_shader"; #through;
+            case "fragment"; #through;
             case "task_shader"; #through;
             case "mesh_shader";
               array_add_if_unique(*plugin.known_procedure_bodies, proc);
@@ -2441,6 +2447,7 @@ parse_shader_pair_note :: (note_text: string) -> (Shader_Language, GLSL_Target, 
 }
 
 parse_shader_mesh_note :: (note_text: string) -> (Shader_Language, GLSL_Target, string, string, bool, bool) {
+  // TODO: find a more generic way to pass messages between workspaces.
   prefixes := string.[
     "shader_mesh_to_metal(",
     "shader_task_mesh_to_metal(",
@@ -2665,10 +2672,15 @@ collect_shader_requests_from_declaration :: (plugin: *Jai_To_Shader_Plugin, decl
       return false;
     }
 
-    vertex_is_valid   := proc_has_note(vertex_proc.header, "vertex_shader");
-    fragment_is_valid := proc_has_note(fragment_proc.header, "fragment_shader");
-    if !vertex_is_valid || !fragment_is_valid {
-      compiler_report("Jai Shader Transpiler: shader_pair_to_* requires the declaration expression to resolve to a @vertex_shader and the note argument to resolve to a @fragment_shader.", make_location(decl));
+    vertex_is_valid   := proc_has_note(vertex_proc.header, "vertex_shader") || proc_has_note(vertex_proc.header, "vertex");
+    if !vertex_is_valid {
+        compiler_report("Jai Shader Transpiler: function is missing @vertex note", make_location(vertex_proc));
+        continue;
+    }
+    
+    fragment_is_valid := proc_has_note(fragment_proc.header, "fragment_shader") || proc_has_note(fragment_proc.header, "fragment");
+    if !fragment_is_valid {
+      compiler_report("Jai Shader Transpiler: function is missing @fragment note", make_location(vertex_proc));
       continue;
     }
 
@@ -2856,16 +2868,15 @@ member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {
 #load "metal_build.jai";
 
 #scope_file
-
 #import "Basic";
 #import "Compiler";
-PP :: #import "Program_Print";
 #import "String";
 #import "Math";
 #import "Hash_Table";
 #import "Thread";
 #import "System";
 #import "File";
+PP :: #import "Program_Print";
 FU :: #import "File_Utilities";
 Process :: #import "Process";
 
@@ -2880,19 +2891,36 @@ proc_has_note :: (node: *Code_Procedure_Header, note: string) -> bool {
   return false;
 }
 
-create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure_Body, glsl_target: GLSL_Target = .OPENGL) -> Shader_Write_Context {
+classify_procedure_by_note :: (proc_header: *Code_Procedure_Header) -> Shader_Type {
     shader_type: Shader_Type;
-    if      proc_has_note(proc.header, "vertex_shader")    shader_type = .Vertex;
-    else if proc_has_note(proc.header, "fragment_shader")  shader_type = .Fragment;
-    else if proc_has_note(proc.header, "compute_shader")   shader_type = .Compute;
-    else if proc_has_note(proc.header, "task_shader")      shader_type = .Task;
-    else if proc_has_note(proc.header, "mesh_shader")      shader_type = .Mesh;
-    else
-      compiler_report("Jai Shader Transpiler: No shader type tag found. Use @vertex_shader, @fragment_shader, @compute_shader, @task_shader, or @mesh_shader.", make_location(proc.header));
     
+    for proc_header.notes {
+        if it.text == {
+        case "vertex_shader";   return .Vertex;
+        case "vertex";   return .Vertex;
+        
+        case "fragment_shader"; return .Fragment;
+        case "fragment"; return .Fragment;
+        
+        case "compute_shader";  return .Compute;
+        case "compute";  return .Compute;
+        
+        case "task_shader";     return .Task;
+        case "task";     return .Task;
+        
+        case "mesh_shader";     return .Mesh;
+        case "mesh";     return .Mesh;
+        }
+    }
+    
+    compiler_report("Jai Shader Transpiler: No shader type note found. Use on of @vertex, @fragment, @compute, @task, or @mesh.", make_location(proc_header));
+    return .Vertex;
+}
+
+create_shader_write_context :: (language: Shader_Language, proc: *Code_Procedure_Body, glsl_target: GLSL_Target = .OPENGL) -> Shader_Write_Context {
     return {
         name = proc.header.name,
-        type = shader_type,
+        type = classify_procedure_by_note(proc.header),
         language = language,
         main_fn = proc,
         glsl_target = glsl_target,
