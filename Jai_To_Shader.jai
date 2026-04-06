@@ -1783,8 +1783,8 @@ write_shader_pair_ir_spirv :: (pair_ctx: *Shader_Write_Pair_Context) -> (string,
     return "", false, diag;
   }
 
-  // Keep direct bindings by default for pair shaders, but switch to argument buffers when
-  // bindless globals are present in SPIR-V text (required for large bindless arrays on Metal).
+  // Keep direct bindings by default for pair shaders. The shared graphics runtime currently
+  // expects buffer(0) to carry the root params struct directly on this path.
   use_metal_argument_buffers := false;
 
   assert(ir_vertex.entry_name.count != 0);
