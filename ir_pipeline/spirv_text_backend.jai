@@ -4200,11 +4200,16 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
   else return 0, .UNKNOWN, false, make_diag("unsupported float builtin '%'.", builtin_name);
 
   if value_type == .FLOAT2 {
-    if builtin_name == "sin" || builtin_name == "cos" || builtin_name == "sqrt" || builtin_name == "exp" {
-      return 0, .UNKNOWN, false, make_diag("builtin '%' on float2 is not supported yet.", builtin_name);
-    }
     out_v2 := spv_extinst1(s, s.id_float2, op_name, value_id);
     return out_v2, .FLOAT2, true, diag;
+  }
+  if value_type == .FLOAT3 {
+    out_v3 := spv_extinst1(s, s.id_float3, op_name, value_id);
+    return out_v3, .FLOAT3, true, diag;
+  }
+  if value_type == .FLOAT4 {
+    out_v4 := spv_extinst1(s, s.id_float4, op_name, value_id);
+    return out_v4, .FLOAT4, true, diag;
   }
 
   vf, vf_ok, vf_diag := coerce_to_float(s, value_id, value_type);

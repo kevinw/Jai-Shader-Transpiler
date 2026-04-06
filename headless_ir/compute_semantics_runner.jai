@@ -973,6 +973,14 @@ vector_negate :: (using in: Compute_Semantics_In, values: *u32) {
   values[idx] = cast(u32) abs(v.x) + cast(u32) abs(v.y);
 } @compute_shader
 
+vector_abs_builtin :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  v := Vector3.{cast(float) idx - 10.0, -2.5, cast(float) (idx % 5) - 2.0};
+  a := abs(v);
+  values[idx] = cast(u32) floor(a.x + a.y + a.z);
+} @compute_shader
+
 helper_nested_call :: (using in: Compute_Semantics_In, values: *u32) {
   if thread_id.x >= 64 return;
   idx := thread_id.x;

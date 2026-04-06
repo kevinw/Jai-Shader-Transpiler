@@ -298,6 +298,7 @@ state_uses_int64 :: (s: *IR_SPV_Gen_State) -> bool {
   for s.locals if kind_uses_int64(it.type) return true;
   for s.local_arrays if kind_uses_int64(it.element_type) return true;
   for s.global_const_arrays if kind_uses_int64(it.element_type) return true;
+  for s.local_structs for it.fields if kind_uses_int64(it.type) return true;
   for s.buffers {
     if kind_uses_int64(it.element_kind) return true;
     for it.fields if kind_uses_int64(it.type) return true;
@@ -309,10 +310,12 @@ state_uses_int64 :: (s: *IR_SPV_Gen_State) -> bool {
 }
 
 state_uses_int16 :: (s: *IR_SPV_Gen_State) -> bool {
+  if s.const_u16.count > 0 || s.const_i16.count > 0 return true;
   for s.function_constants if it.type == .U16 || it.type == .S16 return true;
   for s.locals if kind_uses_int16(it.type) return true;
   for s.local_arrays if kind_uses_int16(it.element_type) return true;
   for s.global_const_arrays if kind_uses_int16(it.element_type) return true;
+  for s.local_structs for it.fields if kind_uses_int16(it.type) return true;
   for s.buffers {
     if kind_uses_int16(it.element_kind) return true;
     for it.fields if kind_uses_int16(it.type) return true;
@@ -324,10 +327,12 @@ state_uses_int16 :: (s: *IR_SPV_Gen_State) -> bool {
 }
 
 state_uses_int8 :: (s: *IR_SPV_Gen_State) -> bool {
+  if s.const_u8.count > 0 || s.const_i8.count > 0 return true;
   for s.function_constants if it.type == .U8 || it.type == .S8 return true;
   for s.locals if kind_uses_int8(it.type) return true;
   for s.local_arrays if kind_uses_int8(it.element_type) return true;
   for s.global_const_arrays if kind_uses_int8(it.element_type) return true;
+  for s.local_structs for it.fields if kind_uses_int8(it.type) return true;
   for s.buffers {
     if kind_uses_int8(it.element_kind) return true;
     for it.fields if kind_uses_int8(it.type) return true;
