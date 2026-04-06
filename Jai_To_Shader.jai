@@ -2373,10 +2373,6 @@ queue_lookup_entry :: (plugin: *Jai_To_Shader_Plugin, target_name: string, prima
     tertiary_name = tertiary_name,
     symbol_name = symbol_name,
   });
-  if plugin.did_emit_lookup_overloads {
-    plugin.did_emit_lookup_overloads = false;
-    emit_lookup_overloads(plugin, plugin.workspace);
-  }
 }
 
 emit_lookup_overloads :: (plugin: *Jai_To_Shader_Plugin, workspace: Workspace) {
