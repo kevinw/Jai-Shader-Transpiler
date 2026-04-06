@@ -467,6 +467,16 @@ ir_code_struct_has_note :: (st: *Code_Struct, note_name: string) -> bool {
 ir_resolve_struct_node_from_type_expr :: (node: *Code_Node, depth: s64 = 0) -> *Code_Struct {
   if !node || depth > 8 return null;
   if node.kind == .STRUCT return cast(*Code_Struct) node;
+  if node.kind == .UNARY_OPERATOR {
+    un := cast(*Code_Unary_Operator) node;
+    if un.subexpression return ir_resolve_struct_node_from_type_expr(un.subexpression, depth + 1);
+    return null;
+  }
+  if node.kind == .CAST {
+    cn := cast(*Code_Cast) node;
+    if cn.expression return ir_resolve_struct_node_from_type_expr(cn.expression, depth + 1);
+    return null;
+  }
   if node.kind == .DECLARATION {
     decl := cast(*Code_Declaration) node;
     if decl.expression return ir_resolve_struct_node_from_type_expr(decl.expression, depth + 1);
@@ -486,17 +496,37 @@ ir_resolve_struct_node_from_type_expr :: (node: *Code_Node, depth: s64 = 0) -> *
 }
 
 ir_function_constants_struct_from_arg :: (arg: *Code_Declaration) -> (*Type_Info_Struct, *Code_Struct, bool) {
-  if !arg || !arg.type_inst || !arg.type_inst.result || arg.type_inst.result.type != .STRUCT return null, null, false;
+  if !arg || !arg.type_inst || !arg.type_inst.result return null, null, false;
+  result_type := arg.type_inst.result;
+  st: *Type_Info_Struct;
+  if result_type.type == .STRUCT {
+    st = cast(*Type_Info_Struct) result_type;
+  } else if result_type.type == .POINTER {
+    ptr := cast(*Type_Info_Pointer) result_type;
+    if !ptr.pointer_to || ptr.pointer_to.type != .STRUCT return null, null, false;
+    st = cast(*Type_Info_Struct) ptr.pointer_to;
+  } else {
+    return null, null, false;
+  }
   struct_node := ir_resolve_struct_node_from_type_expr(arg.type_inst.type_valued_expression);
   type_decl: *Code_Declaration;
-  if arg.type_inst.type_valued_expression && arg.type_inst.type_valued_expression.kind == .IDENT {
-    ident := cast(*Code_Ident) arg.type_inst.type_valued_expression;
+  ident_expr := arg.type_inst.type_valued_expression;
+  if ident_expr && ident_expr.kind == .UNARY_OPERATOR {
+    un := cast(*Code_Unary_Operator) ident_expr;
+    ident_expr = un.subexpression;
+  }
+  if ident_expr && ident_expr.kind == .CAST {
+    cn := cast(*Code_Cast) ident_expr;
+    ident_expr = cn.expression;
+  }
+  if ident_expr && ident_expr.kind == .IDENT {
+    ident := cast(*Code_Ident) ident_expr;
     type_decl = ident.resolved_declaration;
   }
   has_note := ir_code_struct_has_note(struct_node, "function_constants");
   if !has_note && type_decl has_note = ir_decl_has_note(type_decl, "function_constants");
   if !struct_node || !has_note return null, null, false;
-  return cast(*Type_Info_Struct) arg.type_inst.result, struct_node, true;
+  return st, struct_node, true;
 }
 
 ir_function_constant_type_from_type_info :: (type: *Type_Info) -> (IR_Function_Constant_Type, bool) {

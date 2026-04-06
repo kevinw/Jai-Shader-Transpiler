@@ -2281,9 +2281,13 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   jst_log_shader_output_path(mesh_output_path, "mesh stage shader");
   jst_log_shader_output_path(frag_output_path, "fragment stage shader");
 
+  combined_mesh_source := ifx task_source.count != 0
+      then jst_strip_duplicate_metal_bundle_preamble(mesh_source)
+      else mesh_source;
+  combined_frag_source := jst_strip_duplicate_metal_bundle_preamble(frag_source);
   combined_source := ifx task_source.count != 0
-      then tprint("%\n%\n%", task_source, mesh_source, frag_source)
-      else tprint("%\n%", mesh_source, frag_source);
+      then tprint("%\n%\n%", task_source, combined_mesh_source, combined_frag_source)
+      else tprint("%\n%", combined_mesh_source, combined_frag_source);
   _ = write_entire_file(combined_output_path, combined_source);
   jst_log_shader_output_path(combined_output_path, "final mesh shader bundle");
 
@@ -2948,4 +2952,40 @@ mark_generated_symbol_emitted :: (plugin: *Jai_To_Shader_Plugin, name: string) {
   if name.count == 0 return;
   if generated_symbol_already_emitted(plugin, name) return;
   array_add(*plugin.emitted_symbol_names, copy_string(name));
+}
+
+jst_is_duplicate_metal_bundle_preamble_line :: (line: string) -> bool {
+  if line.count == 0 return true;
+  if line == "#include <metal_stdlib>" return true;
+  if line == "#include <simd/simd.h>" return true;
+  if line == "using namespace metal;" return true;
+  if begins_with(line, "// Generated from ") return true;
+  if begins_with(line, "typedef packed_float4 packed_rm_float4x4") return true;
+  if begins_with(line, "constant ") && (contains(line, "[[function_constant(") || contains(line, "is_function_constant_defined(")) return true;
+  return false;
+}
+
+jst_strip_duplicate_metal_bundle_preamble :: (source: string) -> string {
+  if source.count == 0 return source;
+
+  sb: String_Builder;
+  sb.allocator = temp;
+
+  cursor: s64 = 0;
+  while cursor < source.count {
+    line_start := cursor;
+    while cursor < source.count && source[cursor] != #char "\n" cursor += 1;
+    line_end := cursor;
+    if cursor < source.count && source[cursor] == #char "\n" cursor += 1;
+
+    line := string.{line_end - line_start, source.data + line_start};
+    full_line := string.{cursor - line_start, source.data + line_start};
+
+    if jst_is_duplicate_metal_bundle_preamble_line(line) {
+      continue;
+    }
+    append(*sb, full_line);
+  }
+
+  return builder_to_string(*sb);
 }
