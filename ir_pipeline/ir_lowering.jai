@@ -1885,7 +1885,10 @@ ir_callee_matches_builtin :: (callee: string, builtin: string) -> bool {
 
 ir_builtin_call_kind_from_callee :: (callee: string) -> IR_Call_Builtin_Kind {
   name := ir_canonical_callee_name(callee);
+  if ir_callee_matches_builtin(name, "sample_2d_lod") return .SAMPLE_2D_LOD;
+  if ir_callee_matches_builtin(name, "sample_cube_lod") return .SAMPLE_CUBE_LOD;
   if ir_callee_matches_builtin(name, "sample_2d") return .SAMPLE_2D;
+  if ir_callee_matches_builtin(name, "sample_cube") return .SAMPLE_CUBE;
   if ir_callee_matches_builtin(name, "sample_3d") return .SAMPLE_3D;
   if ir_callee_matches_builtin(name, "write_2d") return .WRITE_2D;
   if ir_callee_matches_builtin(name, "write_3d") return .WRITE_3D;

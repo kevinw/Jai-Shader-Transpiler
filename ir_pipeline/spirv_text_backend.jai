@@ -391,6 +391,9 @@ call_helper_name_for_expr :: (expr: *IR_Expr) -> (string, bool) {
 
 call_builtin_kind_to_name :: (kind: IR_Call_Builtin_Kind) -> string {
   if kind == .SAMPLE_2D return "sample_2d";
+  if kind == .SAMPLE_2D_LOD return "sample_2d_lod";
+  if kind == .SAMPLE_CUBE return "sample_cube";
+  if kind == .SAMPLE_CUBE_LOD return "sample_cube_lod";
   if kind == .SAMPLE_3D return "sample_3d";
   if kind == .WRITE_2D return "write_2d";
   if kind == .WRITE_3D return "write_3d";
@@ -795,6 +798,7 @@ IR_SPV_Gen_State :: struct {
   physical_storage_struct_ptr_types: [..] IR_SPV_PS_Ptr_To_Ptr;
   use_physical_storage: bool;
   uses_sample_2d: bool;
+  uses_sample_cube: bool;
   uses_sample_3d: bool;
   uses_write_2d: bool;
   uses_write_3d: bool;
@@ -899,21 +903,28 @@ IR_SPV_Gen_State :: struct {
     id_ptr_uniform_int64: s64;
     id_ptr_uniform_uint64: s64;
     id_image2d: s64;
+    id_imagecube: s64;
     id_image3d: s64;
     id_sampler: s64;
     id_sampled_image2d: s64;
+    id_sampled_imagecube: s64;
     id_sampled_image3d: s64;
     id_image2d_array: s64;
+    id_imagecube_array: s64;
     id_image3d_array: s64;
     id_sampler_array: s64;
     id_ptr_uniformconst_image2d_array: s64;
+    id_ptr_uniformconst_imagecube_array: s64;
     id_ptr_uniformconst_image3d_array: s64;
     id_ptr_uniformconst_sampler_array: s64;
     id_ptr_uniformconst_image2d: s64;
+    id_ptr_uniformconst_imagecube: s64;
     id_ptr_uniformconst_image3d: s64;
     id_ptr_uniformconst_sampler: s64;
     id_sample_2d_textures_var: s64;
     id_sample_2d_samplers_var: s64;
+    id_sample_cube_textures_var: s64;
+    id_sample_cube_samplers_var: s64;
     id_sample_3d_textures_var: s64;
     id_sample_3d_samplers_var: s64;
     id_storage_image2d: s64;
@@ -995,7 +1006,7 @@ IR_SPV_Gen_State :: struct {
   uses_mesh_payload: bool;
 }
 
-BINDLESS_SAMPLED_TEXTURE_ARRAY_LEN :: 32;
+BINDLESS_SAMPLED_TEXTURE_ARRAY_LEN :: 63;
 BINDLESS_SAMPLED_TEXTURE_MAX_INDEX :: BINDLESS_SAMPLED_TEXTURE_ARRAY_LEN - 1;
 BINDLESS_SAMPLER_ARRAY_LEN :: 16;
 BINDLESS_SAMPLER_MAX_INDEX :: BINDLESS_SAMPLER_ARRAY_LEN - 1;
@@ -2779,6 +2790,26 @@ spv_load :: inline (s: *IR_SPV_Gen_State, type_id: s64, ptr_id: s64) -> s64 {
   return add_op(s, new_id(s), "OpLoad", type_id, ptr_id);
 }
 
+spv_image_sample_explicit_lod :: inline (s: *IR_SPV_Gen_State, result_type_id: s64, sampled_image_id: s64, coord_id: s64, lod_id: s64) -> s64 {
+  out := new_id(s);
+  if s.record_binary {
+    words: [..] u32;
+    array_add(*words,
+        cast(u32) result_type_id,
+        cast(u32) out,
+        cast(u32) sampled_image_id,
+        cast(u32) coord_id,
+        2,
+        cast(u32) lod_id);
+    array_add(*s.op_insts, .{opcode = SPV_OP_IMAGE_SAMPLE_EXPLICIT_LOD, words = words});
+  }
+  if s.emit_text {
+    append(*s.op_lines, tprint("         % = OpImageSampleExplicitLod % % % 2 %\n",
+                               id_text(out), id_text(result_type_id), id_text(sampled_image_id), id_text(coord_id), id_text(lod_id)));
+  }
+  return out;
+}
+
 spv_extinst1 :: inline (s: *IR_SPV_Gen_State, type_id: s64, op_name: string, a_id: s64) -> s64 {
   out := new_id(s);
   if s.record_binary {
@@ -4256,6 +4287,126 @@ emit_sample_2d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s
   return result, .FLOAT4, true, diag;
 }
 
+emit_sample_2d_lod_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if s.stage != .FRAGMENT return 0, .UNKNOWN, false, make_diag("sample_2d_lod is currently fragment-stage only.");
+  if args.count != 4      return 0, .UNKNOWN, false, make_diag("sample_2d_lod expects 4 args (texture_index, sampler_index, uv, lod).");
+
+  texture_index_id, texture_index_type, texture_index_ok, texture_index_diag := emit_expr(s, args[0]);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+  texture_index_id, texture_index_ok, texture_index_diag = coerce_to_kind(s, texture_index_id, texture_index_type, .UINT);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+
+  sampler_index_id, sampler_index_type, sampler_index_ok, sampler_index_diag := emit_expr(s, args[1]);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+  sampler_index_id, sampler_index_ok, sampler_index_diag = coerce_to_kind(s, sampler_index_id, sampler_index_type, .UINT);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+
+  sample_2d_max_index := get_u32_const(s, BINDLESS_SAMPLED_TEXTURE_MAX_INDEX);
+  clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, sample_2d_max_index);
+  sample_2d_max_sampler_index := get_u32_const(s, BINDLESS_SAMPLER_MAX_INDEX);
+  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_2d_max_sampler_index);
+
+  uv_id, uv_type, uv_ok, uv_diag := emit_expr(s, args[2]);
+  if !uv_ok return 0, .UNKNOWN, false, uv_diag;
+  uv_id, uv_ok, uv_diag = coerce_to_float2(s, uv_id, uv_type);
+  if !uv_ok return 0, .UNKNOWN, false, uv_diag;
+
+  lod_id, lod_type, lod_ok, lod_diag := emit_expr(s, args[3]);
+  if !lod_ok return 0, .UNKNOWN, false, lod_diag;
+  lod_id, lod_ok, lod_diag = coerce_to_kind(s, lod_id, lod_type, .FLOAT);
+  if !lod_ok return 0, .UNKNOWN, false, lod_diag;
+
+  tex_ptr       := spv_access_chain1(s, s.id_ptr_uniformconst_image2d, s.id_sample_2d_textures_var, clamped_texture_index);
+  tex_id        := spv_load(s, s.id_image2d, tex_ptr);
+  sampler_ptr   := spv_access_chain1(s, s.id_ptr_uniformconst_sampler, s.id_sample_2d_samplers_var, clamped_sampler_index);
+  sampler_id    := spv_load(s, s.id_sampler, sampler_ptr);
+  sampled_image := add_op(s, new_id(s), "OpSampledImage", s.id_sampled_image2d, tex_id, sampler_id);
+  result := spv_image_sample_explicit_lod(s, s.id_float4, sampled_image, uv_id, lod_id);
+
+  s.uses_sample_2d = true;
+  return result, .FLOAT4, true, diag;
+}
+
+emit_sample_cube_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if s.stage != .FRAGMENT return 0, .UNKNOWN, false, make_diag("sample_cube is currently fragment-stage only.");
+  if args.count != 3      return 0, .UNKNOWN, false, make_diag("sample_cube expects 3 args (texture_index, sampler_index, direction).");
+
+  texture_index_id, texture_index_type, texture_index_ok, texture_index_diag := emit_expr(s, args[0]);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+  texture_index_id, texture_index_ok, texture_index_diag = coerce_to_kind(s, texture_index_id, texture_index_type, .UINT);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+
+  sampler_index_id, sampler_index_type, sampler_index_ok, sampler_index_diag := emit_expr(s, args[1]);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+  sampler_index_id, sampler_index_ok, sampler_index_diag = coerce_to_kind(s, sampler_index_id, sampler_index_type, .UINT);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+
+  sample_cube_max_index := get_u32_const(s, BINDLESS_SAMPLED_TEXTURE_MAX_INDEX);
+  clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, sample_cube_max_index);
+  sample_cube_max_sampler_index := get_u32_const(s, BINDLESS_SAMPLER_MAX_INDEX);
+  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_cube_max_sampler_index);
+
+  direction_id, direction_type, direction_ok, direction_diag := emit_expr(s, args[2]);
+  if !direction_ok return 0, .UNKNOWN, false, direction_diag;
+  direction_id, direction_ok, direction_diag = coerce_to_kind(s, direction_id, direction_type, .FLOAT3);
+  if !direction_ok return 0, .UNKNOWN, false, direction_diag;
+
+  tex_ptr       := spv_access_chain1(s, s.id_ptr_uniformconst_imagecube, s.id_sample_cube_textures_var, clamped_texture_index);
+  tex_id        := spv_load(s, s.id_imagecube, tex_ptr);
+  sampler_var_id := ifx s.uses_sample_2d then s.id_sample_2d_samplers_var else ifx s.uses_sample_3d then s.id_sample_3d_samplers_var else s.id_sample_cube_samplers_var;
+  sampler_ptr   := spv_access_chain1(s, s.id_ptr_uniformconst_sampler, sampler_var_id, clamped_sampler_index);
+  sampler_id    := spv_load(s, s.id_sampler, sampler_ptr);
+  sampled_image := add_op(s, new_id(s), "OpSampledImage", s.id_sampled_imagecube, tex_id, sampler_id);
+  result        := add_op(s, new_id(s), "OpImageSampleImplicitLod", s.id_float4, sampled_image, direction_id);
+
+  s.uses_sample_cube = true;
+  return result, .FLOAT4, true, diag;
+}
+
+emit_sample_cube_lod_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
+  diag: IR_Diagnostic;
+  if s.stage != .FRAGMENT return 0, .UNKNOWN, false, make_diag("sample_cube_lod is currently fragment-stage only.");
+  if args.count != 4      return 0, .UNKNOWN, false, make_diag("sample_cube_lod expects 4 args (texture_index, sampler_index, direction, lod).");
+
+  texture_index_id, texture_index_type, texture_index_ok, texture_index_diag := emit_expr(s, args[0]);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+  texture_index_id, texture_index_ok, texture_index_diag = coerce_to_kind(s, texture_index_id, texture_index_type, .UINT);
+  if !texture_index_ok return 0, .UNKNOWN, false, texture_index_diag;
+
+  sampler_index_id, sampler_index_type, sampler_index_ok, sampler_index_diag := emit_expr(s, args[1]);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+  sampler_index_id, sampler_index_ok, sampler_index_diag = coerce_to_kind(s, sampler_index_id, sampler_index_type, .UINT);
+  if !sampler_index_ok return 0, .UNKNOWN, false, sampler_index_diag;
+
+  sample_cube_max_index := get_u32_const(s, BINDLESS_SAMPLED_TEXTURE_MAX_INDEX);
+  clamped_texture_index := spv_extinst2(s, s.id_uint, "UMin", texture_index_id, sample_cube_max_index);
+  sample_cube_max_sampler_index := get_u32_const(s, BINDLESS_SAMPLER_MAX_INDEX);
+  clamped_sampler_index := spv_extinst2(s, s.id_uint, "UMin", sampler_index_id, sample_cube_max_sampler_index);
+
+  direction_id, direction_type, direction_ok, direction_diag := emit_expr(s, args[2]);
+  if !direction_ok return 0, .UNKNOWN, false, direction_diag;
+  direction_id, direction_ok, direction_diag = coerce_to_kind(s, direction_id, direction_type, .FLOAT3);
+  if !direction_ok return 0, .UNKNOWN, false, direction_diag;
+
+  lod_id, lod_type, lod_ok, lod_diag := emit_expr(s, args[3]);
+  if !lod_ok return 0, .UNKNOWN, false, lod_diag;
+  lod_id, lod_ok, lod_diag = coerce_to_kind(s, lod_id, lod_type, .FLOAT);
+  if !lod_ok return 0, .UNKNOWN, false, lod_diag;
+
+  tex_ptr       := spv_access_chain1(s, s.id_ptr_uniformconst_imagecube, s.id_sample_cube_textures_var, clamped_texture_index);
+  tex_id        := spv_load(s, s.id_imagecube, tex_ptr);
+  sampler_var_id := ifx s.uses_sample_2d then s.id_sample_2d_samplers_var else ifx s.uses_sample_3d then s.id_sample_3d_samplers_var else s.id_sample_cube_samplers_var;
+  sampler_ptr   := spv_access_chain1(s, s.id_ptr_uniformconst_sampler, sampler_var_id, clamped_sampler_index);
+  sampler_id    := spv_load(s, s.id_sampler, sampler_ptr);
+  sampled_image := add_op(s, new_id(s), "OpSampledImage", s.id_sampled_imagecube, tex_id, sampler_id);
+  result := spv_image_sample_explicit_lod(s, s.id_float4, sampled_image, direction_id, lod_id);
+
+  s.uses_sample_cube = true;
+  return result, .FLOAT4, true, diag;
+}
+
 emit_sample_3d_call :: (s: *IR_SPV_Gen_State, args: [] *IR_Expr) -> (value_id: s64, value_type: IR_SPV_Gen_Type, ok: bool, diag: IR_Diagnostic) {
   diag: IR_Diagnostic;
   if s.stage != .FRAGMENT return 0, .UNKNOWN, false, make_diag("sample_3d is currently fragment-stage only.");
@@ -5673,8 +5824,12 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if call_builtin == .NONE {
           call_builtin = ir_builtin_call_kind_from_callee(expr.left.left.text);
           if call_builtin == .NONE {
+            has_sample_cube_lod, _ := contains(expr.left.left.text, "sample_cube_lod");
+            has_sample_cube, _ := contains(expr.left.left.text, "sample_cube");
             has_sample_3d, _ := contains(expr.left.left.text, "sample_3d");
             has_write_3d, _ := contains(expr.left.left.text, "write_3d");
+            if has_sample_cube_lod call_builtin = .SAMPLE_CUBE_LOD;
+            if has_sample_cube call_builtin = .SAMPLE_CUBE;
             if has_sample_3d call_builtin = .SAMPLE_3D;
             if has_write_3d call_builtin = .WRITE_3D;
           }
@@ -6308,8 +6463,12 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if builtin_kind == .NONE && helper_name_ok {
         builtin_kind = ir_builtin_call_kind_from_callee(helper_name);
         if builtin_kind == .NONE {
+          has_sample_cube_lod, _ := contains(helper_name, "sample_cube_lod");
+          has_sample_cube, _ := contains(helper_name, "sample_cube");
           has_sample_3d, _ := contains(helper_name, "sample_3d");
           has_write_3d, _ := contains(helper_name, "write_3d");
+          if has_sample_cube_lod builtin_kind = .SAMPLE_CUBE_LOD;
+          if has_sample_cube builtin_kind = .SAMPLE_CUBE;
           if has_sample_3d builtin_kind = .SAMPLE_3D;
           if has_write_3d builtin_kind = .WRITE_3D;
         }
@@ -6317,6 +6476,18 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
       if !helper_name_ok && builtin_kind == .NONE return_err("unsupported call target expression.");
       if builtin_kind == .SAMPLE_2D {
         sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_2d_call(s, expr.args);
+        return sampled_id, sampled_type, sampled_ok, sampled_diag;
+      }
+      if builtin_kind == .SAMPLE_2D_LOD {
+        sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_2d_lod_call(s, expr.args);
+        return sampled_id, sampled_type, sampled_ok, sampled_diag;
+      }
+      if builtin_kind == .SAMPLE_CUBE {
+        sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_cube_call(s, expr.args);
+        return sampled_id, sampled_type, sampled_ok, sampled_diag;
+      }
+      if builtin_kind == .SAMPLE_CUBE_LOD {
+        sampled_id, sampled_type, sampled_ok, sampled_diag := emit_sample_cube_lod_call(s, expr.args);
         return sampled_id, sampled_type, sampled_ok, sampled_diag;
       }
       if builtin_kind == .SAMPLE_3D {
@@ -7695,8 +7866,12 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
       if builtin_kind == .NONE && helper_name_ok {
         builtin_kind = ir_builtin_call_kind_from_callee(helper_name);
         if builtin_kind == .NONE {
+          has_sample_cube_lod, _ := contains(helper_name, "sample_cube_lod");
+          has_sample_cube, _ := contains(helper_name, "sample_cube");
           has_sample_3d, _ := contains(helper_name, "sample_3d");
           has_write_3d, _ := contains(helper_name, "write_3d");
+          if has_sample_cube_lod builtin_kind = .SAMPLE_CUBE_LOD;
+          if has_sample_cube builtin_kind = .SAMPLE_CUBE;
           if has_sample_3d builtin_kind = .SAMPLE_3D;
           if has_write_3d builtin_kind = .WRITE_3D;
         }

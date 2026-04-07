@@ -229,6 +229,9 @@ IR_Call_Target_Kind :: enum {
 IR_Call_Builtin_Kind :: enum {
   NONE;
   SAMPLE_2D;
+  SAMPLE_2D_LOD;
+  SAMPLE_CUBE;
+  SAMPLE_CUBE_LOD;
   SAMPLE_3D;
   WRITE_2D;
   WRITE_3D;

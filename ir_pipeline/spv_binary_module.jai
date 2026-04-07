@@ -605,6 +605,7 @@ spv_opcode_requires_result_type_and_id :: (opcode: u16) -> bool {
   if opcode == SPV_OP_LOAD return true;
   if opcode == SPV_OP_SAMPLE_IMAGE return true;
   if opcode == SPV_OP_IMAGE_SAMPLE_IMPLICIT_LOD return true;
+  if opcode == SPV_OP_IMAGE_SAMPLE_EXPLICIT_LOD return true;
   if opcode == SPV_OP_SELECT return true;
   if opcode == SPV_OP_MATRIX_TIMES_VECTOR return true;
   if opcode == SPV_OP_FADD return true;
@@ -870,6 +871,7 @@ spv_lookup_opcode :: (name: string) -> (u16, bool) {
   case "OpUnreachable";            return SPV_OP_UNREACHABLE, true;
   case "OpSampledImage";           return SPV_OP_SAMPLE_IMAGE, true;
   case "OpImageSampleImplicitLod"; return SPV_OP_IMAGE_SAMPLE_IMPLICIT_LOD, true;
+  case "OpImageSampleExplicitLod"; return SPV_OP_IMAGE_SAMPLE_EXPLICIT_LOD, true;
   case "OpImageWrite";             return SPV_OP_IMAGE_WRITE, true;
   case "OpSelect";                 return SPV_OP_SELECT, true;
   case "OpFNegate";                return SPV_OP_FNEGATE, true;
@@ -1119,6 +1121,7 @@ SPV_OP_COMPOSITE_CONSTRUCT     :: 80;
 SPV_OP_COMPOSITE_EXTRACT       :: 81;
 SPV_OP_SAMPLE_IMAGE            :: 86;
 SPV_OP_IMAGE_SAMPLE_IMPLICIT_LOD :: 87;
+SPV_OP_IMAGE_SAMPLE_EXPLICIT_LOD :: 88;
 SPV_OP_IMAGE_WRITE             :: 99;
 SPV_OP_CONVERT_F_TO_U          :: 109;
 SPV_OP_CONVERT_F_TO_S          :: 110;
@@ -1246,6 +1249,7 @@ SPV_STORAGE_CLASS_PHYSICAL_STORAGE_BUFFER      :: 5349;
 
 SPV_DIM_2D                                     :: 1;
 SPV_DIM_3D                                     :: 2;
+SPV_DIM_CUBE                                   :: 3;
 SPV_IMAGE_FORMAT_UNKNOWN                       :: 0;
 
 SPV_MEMORY_ACCESS_ALIGNED_MASK                 :: 2;

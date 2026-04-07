@@ -1,6 +1,7 @@
 SAMPLE_2D_TEXTURES_BINDING :: 1;
 SAMPLE_2D_SAMPLERS_BINDING :: 0;
-SAMPLE_3D_TEXTURES_BINDING :: 1;
+SAMPLE_CUBE_TEXTURES_BINDING :: 64;
+SAMPLE_3D_TEXTURES_BINDING :: 64;
 SAMPLE_3D_SAMPLERS_BINDING :: 0;
 WRITE_2D_TEXTURES_BINDING :: 1;
 WRITE_3D_TEXTURES_BINDING :: 1;
@@ -143,6 +144,31 @@ spv_append_sample_2d_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_sample_2d_samplers_var), id_text(s.id_ptr_uniformconst_sampler_array)));
 }
 
+spv_append_sample_cube_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  if !s.uses_sample_cube return;
+  append(sb, tprint("% = OpTypeImage % Cube 0 0 0 1 Unknown\n", id_text(s.id_imagecube), id_text(s.id_float)));
+  if !s.uses_sample_2d && !s.uses_sample_3d {
+    append(sb, tprint("% = OpTypeSampler\n", id_text(s.id_sampler)));
+  }
+  append(sb, tprint("% = OpTypeSampledImage %\n", id_text(s.id_sampled_imagecube), id_text(s.id_imagecube)));
+  append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_imagecube_array), id_text(s.id_imagecube), id_text(s.id_sampled_texture_array_len_const)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_imagecube_array), id_text(s.id_imagecube_array)));
+  append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_imagecube), id_text(s.id_imagecube)));
+  if !s.uses_sample_2d && !s.uses_sample_3d {
+    append(sb, tprint("% = OpTypeArray % %\n", id_text(s.id_sampler_array), id_text(s.id_sampler), id_text(s.id_sampler_array_len_const)));
+    append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_sampler_array), id_text(s.id_sampler_array)));
+    append(sb, tprint("% = OpTypePointer UniformConstant %\n", id_text(s.id_ptr_uniformconst_sampler), id_text(s.id_sampler)));
+  }
+}
+
+spv_append_sample_cube_vars :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
+  if !s.uses_sample_cube return;
+  append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_sample_cube_textures_var), id_text(s.id_ptr_uniformconst_imagecube_array)));
+  if !s.uses_sample_2d && !s.uses_sample_3d {
+    append(sb, tprint("% = OpVariable % UniformConstant\n", id_text(s.id_sample_cube_samplers_var), id_text(s.id_ptr_uniformconst_sampler_array)));
+  }
+}
+
 spv_append_sample_3d_type_decls :: (sb: *String_Builder, s: *IR_SPV_Gen_State) {
   if !s.uses_sample_3d return;
   append(sb, tprint("% = OpTypeImage % 3D 0 0 0 1 Unknown\n", id_text(s.id_image3d), id_text(s.id_float)));
@@ -201,6 +227,19 @@ spv_module_append_sampled_image_decls_binary :: (m: *SPV_Module, s: *IR_SPV_Gen_
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_image2d, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_image2d);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_sampler, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_sampler);
   }
+  if s.uses_sample_cube {
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_IMAGE, cast(u32) s.id_imagecube, cast(u32) s.id_float, SPV_DIM_CUBE, 0, 0, 0, 1, SPV_IMAGE_FORMAT_UNKNOWN);
+    if !s.uses_sample_2d && !s.uses_sample_3d {
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_SAMPLER, cast(u32) s.id_sampler);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_sampler_array, cast(u32) s.id_sampler, cast(u32) s.id_sampler_array_len_const);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_sampler_array, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_sampler_array);
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_sampler, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_sampler);
+    }
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_SAMPLED_IMAGE, cast(u32) s.id_sampled_imagecube, cast(u32) s.id_imagecube);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_ARRAY, cast(u32) s.id_imagecube_array, cast(u32) s.id_imagecube, cast(u32) s.id_sampled_texture_array_len_const);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_imagecube_array, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_imagecube_array);
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_POINTER, cast(u32) s.id_ptr_uniformconst_imagecube, SPV_STORAGE_CLASS_UNIFORM_CONSTANT, cast(u32) s.id_imagecube);
+  }
   if s.uses_sample_3d {
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_TYPE_IMAGE, cast(u32) s.id_image3d, cast(u32) s.id_float, SPV_DIM_3D, 0, 0, 0, 1, SPV_IMAGE_FORMAT_UNKNOWN);
     if !s.uses_sample_2d {
@@ -239,6 +278,12 @@ spv_module_append_sampled_storage_image_vars_binary :: (m: *SPV_Module, s: *IR_S
   if s.uses_sample_2d {
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) s.id_ptr_uniformconst_image2d_array, cast(u32) s.id_sample_2d_textures_var, SPV_STORAGE_CLASS_UNIFORM_CONSTANT);
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) s.id_ptr_uniformconst_sampler_array, cast(u32) s.id_sample_2d_samplers_var, SPV_STORAGE_CLASS_UNIFORM_CONSTANT);
+  }
+  if s.uses_sample_cube {
+    spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) s.id_ptr_uniformconst_imagecube_array, cast(u32) s.id_sample_cube_textures_var, SPV_STORAGE_CLASS_UNIFORM_CONSTANT);
+    if !s.uses_sample_2d && !s.uses_sample_3d {
+      spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) s.id_ptr_uniformconst_sampler_array, cast(u32) s.id_sample_cube_samplers_var, SPV_STORAGE_CLASS_UNIFORM_CONSTANT);
+    }
   }
   if s.uses_sample_3d {
     spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_VARIABLE, cast(u32) s.id_ptr_uniformconst_image3d_array, cast(u32) s.id_sample_3d_textures_var, SPV_STORAGE_CLASS_UNIFORM_CONSTANT);
@@ -508,6 +553,10 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_textures_var));
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_samplers_var));
   }
+  if state.uses_sample_cube {
+    append(*entry_point_sb, " ", id_text(state.id_sample_cube_textures_var));
+    if !state.uses_sample_2d && !state.uses_sample_3d append(*entry_point_sb, " ", id_text(state.id_sample_cube_samplers_var));
+  }
   if state.uses_sample_3d {
     append(*entry_point_sb, " ", id_text(state.id_sample_3d_textures_var));
     append(*entry_point_sb, " ", id_text(state.id_sample_3d_samplers_var));
@@ -531,6 +580,10 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
   if state.uses_sample_2d {
     append(*sb, tprint("               OpName % \"sample_2d_textures\"\n", id_text(state.id_sample_2d_textures_var)));
     append(*sb, tprint("               OpName % \"sample_2d_samplers\"\n", id_text(state.id_sample_2d_samplers_var)));
+  }
+  if state.uses_sample_cube {
+    append(*sb, tprint("               OpName % \"sample_cube_textures\"\n", id_text(state.id_sample_cube_textures_var)));
+    if !state.uses_sample_2d && !state.uses_sample_3d append(*sb, tprint("               OpName % \"sample_cube_samplers\"\n", id_text(state.id_sample_cube_samplers_var)));
   }
   if state.uses_sample_3d {
     append(*sb, tprint("               OpName % \"sample_3d_textures\"\n", id_text(state.id_sample_3d_textures_var)));
@@ -566,6 +619,14 @@ emit_graphics_physical_pointer_abi :: (stage: IR_SPV_Gen_Stage,
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_textures_var)));
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_2d_samplers_var), SAMPLE_2D_SAMPLERS_BINDING));
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_samplers_var)));
+  }
+  if state.uses_sample_cube {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_cube_textures_var), SAMPLE_CUBE_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_cube_textures_var)));
+    if !state.uses_sample_2d && !state.uses_sample_3d {
+      append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_cube_samplers_var), SAMPLE_2D_SAMPLERS_BINDING));
+      append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_cube_samplers_var)));
+    }
   }
   if state.uses_sample_3d {
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_3d_textures_var), SAMPLE_3D_TEXTURES_BINDING));
@@ -863,6 +924,10 @@ emit_graphics_physical_pointer_abi_binary :: (stage: IR_SPV_Gen_Stage,
   for state.global_const_arrays array_add(*interface_ids, cast(u32) it.var_id);
   array_add(*interface_ids, cast(u32) root_var_id);
   if state.uses_sample_2d array_add(*interface_ids, cast(u32) state.id_sample_2d_textures_var, cast(u32) state.id_sample_2d_samplers_var);
+  if state.uses_sample_cube {
+    array_add(*interface_ids, cast(u32) state.id_sample_cube_textures_var);
+    if !state.uses_sample_2d && !state.uses_sample_3d array_add(*interface_ids, cast(u32) state.id_sample_cube_samplers_var);
+  }
   if state.uses_sample_3d array_add(*interface_ids, cast(u32) state.id_sample_3d_textures_var, cast(u32) state.id_sample_3d_samplers_var);
   if state.uses_write_2d array_add(*interface_ids, cast(u32) state.id_write_2d_textures_var);
   if state.uses_write_3d array_add(*interface_ids, cast(u32) state.id_write_3d_textures_var);
@@ -879,6 +944,10 @@ emit_graphics_physical_pointer_abi_binary :: (stage: IR_SPV_Gen_Stage,
   if state.uses_sample_2d {
     spv_module_append_name(*module, cast(u32) state.id_sample_2d_textures_var, "sample_2d_textures");
     spv_module_append_name(*module, cast(u32) state.id_sample_2d_samplers_var, "sample_2d_samplers");
+  }
+  if state.uses_sample_cube {
+    spv_module_append_name(*module, cast(u32) state.id_sample_cube_textures_var, "sample_cube_textures");
+    if !state.uses_sample_2d && !state.uses_sample_3d spv_module_append_name(*module, cast(u32) state.id_sample_cube_samplers_var, "sample_cube_samplers");
   }
   if state.uses_sample_3d {
     spv_module_append_name(*module, cast(u32) state.id_sample_3d_textures_var, "sample_3d_textures");
@@ -920,6 +989,14 @@ emit_graphics_physical_pointer_abi_binary :: (stage: IR_SPV_Gen_Stage,
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_textures_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_samplers_var, SPV_DECORATION_BINDING, SAMPLE_2D_SAMPLERS_BINDING);
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_samplers_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+  }
+  if state.uses_sample_cube {
+    spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_textures_var, SPV_DECORATION_BINDING, SAMPLE_CUBE_TEXTURES_BINDING);
+    spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_textures_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+    if !state.uses_sample_2d && !state.uses_sample_3d {
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_samplers_var, SPV_DECORATION_BINDING, SAMPLE_2D_SAMPLERS_BINDING);
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_samplers_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+    }
   }
   if state.uses_sample_3d {
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_3d_textures_var, SPV_DECORATION_BINDING, SAMPLE_3D_TEXTURES_BINDING);
@@ -1029,6 +1106,7 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
+  state.uses_sample_cube = analysis.uses_sample_cube;
   state.uses_sample_3d = analysis.uses_sample_3d;
   init_ok, init_diag := init_base(*state, analysis.expanded_buffers, 1);
   if !init_ok return "", false, init_diag;
@@ -1224,6 +1302,10 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_textures_var));
     append(*entry_point_sb, " ", id_text(state.id_sample_2d_samplers_var));
   }
+  if state.uses_sample_cube {
+    append(*entry_point_sb, " ", id_text(state.id_sample_cube_textures_var));
+    if !state.uses_sample_2d && !state.uses_sample_3d append(*entry_point_sb, " ", id_text(state.id_sample_cube_samplers_var));
+  }
   if state.uses_sample_3d {
     append(*entry_point_sb, " ", id_text(state.id_sample_3d_textures_var));
     append(*entry_point_sb, " ", id_text(state.id_sample_3d_samplers_var));
@@ -1247,6 +1329,10 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
   if state.uses_sample_2d {
     append(*sb, tprint("               OpName % \"sample_2d_textures\"\n", id_text(state.id_sample_2d_textures_var)));
     append(*sb, tprint("               OpName % \"sample_2d_samplers\"\n", id_text(state.id_sample_2d_samplers_var)));
+  }
+  if state.uses_sample_cube {
+    append(*sb, tprint("               OpName % \"sample_cube_textures\"\n", id_text(state.id_sample_cube_textures_var)));
+    if !state.uses_sample_2d && !state.uses_sample_3d append(*sb, tprint("               OpName % \"sample_cube_samplers\"\n", id_text(state.id_sample_cube_samplers_var)));
   }
   if state.uses_sample_3d {
     append(*sb, tprint("               OpName % \"sample_3d_textures\"\n", id_text(state.id_sample_3d_textures_var)));
@@ -1272,6 +1358,14 @@ emit_graphics_generic :: (stage: IR_SPV_Gen_Stage, source_name: string, input: I
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_textures_var)));
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_2d_samplers_var), SAMPLE_2D_SAMPLERS_BINDING));
     append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_2d_samplers_var)));
+  }
+  if state.uses_sample_cube {
+    append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_cube_textures_var), SAMPLE_CUBE_TEXTURES_BINDING));
+    append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_cube_textures_var)));
+    if !state.uses_sample_2d && !state.uses_sample_3d {
+      append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_cube_samplers_var), SAMPLE_2D_SAMPLERS_BINDING));
+      append(*sb, tprint("               OpDecorate % DescriptorSet 0\n", id_text(state.id_sample_cube_samplers_var)));
+    }
   }
   if state.uses_sample_3d {
     append(*sb, tprint("               OpDecorate % Binding %\n", id_text(state.id_sample_3d_textures_var), SAMPLE_3D_TEXTURES_BINDING));
@@ -1366,6 +1460,7 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
   array_add(*state.extra_structs, output);
   state.output_struct_type_name = output.name;
   state.uses_sample_2d = analysis.uses_sample_2d;
+  state.uses_sample_cube = analysis.uses_sample_cube;
   state.uses_sample_3d = analysis.uses_sample_3d;
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
@@ -1563,6 +1658,10 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
   if state.uses_sample_2d {
     array_add(*interface_ids, cast(u32) state.id_sample_2d_textures_var, cast(u32) state.id_sample_2d_samplers_var);
   }
+  if state.uses_sample_cube {
+    array_add(*interface_ids, cast(u32) state.id_sample_cube_textures_var);
+    if !state.uses_sample_2d && !state.uses_sample_3d array_add(*interface_ids, cast(u32) state.id_sample_cube_samplers_var);
+  }
   if state.uses_sample_3d {
     array_add(*interface_ids, cast(u32) state.id_sample_3d_textures_var, cast(u32) state.id_sample_3d_samplers_var);
   }
@@ -1581,6 +1680,10 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
   if state.uses_sample_2d {
     spv_module_append_name(*module, cast(u32) state.id_sample_2d_textures_var, "sample_2d_textures");
     spv_module_append_name(*module, cast(u32) state.id_sample_2d_samplers_var, "sample_2d_samplers");
+  }
+  if state.uses_sample_cube {
+    spv_module_append_name(*module, cast(u32) state.id_sample_cube_textures_var, "sample_cube_textures");
+    if !state.uses_sample_2d && !state.uses_sample_3d spv_module_append_name(*module, cast(u32) state.id_sample_cube_samplers_var, "sample_cube_samplers");
   }
   if state.uses_sample_3d {
     spv_module_append_name(*module, cast(u32) state.id_sample_3d_textures_var, "sample_3d_textures");
@@ -1617,6 +1720,14 @@ emit_graphics_generic_binary :: (stage: IR_SPV_Gen_Stage, source_name: string, i
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_textures_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_samplers_var, SPV_DECORATION_BINDING, SAMPLE_2D_SAMPLERS_BINDING);
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_samplers_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+  }
+  if state.uses_sample_cube {
+    spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_textures_var, SPV_DECORATION_BINDING, SAMPLE_CUBE_TEXTURES_BINDING);
+    spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_textures_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+    if !state.uses_sample_2d && !state.uses_sample_3d {
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_samplers_var, SPV_DECORATION_BINDING, SAMPLE_2D_SAMPLERS_BINDING);
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_samplers_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+    }
   }
   if state.uses_sample_3d {
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_3d_textures_var, SPV_DECORATION_BINDING, SAMPLE_3D_TEXTURES_BINDING);
@@ -1682,6 +1793,7 @@ IR_SPV_Compute_Analysis :: struct {
   uses_write_2d: bool;
   uses_write_3d: bool;
   uses_sample_2d: bool;
+  uses_sample_cube: bool;
   uses_sample_3d: bool;
   expanded_buffers: [..] IR_Compute_Buffer;
 }
@@ -1691,6 +1803,7 @@ IR_SPV_Graphics_Analysis :: struct {
   uses_write_2d: bool;
   uses_write_3d: bool;
   uses_sample_2d: bool;
+  uses_sample_cube: bool;
   uses_sample_3d: bool;
   expanded_buffers: [..] IR_Compute_Buffer;
 }
@@ -1700,58 +1813,59 @@ IR_SPV_Mesh_Output_Limits :: struct {
   primitive_count: u32 = 1;
 }
 
-spv_analyze_builtin_usage_expr :: (expr: *IR_Expr, uses_write_2d: *bool, uses_write_3d: *bool, uses_sample_2d: *bool, uses_sample_3d: *bool) {
+spv_analyze_builtin_usage_expr :: (expr: *IR_Expr, uses_write_2d: *bool, uses_write_3d: *bool, uses_sample_2d: *bool, uses_sample_cube: *bool, uses_sample_3d: *bool) {
   if !expr return;
   if expr.kind == .CALL {
     call_builtin := call_builtin_kind_for_expr(expr);
     if call_builtin == .WRITE_2D uses_write_2d.* = true;
     if call_builtin == .WRITE_3D uses_write_3d.* = true;
-    if call_builtin == .SAMPLE_2D uses_sample_2d.* = true;
+    if call_builtin == .SAMPLE_2D || call_builtin == .SAMPLE_2D_LOD uses_sample_2d.* = true;
+    if call_builtin == .SAMPLE_CUBE || call_builtin == .SAMPLE_CUBE_LOD uses_sample_cube.* = true;
     if call_builtin == .SAMPLE_3D uses_sample_3d.* = true;
   }
-  spv_analyze_builtin_usage_expr(expr.left, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-  spv_analyze_builtin_usage_expr(expr.right, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-  for expr.args spv_analyze_builtin_usage_expr(it, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+  spv_analyze_builtin_usage_expr(expr.left, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+  spv_analyze_builtin_usage_expr(expr.right, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+  for expr.args spv_analyze_builtin_usage_expr(it, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
 }
 
-spv_analyze_builtin_usage_block :: (block: *IR_Block, uses_write_2d: *bool, uses_write_3d: *bool, uses_sample_2d: *bool, uses_sample_3d: *bool) {
+spv_analyze_builtin_usage_block :: (block: *IR_Block, uses_write_2d: *bool, uses_write_3d: *bool, uses_sample_2d: *bool, uses_sample_cube: *bool, uses_sample_3d: *bool) {
   if !block return;
   for block.statements {
     stmt := it;
     if stmt.kind == {
       case .DECL; {
-        spv_analyze_builtin_usage_expr(stmt.decl_init, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.decl_init, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
       }
       case .BINARY; {
-        spv_analyze_builtin_usage_expr(stmt.binary_left, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-        spv_analyze_builtin_usage_expr(stmt.binary_right, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.binary_left, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.binary_right, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
       }
       case .IF; {
-        spv_analyze_builtin_usage_expr(stmt.if_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-        spv_analyze_builtin_usage_block(stmt.if_then, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-        spv_analyze_builtin_usage_block(stmt.if_else, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.if_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+        spv_analyze_builtin_usage_block(stmt.if_then, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+        spv_analyze_builtin_usage_block(stmt.if_else, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
       }
       case .SWITCH; {
-        spv_analyze_builtin_usage_expr(stmt.switch_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.switch_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
         for stmt.switch_cases {
-          spv_analyze_builtin_usage_expr(it.condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-          spv_analyze_builtin_usage_block(it.body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+          spv_analyze_builtin_usage_expr(it.condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+          spv_analyze_builtin_usage_block(it.body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
         }
       }
       case .FOR; {
-        spv_analyze_builtin_usage_expr(stmt.for_start, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-        spv_analyze_builtin_usage_expr(stmt.for_end, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-        spv_analyze_builtin_usage_block(stmt.for_body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.for_start, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.for_end, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+        spv_analyze_builtin_usage_block(stmt.for_body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
       }
       case .WHILE; {
-        spv_analyze_builtin_usage_expr(stmt.while_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
-        spv_analyze_builtin_usage_block(stmt.while_body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.while_condition, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
+        spv_analyze_builtin_usage_block(stmt.while_body, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
       }
       case .CALL; {
-        spv_analyze_builtin_usage_expr(stmt.call_expr, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.call_expr, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
       }
       case .RETURN; {
-        spv_analyze_builtin_usage_expr(stmt.return_expr, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_3d);
+        spv_analyze_builtin_usage_expr(stmt.return_expr, uses_write_2d, uses_write_3d, uses_sample_2d, uses_sample_cube, uses_sample_3d);
       }
       case .BREAK;
       case .CONTINUE;
@@ -1809,8 +1923,8 @@ spv_analyze_graphics_shader :: (stage: IR_SPV_Gen_Stage,
   root_arg, use_pointer_abi := find_pointer_root_arg(args, extra_structs);
   out.uses_pointer_abi = use_pointer_abi && root_arg;
 
-  spv_analyze_builtin_usage_block(body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_3d);
-  for functions spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_3d);
+  spv_analyze_builtin_usage_block(body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_cube, *out.uses_sample_3d);
+  for functions spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_cube, *out.uses_sample_3d);
   if out.uses_sample_2d && out.uses_sample_3d {
     return_err("SPIR-V backend: sample_2d and sample_3d cannot currently be used in the same shader.");
   }
@@ -1903,9 +2017,9 @@ spv_analyze_compute_shader :: (shader: IR_Compute_Shader) -> (analysis: IR_SPV_C
     if bound_ok out.bound_value = b;
   }
 
-  spv_analyze_builtin_usage_block(*shader.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_3d);
+  spv_analyze_builtin_usage_block(*shader.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_cube, *out.uses_sample_3d);
   for shader.functions {
-    spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_3d);
+    spv_analyze_builtin_usage_block(*it.body, *out.uses_write_2d, *out.uses_write_3d, *out.uses_sample_2d, *out.uses_sample_cube, *out.uses_sample_3d);
   }
   if out.uses_sample_2d && out.uses_sample_3d {
     return_err("SPIR-V backend: sample_2d and sample_3d cannot currently be used in the same shader.");
@@ -1940,6 +2054,7 @@ emit_compute_generic_uint_buffer :: (shader: IR_Compute_Shader) -> (spvasm: stri
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
+  state.uses_sample_cube = analysis.uses_sample_cube;
   state.uses_sample_3d = analysis.uses_sample_3d;
   init_ok, init_diag := init_base(*state, analysis.expanded_buffers, analysis.bound_value);
   if !init_ok return "", false, init_diag;
@@ -2040,6 +2155,7 @@ emit_compute_generic_uint_buffer_binary :: (shader: *IR_Compute_Shader) -> (spv:
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
+  state.uses_sample_cube = analysis.uses_sample_cube;
   state.uses_sample_3d = analysis.uses_sample_3d;
   init_ok, init_diag := init_base(*state, analysis.expanded_buffers, analysis.bound_value);
   if !init_ok return .[], false, init_diag;
@@ -2316,6 +2432,7 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
+  state.uses_sample_cube = analysis.uses_sample_cube;
   state.uses_sample_3d = analysis.uses_sample_3d;
   state.mesh_max_vertex_count = max(mesh_limits.vertex_count, 1);
   state.mesh_max_primitive_count = max(mesh_limits.primitive_count, 1);
@@ -2385,6 +2502,10 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   for state.uniform_blocks array_add(*interface_ids, cast(u32) it.var_id);
   for state.global_const_arrays array_add(*interface_ids, cast(u32) it.var_id);
   if state.uses_sample_2d array_add(*interface_ids, cast(u32) state.id_sample_2d_textures_var, cast(u32) state.id_sample_2d_samplers_var);
+  if state.uses_sample_cube {
+    array_add(*interface_ids, cast(u32) state.id_sample_cube_textures_var);
+    if !state.uses_sample_2d && !state.uses_sample_3d array_add(*interface_ids, cast(u32) state.id_sample_cube_samplers_var);
+  }
   if state.uses_sample_3d array_add(*interface_ids, cast(u32) state.id_sample_3d_textures_var, cast(u32) state.id_sample_3d_samplers_var);
   if state.uses_write_2d array_add(*interface_ids, cast(u32) state.id_write_2d_textures_var);
   if state.uses_write_3d array_add(*interface_ids, cast(u32) state.id_write_3d_textures_var);
@@ -2431,6 +2552,14 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_textures_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_samplers_var, SPV_DECORATION_BINDING, SAMPLE_2D_SAMPLERS_BINDING);
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_samplers_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+  }
+  if state.uses_sample_cube {
+    spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_textures_var, SPV_DECORATION_BINDING, SAMPLE_CUBE_TEXTURES_BINDING);
+    spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_textures_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+    if !state.uses_sample_2d && !state.uses_sample_3d {
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_samplers_var, SPV_DECORATION_BINDING, SAMPLE_2D_SAMPLERS_BINDING);
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_samplers_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+    }
   }
   if state.uses_sample_3d {
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_3d_textures_var, SPV_DECORATION_BINDING, SAMPLE_3D_TEXTURES_BINDING);
@@ -2518,6 +2647,7 @@ emit_task_generic_binary :: (shader: *IR_Task_Shader) -> (spv: [] u8, ok: bool, 
   state.uses_write_2d = analysis.uses_write_2d;
   state.uses_write_3d = analysis.uses_write_3d;
   state.uses_sample_2d = analysis.uses_sample_2d;
+  state.uses_sample_cube = analysis.uses_sample_cube;
   state.uses_sample_3d = analysis.uses_sample_3d;
   function_constants_ok, function_constants_diag := register_function_constants(*state, shader.function_constants);
   if !function_constants_ok return .[], false, function_constants_diag;
@@ -2551,6 +2681,10 @@ emit_task_generic_binary :: (shader: *IR_Task_Shader) -> (spv: [] u8, ok: bool, 
   for state.uniform_blocks array_add(*interface_ids, cast(u32) it.var_id);
   for state.global_const_arrays array_add(*interface_ids, cast(u32) it.var_id);
   if state.uses_sample_2d array_add(*interface_ids, cast(u32) state.id_sample_2d_textures_var, cast(u32) state.id_sample_2d_samplers_var);
+  if state.uses_sample_cube {
+    array_add(*interface_ids, cast(u32) state.id_sample_cube_textures_var);
+    if !state.uses_sample_2d && !state.uses_sample_3d array_add(*interface_ids, cast(u32) state.id_sample_cube_samplers_var);
+  }
   if state.uses_sample_3d array_add(*interface_ids, cast(u32) state.id_sample_3d_textures_var, cast(u32) state.id_sample_3d_samplers_var);
   if state.uses_write_2d array_add(*interface_ids, cast(u32) state.id_write_2d_textures_var);
   if state.uses_write_3d array_add(*interface_ids, cast(u32) state.id_write_3d_textures_var);
@@ -2592,6 +2726,14 @@ emit_task_generic_binary :: (shader: *IR_Task_Shader) -> (spv: [] u8, ok: bool, 
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_textures_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_samplers_var, SPV_DECORATION_BINDING, SAMPLE_2D_SAMPLERS_BINDING);
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_2d_samplers_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+  }
+  if state.uses_sample_cube {
+    spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_textures_var, SPV_DECORATION_BINDING, SAMPLE_CUBE_TEXTURES_BINDING);
+    spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_textures_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+    if !state.uses_sample_2d && !state.uses_sample_3d {
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_samplers_var, SPV_DECORATION_BINDING, SAMPLE_2D_SAMPLERS_BINDING);
+      spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_cube_samplers_var, SPV_DECORATION_DESCRIPTOR_SET, 0);
+    }
   }
   if state.uses_sample_3d {
     spv_module_append_words(*module, .ANNOTATIONS, SPV_OP_DECORATE, cast(u32) state.id_sample_3d_textures_var, SPV_DECORATION_BINDING, SAMPLE_3D_TEXTURES_BINDING);
