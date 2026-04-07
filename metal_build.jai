@@ -86,6 +86,12 @@ sanitize_workspace_name_for_artifacts :: (workspace_name: string) -> string {
   return out;
 }
 
+stable_metal_bundle_name :: (plugin: *Jai_To_Shader_Plugin) -> string {
+  if !plugin return "workspace";
+  if plugin.manifest_app_name.count != 0 return sanitize_workspace_name_for_artifacts(plugin.manifest_app_name);
+  return sanitize_workspace_name_for_artifacts(copy_string(get_name(plugin.workspace),, temp));
+}
+
 metallib_stem_from_request_name :: (request_name: string) -> string {
   if request_name.count == 0 return "";
   pair_prefix := "transpiled_pair_metal_";
@@ -183,6 +189,72 @@ link_metallib_from_air_files :: (air_paths: [] string, metallib_path: string) ->
   return true;
 }
 
+strip_generated_comment_preamble_local :: (source: string) -> string {
+  if !begins_with(source, "// Generated from ") return source;
+  cursor: s64 = 0;
+  while cursor < source.count && source[cursor] != #char "\n" cursor += 1;
+  while cursor < source.count && (source[cursor] == #char "\n" || source[cursor] == #char "\r") cursor += 1;
+  out: string;
+  out.data = source.data + cursor;
+  out.count = source.count - cursor;
+  return out;
+}
+
+build_metal_source_bundle_for_manifest_entries :: (plugin: *Jai_To_Shader_Plugin, workspace_root: string, out_bundle_rel_path: *string) -> bool {
+  assert(plugin != null && out_bundle_rel_path != null);
+
+  bundle_name := stable_metal_bundle_name(plugin);
+  generated_dir := jst_generated_dir();
+  make_directory_if_it_does_not_exist(generated_dir, recursive=true);
+  bundle_rel_path := tprint("%/%_bundle.metal", generated_dir, bundle_name);
+  bundle_abs_path := bundle_rel_path;
+  if !is_absolute_path_local(bundle_abs_path) bundle_abs_path = tprint("%/%", workspace_root, bundle_rel_path);
+
+  unique_source_paths: [..] string;
+  unique_source_paths.allocator = temp;
+
+  for plugin.manifest_entries {
+    if it.target != "METAL" continue;
+    if it.output_source_path.count == 0 {
+      compiler_report(tprint("Jai Shader Transpiler: missing Metal source path for entry '%'.", it.entry_id));
+      return false;
+    }
+
+    source_abs := it.output_source_path;
+    if !is_absolute_path_local(source_abs) source_abs = tprint("%/%", workspace_root, source_abs);
+    if !string_array_contains_local(unique_source_paths, source_abs) array_add(*unique_source_paths, source_abs);
+  }
+
+  if unique_source_paths.count == 0 return true;
+
+  source_texts: [..] string;
+  source_texts.allocator = temp;
+  for unique_source_paths {
+    source_text, ok := read_entire_file(it);
+    if !ok {
+      compiler_report(tprint("Jai Shader Transpiler: Metal source missing for bundle input '%'.", it));
+      return false;
+    }
+    array_add(*source_texts, strip_generated_comment_preamble_local(source_text));
+  }
+
+  merged_source := ir_merge_metal_bundle_sources(source_texts);
+
+  merged_source = ir_metal_enable_unsafe_runtime_array_indexing(merged_source);
+  app_label := ifx plugin.manifest_app_name.count != 0 then plugin.manifest_app_name else bundle_name;
+  merged_source = ir_prepend_generated_comment(merged_source, tprint("app shader bundle %", app_label), ir_pipeline_label_spirv(.METAL));
+
+  make_directory_if_it_does_not_exist(path_strip_filename(bundle_abs_path), recursive=true);
+  if !write_entire_file(bundle_abs_path, merged_source) {
+    compiler_report(tprint("Jai Shader Transpiler: failed writing Metal bundle '%'.", bundle_abs_path));
+    return false;
+  }
+
+  out_bundle_rel_path.* = copy_string(bundle_rel_path);
+  jst_log_shader_output_path(bundle_rel_path, "final app shader bundle");
+  return true;
+}
+
 build_metal_artifacts_for_manifest_entries :: (plugin: *Jai_To_Shader_Plugin, workspace_root: string) -> bool {
   if !plugin return true;
   if contains(workspace_root, "modules/Jai-Shader-Transpiler") {
@@ -190,56 +262,45 @@ build_metal_artifacts_for_manifest_entries :: (plugin: *Jai_To_Shader_Plugin, wo
     return true;
   }
 
-  workspace_name := stable_metallib_workspace_name(plugin);
+  bundle_name := stable_metal_bundle_name(plugin);
   generated_dir := jst_generated_dir();
   make_directory_if_it_does_not_exist(generated_dir, recursive=true);
-  metallib_rel_path := tprint("%/%_app.metallib", generated_dir, workspace_name);
+  metallib_rel_path := tprint("%/%_bundle.metallib", generated_dir, bundle_name);
+  bundle_rel_path: string;
+  if !build_metal_source_bundle_for_manifest_entries(plugin, workspace_root, *bundle_rel_path) return false;
+  if bundle_rel_path.count == 0 return true;
 
-  jobs: [..] Metal_Air_Compile_Job;
-  air_paths: [..] string;
-  seen_sources: [..] string;
-  seen_sources.allocator = temp;
+  bundle_abs_path := bundle_rel_path;
+  if !is_absolute_path_local(bundle_abs_path) bundle_abs_path = tprint("%/%", workspace_root, bundle_abs_path);
+  bundle_air_rel_path := tprint("%.air", bundle_rel_path);
+  bundle_air_abs_path := bundle_air_rel_path;
+  if !is_absolute_path_local(bundle_air_abs_path) bundle_air_abs_path = tprint("%/%", workspace_root, bundle_air_rel_path);
+  make_directory_if_it_does_not_exist(path_strip_filename(bundle_air_abs_path), recursive=true);
 
-  for *plugin.manifest_entries {
-    if it.target != "METAL" continue;
-    if it.output_source_path.count == 0 {
-      log_error("Jai Shader Transpiler: missing Metal source path for entry '%'.", it.entry_id);
-      return false;
-    }
-
-    source_abs := it.output_source_path;
-    if !is_absolute_path_local(source_abs) source_abs = tprint("%/%", workspace_root, source_abs);
-    _, source_exists := read_entire_file(source_abs);
-    if !source_exists {
-      log_error("Jai Shader Transpiler: Metal source missing for entry '%': %", it.entry_id, source_abs);
-      return false;
-    }
-
-    air_rel_path := tprint("%.air", it.output_source_path);
-    air_abs_path := air_rel_path;
-    if !is_absolute_path_local(air_abs_path) air_abs_path = tprint("%/%", workspace_root, air_abs_path);
-    make_directory_if_it_does_not_exist(path_strip_filename(air_abs_path), recursive=true);
-
-    it.output_air_path = copy_string(air_rel_path);
-    it.output_metallib_path = copy_string(metallib_rel_path);
-
-    if !string_array_contains_local(seen_sources, source_abs) {
-      array_add(*seen_sources, source_abs);
-      array_add(*jobs, .{
-        source_path = source_abs,
-        air_path = air_abs_path,
-      });
-      array_add(*air_paths, air_abs_path);
-    }
+  compile_job := Metal_Air_Compile_Job.{
+    source_path = bundle_abs_path,
+    air_path = bundle_air_abs_path,
+  };
+  if !run_metal_air_compile_job(*compile_job) {
+    if compile_job.error_message.count != 0 compiler_report(compile_job.error_message);
+    else compiler_report(tprint("Jai Shader Transpiler: failed compiling Metal AIR for '%'.", bundle_abs_path));
+    return false;
   }
-
-  if jobs.count == 0 return true;
-  if !run_metal_air_compile_jobs_parallel(jobs) return false;
 
   metallib_abs_path := metallib_rel_path;
   if !is_absolute_path_local(metallib_abs_path) metallib_abs_path = tprint("%/%", workspace_root, metallib_abs_path);
   make_directory_if_it_does_not_exist(path_strip_filename(metallib_abs_path), recursive=true);
-  if !link_metallib_from_air_files(air_paths, metallib_abs_path) return false;
+  if !link_metallib_from_air_files(.[bundle_air_abs_path], metallib_abs_path) {
+    compiler_report(tprint("Jai Shader Transpiler: failed linking metallib '%'.", metallib_abs_path));
+    return false;
+  }
+
+  for *plugin.manifest_entries {
+    if it.target != "METAL" continue;
+    it.output_source_path = copy_string(bundle_rel_path);
+    it.output_air_path = copy_string(bundle_air_rel_path);
+    it.output_metallib_path = copy_string(metallib_rel_path);
+  }
 
   return true;
 }

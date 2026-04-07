@@ -2399,6 +2399,16 @@ emit_mesh_generic_binary :: (shader: *IR_Mesh_Shader) -> (spv: [] u8, ok: bool, 
   spv_module_append_name(*module, cast(u32) state.id_gl_workgroup_id, "gl_WorkGroupID");
   for state.buffers spv_module_append_name(*module, cast(u32) it.var_id, it.name);
   for state.uniform_blocks spv_module_append_name(*module, cast(u32) it.var_id, it.name);
+  for state.function_constants {
+    if it.component_count <= 1 {
+      spv_module_append_name(*module, cast(u32) it.id, it.name);
+      continue;
+    }
+    suffixes : [4]string = .["x", "y", "z", "w"];
+    for i: 0..it.component_count-1 {
+      spv_module_append_name(*module, cast(u32) it.component_ids[i], tprint("%_%", it.name, suffixes[i]));
+    }
+  }
   for state.debug_names spv_module_append_name(*module, cast(u32) it.id, it.name);
   for state.debug_member_names spv_module_append_member_name(*module, cast(u32) it.type_id, cast(u32) it.member_index, it.name);
   for state.function_constants {
@@ -2552,6 +2562,16 @@ emit_task_generic_binary :: (shader: *IR_Task_Shader) -> (spv: [] u8, ok: bool, 
   spv_module_append_name(*module, cast(u32) state.id_gl_workgroup_id, "gl_WorkGroupID");
   for state.buffers spv_module_append_name(*module, cast(u32) it.var_id, it.name);
   for state.uniform_blocks spv_module_append_name(*module, cast(u32) it.var_id, it.name);
+  for state.function_constants {
+    if it.component_count <= 1 {
+      spv_module_append_name(*module, cast(u32) it.id, it.name);
+      continue;
+    }
+    suffixes : [4]string = .["x", "y", "z", "w"];
+    for i: 0..it.component_count-1 {
+      spv_module_append_name(*module, cast(u32) it.component_ids[i], tprint("%_%", it.name, suffixes[i]));
+    }
+  }
   for state.debug_names spv_module_append_name(*module, cast(u32) it.id, it.name);
   for state.debug_member_names spv_module_append_member_name(*module, cast(u32) it.type_id, cast(u32) it.member_index, it.name);
   for state.function_constants {

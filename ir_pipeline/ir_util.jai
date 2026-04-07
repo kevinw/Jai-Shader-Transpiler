@@ -131,10 +131,36 @@ ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) 
   for decls_v ir_metal_append_pair_decl(*selected_decls, *seen_exact, *identity_to_index, it);
   for decls_f ir_metal_append_pair_decl(*selected_decls, *seen_exact, *identity_to_index, it);
 
-  for selected_decls if ir_metal_is_typedef_decl(it) a(*sb, it);
-  for selected_decls if !ir_metal_is_typedef_decl(it) a(*sb, it);
+  for selected_decls if ir_metal_is_typedef_decl(it) ir_metal_append_decl_text(*sb, it);
+  for selected_decls if !ir_metal_is_typedef_decl(it) ir_metal_append_decl_text(*sb, it);
   return builder_to_string(*sb);
-} @jdll_export 
+} @jdll_export
+
+ir_merge_metal_bundle_sources :: (sources: [] string) -> string {
+  if sources.count == 0 return "";
+  if sources.count == 1 return sources[0];
+
+  merged_preamble: String_Builder;
+  seen_preamble: Table(string, bool);
+  seen_exact: Table(string, bool);
+  identity_to_index: Table(string, s64);
+  selected_decls: [..] string;
+
+  for sources {
+    source := it;
+    preamble: string;
+    decls: [..] string;
+    ir_metal_split_top_level_decls(source, *preamble, *decls);
+    ir_metal_append_unique_preamble_lines(*merged_preamble, *seen_preamble, preamble);
+    for decls ir_metal_append_bundle_decl(*selected_decls, *seen_exact, *identity_to_index, it);
+  }
+
+  sb: String_Builder;
+  a(*sb, builder_to_string(*merged_preamble));
+  for selected_decls if ir_metal_is_typedef_decl(it) ir_metal_append_decl_text(*sb, it);
+  for selected_decls if !ir_metal_is_typedef_decl(it) ir_metal_append_decl_text(*sb, it);
+  return builder_to_string(*sb);
+} @jdll_export
 
 spv_memory_model_from_text :: (spvasm: string) -> string {
   marker := "OpMemoryModel ";
@@ -265,6 +291,13 @@ ir_metal_append_unique_preamble_lines :: (sb: *String_Builder, seen: *Table(stri
   }
 }
 
+ir_metal_append_decl_text :: (sb: *String_Builder, decl: string) {
+  a(sb, decl);
+  if decl.count == 0 return;
+  last := decl[decl.count - 1];
+  if last != #char "\n" && last != #char "\r" a(sb, "\n");
+}
+
 ir_metal_append_pair_decl :: (selected_decls: *[..] string, seen_exact: *Table(string, bool), identity_to_index: *Table(string, s64), decl: string) {
   key := ir_metal_compact_decl_key(decl);
   if key.count == 0 return;
@@ -288,6 +321,45 @@ ir_metal_append_pair_decl :: (selected_decls: *[..] string, seen_exact: *Table(s
         // SPIRV-Cross can emit entry-point-specific layout variants for the same shared type.
         // Keep the later stage's declaration instead of trying to reconcile bodies textually.
         (selected_decls.data + existing_index).* = copy_string(decl);
+      }
+      table_add(seen_exact, copy_string(key), true);
+      return;
+    }
+    table_add(identity_to_index, copy_string(identity), selected_decls.count);
+  }
+
+  array_add(selected_decls, copy_string(decl));
+  table_add(seen_exact, copy_string(key), true);
+}
+
+ir_metal_append_bundle_decl :: (selected_decls: *[..] string, seen_exact: *Table(string, bool), identity_to_index: *Table(string, s64), decl: string) {
+  key := ir_metal_compact_decl_key(decl);
+  if key.count == 0 return;
+
+  found_exact, _ := table_find(seen_exact, key);
+  if found_exact return;
+
+  identity := ir_metal_decl_identity_key(decl);
+  if identity.count != 0 {
+    found_identity, existing_index := table_find(identity_to_index, identity);
+    if found_identity {
+      prior_decl := (selected_decls.data + existing_index).*;
+      prior_key := ir_metal_compact_decl_key(prior_decl);
+      if prior_key != key {
+        prior_is_type := ir_metal_is_type_decl(prior_decl);
+        new_is_type := ir_metal_is_type_decl(decl);
+        if prior_is_type && new_is_type {
+          prior_is_forward := ir_metal_is_forward_type_decl(prior_decl);
+          new_is_forward := ir_metal_is_forward_type_decl(decl);
+          if prior_is_forward && !new_is_forward {
+            (selected_decls.data + existing_index).* = copy_string(decl);
+          } else if !prior_is_forward && new_is_forward {
+            // Keep the existing full definition.
+          } else {
+            // Keep the later full type declaration when bodies differ.
+            (selected_decls.data + existing_index).* = copy_string(decl);
+          }
+        }
       }
       table_add(seen_exact, copy_string(key), true);
       return;

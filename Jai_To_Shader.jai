@@ -2281,13 +2281,12 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   jst_log_shader_output_path(mesh_output_path, "mesh stage shader");
   jst_log_shader_output_path(frag_output_path, "fragment stage shader");
 
-  combined_mesh_source := ifx task_source.count != 0
-      then jst_strip_duplicate_metal_bundle_preamble(mesh_source)
-      else mesh_source;
-  combined_frag_source := jst_strip_duplicate_metal_bundle_preamble(frag_source);
-  combined_source := ifx task_source.count != 0
-      then tprint("%\n%\n%", task_source, combined_mesh_source, combined_frag_source)
-      else tprint("%\n%", combined_mesh_source, combined_frag_source);
+  sources: [..] string;
+  sources.allocator = temp;
+  if task_source.count != 0 array_add(*sources, task_source);
+  array_add(*sources, mesh_source);
+  array_add(*sources, frag_source);
+  combined_source := ir_merge_metal_bundle_sources(sources);
   _ = write_entire_file(combined_output_path, combined_source);
   jst_log_shader_output_path(combined_output_path, "final mesh shader bundle");
 
