@@ -1966,10 +1966,10 @@ spv_analyze_graphics_shader :: (stage: IR_SPV_Gen_Stage,
       });
       continue;
     }
-    if arg.type.kind == .POINTER && arg.type.pointee_kind != .STRUCT && arg.type.pointee_display_name.count != 0 {
+    if arg.type.kind == .POINTER && arg.type.pointee_kind != .STRUCT {
       elem_type := IR_Type.{
         kind = arg.type.pointee_kind,
-        display_name = arg.type.pointee_display_name,
+        display_name = ir_pointer_leaf_display_name(arg.type.pointee_kind, arg.type.pointee_display_name),
         struct_name = arg.type.pointee_struct_name,
       };
       if arg.type.pointee_kind == .FIXED_ARRAY {

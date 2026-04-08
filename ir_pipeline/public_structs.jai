@@ -92,6 +92,8 @@ IR_Function_Constant :: struct {
   name: string;
   type: IR_Function_Constant_Type;
   default_value_text: string;
+  has_scalar_default_value: bool;
+  scalar_default_value: s64;
   declaration: *Code_Declaration;
   source_struct_name: string;
   source_arg_name: string;

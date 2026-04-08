@@ -75,6 +75,25 @@ parse_buffer_element_info :: (buffer: IR_Compute_Buffer) -> IR_SPV_Buffer_Elemen
   return info;
 }
 
+ir_pointer_leaf_display_name :: (kind: IR_Type_Kind, existing: string) -> string {
+  if existing.count != 0 return existing;
+  if kind == {
+  case .F32;    return "float";
+  case .F32x2;  return "float2";
+  case .F32x3;  return "float3";
+  case .F32x4;  return "float4";
+  case .F32x4x4; return "float4x4";
+  case .I32;    return "int";
+  case .U32;    return "uint";
+  case .I16;    return "short";
+  case .U16;    return "ushort";
+  case .I8;     return "char";
+  case .U8;     return "uchar";
+  case .BOOL;   return "bool";
+  }
+  return "";
+}
+
 struct_has_pointer_fields :: (st: *IR_Struct) -> bool {
   assert(st != null);
   for st.fields if it.type.kind == .POINTER return true;
@@ -86,7 +105,7 @@ resource_element_type_from_field :: (s: *IR_SPV_Gen_State, field: *IR_Field) -> 
   assert(field != null);
 
   if field.type.kind == .POINTER {
-    pointee_name := ir_string_first_non_empty(field.type.pointee_struct_name, field.type.pointee_display_name);
+    pointee_name := ir_string_first_non_empty(field.type.pointee_struct_name, ir_pointer_leaf_display_name(field.type.pointee_kind, field.type.pointee_display_name));
     if pointee_name.count == 0 return "", false, false;
     if field.type.pointee_kind == .STRUCT {
       nested_struct := find_struct(s, pointee_name);
@@ -126,7 +145,7 @@ collect_struct_resource_fields :: (s: *IR_SPV_Gen_State, st: *IR_Struct, name_pr
       if out_buffers {
         elem_type: IR_Type;
         elem_type.kind = it.type.pointee_kind;
-        elem_type.display_name = it.type.pointee_display_name;
+        elem_type.display_name = ir_pointer_leaf_display_name(it.type.pointee_kind, it.type.pointee_display_name);
         elem_type.struct_name = it.type.pointee_struct_name;
         array_add(out_buffers, .{
           name = field_path,

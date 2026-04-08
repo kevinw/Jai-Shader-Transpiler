@@ -572,6 +572,126 @@ ir_function_constant_type_from_type_info :: (type: *Type_Info) -> (IR_Function_C
   return .BOOL, false;
 }
 
+ir_function_constant_scalar_type_is_supported :: (type: IR_Function_Constant_Type) -> bool {
+  if type == {
+  case .BOOL; return true;
+  case .U8; return true;
+  case .S8; return true;
+  case .U16; return true;
+  case .S16; return true;
+  case .U32; return true;
+  case .S32; return true;
+  case .U64; return true;
+  case .S64; return true;
+  case; return false;
+  }
+}
+
+ir_cast_function_constant_scalar_value :: (value: s64, type: IR_Function_Constant_Type) -> (s64, bool) {
+  if type == {
+  case .BOOL; return ifx value != 0 then 1 else 0, true;
+  case .U8;  return cast(s64) cast(u8) value, true;
+  case .S8;  return cast(s64) cast(s8) value, true;
+  case .U16; return cast(s64) cast(u16) value, true;
+  case .S16; return cast(s64) cast(s16) value, true;
+  case .U32; return cast(s64) cast(u32) value, true;
+  case .S32; return cast(s64) cast(s32) value, true;
+  case .U64;
+    if value < 0 return 0, false;
+    return value, true;
+  case .S64; return value, true;
+  case; return 0, false;
+  }
+}
+
+ir_eval_function_constant_scalar_expr :: (expr: *IR_Expr, expected_type: IR_Function_Constant_Type = .BOOL) -> (s64, bool) {
+  if !expr return 0, false;
+
+  if expr.kind == {
+  case .LITERAL;
+    if expr.origin_node && expr.origin_node.kind == .LITERAL {
+      lit := cast(*Code_Literal) expr.origin_node;
+      if lit.value_type == .BOOLEAN return ifx lit._s64 != 0 then 1 else 0, true;
+      if lit.value_type != .NUMBER return 0, false;
+      if lit.value_flags & .FLOAT return 0, false;
+      if lit.type && lit.type.type == .INTEGER {
+        inttype := cast(*Type_Info_Integer) lit.type;
+        if inttype.signed return lit._s64, true;
+      }
+      return cast(s64) lit._u64, true;
+    }
+    if expr.text == "true" return 1, true;
+    if expr.text == "false" return 0, true;
+    parsed, parsed_ok := string_to_int(expr.text);
+    if parsed_ok return parsed, true;
+    if expected_type == .BOOL {
+      if expr.text == "1" return 1, true;
+      if expr.text == "0" return 0, true;
+    }
+    return 0, false;
+
+  case .UNARY;
+    value, ok := ir_eval_function_constant_scalar_expr(expr.left, expected_type);
+    if !ok return 0, false;
+    if expr.unary_op == {
+    case .PLUS;    return value, true;
+    case .NEGATE;  return -value, true;
+    case .BIT_NOT; return ~value, true;
+    case;          return 0, false;
+    }
+
+  case .BINARY;
+    left, left_ok := ir_eval_function_constant_scalar_expr(expr.left, expected_type);
+    if !left_ok return 0, false;
+    right, right_ok := ir_eval_function_constant_scalar_expr(expr.right, expected_type);
+    if !right_ok return 0, false;
+    op := expr.binary_operator_type;
+    if op == cast(Operator_Type) #char "+" return left + right, true;
+    if op == cast(Operator_Type) #char "-" return left - right, true;
+    if op == cast(Operator_Type) #char "*" return left * right, true;
+    if op == cast(Operator_Type) #char "/" {
+      if right == 0 return 0, false;
+      return left / right, true;
+    }
+    if op == cast(Operator_Type) #char "%" {
+      if right == 0 return 0, false;
+      return left % right, true;
+    }
+    if op == cast(Operator_Type) #char "|" return left | right, true;
+    if op == cast(Operator_Type) #char "&" return left & right, true;
+    if op == cast(Operator_Type) #char "^" return left ^ right, true;
+    if op == .SHIFT_LEFT {
+      if right < 0 || right > 63 return 0, false;
+      return left << right, true;
+    }
+    if op == .SHIFT_RIGHT {
+      if right < 0 || right > 63 return 0, false;
+      return left >> right, true;
+    }
+    return 0, false;
+
+  case .CAST;
+    target_type := expected_type;
+    if expr.result_type.kind == {
+    case .BOOL; target_type = .BOOL;
+    case .U8;   target_type = .U8;
+    case .I8;   target_type = .S8;
+    case .U16;  target_type = .U16;
+    case .I16;  target_type = .S16;
+    case .U32;  target_type = .U32;
+    case .I32;  target_type = .S32;
+    case .U64;  target_type = .U64;
+    case .I64;  target_type = .S64;
+    }
+    value, ok := ir_eval_function_constant_scalar_expr(expr.left, target_type);
+    if !ok return 0, false;
+    cast_value, cast_ok := ir_cast_function_constant_scalar_value(value, target_type);
+    return cast_value, cast_ok;
+
+  case; return 0, false;
+  }
+}
+
 ir_validate_function_constant_value :: (name: string,
                                         type: *Type_Info,
                                         expression: *Code_Node,
@@ -619,41 +739,42 @@ ir_validate_function_constant_value :: (name: string,
     }
     return out, false;
   }
-  if lowered_default.kind == {
-  case .LITERAL;
-  case .CONSTRUCTOR;
-    if lowered_default.kind == .CONSTRUCTOR {
-      vector_constant_ok := false;
-      if function_constant_type == {
-      case .FLOAT2; vector_constant_ok = true;
-      case .FLOAT3; vector_constant_ok = true;
-      case .FLOAT4; vector_constant_ok = true;
-      }
-      if !vector_constant_ok {
-        if source_struct_name.count != 0 {
-          ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time scalar literal default value.", source_struct_name, name), expression);
-        } else {
-          ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time scalar literal default value.", name), expression);
-        }
-        return out, false;
-      }
-    }
-  case;
-    if source_struct_name.count != 0 {
-      ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time constant literal or vector constructor default value.", source_struct_name, name), expression);
-    } else {
-      ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time constant literal or vector constructor default value.", name), expression);
-    }
-    return out, false;
+  is_vector_constant := false;
+  has_scalar_default_value := false;
+  scalar_default_value: s64;
+  if function_constant_type == {
+  case .FLOAT2; is_vector_constant = true;
+  case .FLOAT3; is_vector_constant = true;
+  case .FLOAT4; is_vector_constant = true;
   }
 
-  default_value_text := compact_text(lowered_default.text);
-  if lowered_default.kind == .CONSTRUCTOR {
-    expression_builder: String_Builder;
-    expression_builder.allocator = temp;
-    Program_Print.print_expression(*expression_builder, expression);
-    default_value_text = compact_text(builder_to_string(*expression_builder,, temp));
+  if is_vector_constant {
+    if lowered_default.kind != .CONSTRUCTOR {
+      if source_struct_name.count != 0 {
+        ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time vector constructor default value.", source_struct_name, name), expression);
+      } else {
+        ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time vector constructor default value.", name), expression);
+      }
+      return out, false;
+    }
+  } else {
+    scalar_constant_ok := false;
+    if ir_function_constant_scalar_type_is_supported(function_constant_type) {
+      has_scalar_default_value = true;
+      scalar_default_value, scalar_constant_ok = ir_eval_function_constant_scalar_expr(lowered_default, function_constant_type);
+    }
+    if !scalar_constant_ok {
+      if source_struct_name.count != 0 {
+        ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time constant scalar expression default value.", source_struct_name, name), expression);
+      } else {
+        ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time constant scalar expression default value.", name), expression);
+      }
+      return out, false;
+    }
   }
+
+  default_value_text, default_value_ok := ir_expr_to_slang_from_ir(lowered_default);
+  if default_value_ok default_value_text = compact_text(default_value_text);
   if default_value_text.count == 0 {
     if source_struct_name.count != 0 {
       ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' has an unsupported literal default value.", source_struct_name, name), expression);
@@ -667,6 +788,8 @@ ir_validate_function_constant_value :: (name: string,
     name = name,
     type = function_constant_type,
     default_value_text = default_value_text,
+    has_scalar_default_value = has_scalar_default_value,
+    scalar_default_value = scalar_default_value,
     source_struct_name = source_struct_name,
     source_arg_name = source_arg_name,
     location = make_location(source_node),
@@ -1315,7 +1438,7 @@ ir_lower_expr :: (node: *Code_Node,
         ir_set_diagnostic(state, tprint("IR lowering: unsupported literal kind (%)", lit.value_type), node);
         return null, false;
       }
-      out := ir_expr_new(.LITERAL);
+      out := ir_expr_new(.LITERAL, node);
       out.text = lit_text;
       return out, true;
     }
@@ -2224,6 +2347,28 @@ ir_lower_extra_args_readonly :: (
         });
     }
     return true, "";
+}
+
+#scope_export
+ir_collect_header_function_constants :: (
+    header: *Code_Procedure_Header,
+    start_arg_index: s64 = 1,
+) -> IR_Result([..] IR_Function_Constant) {
+    out: [..] IR_Function_Constant;
+    state: IR_Lowering_State;
+    dummy_args: [..] IR_Function_Arg;
+    dummy_structs: [..] IR_Struct;
+    if !header {
+        ir_set_diagnostic(*state, "IR lowering(function constants): null procedure header.", null);
+        return {out, false, ir_get_diagnostic(*state)};
+    }
+    args_ok, args_err := ir_lower_extra_args_readonly(header, *dummy_args, *dummy_structs, *out, *state, start_arg_index);
+    if !args_ok {
+        if args_err.count != 0 ir_set_diagnostic(*state, sprint(join("IR lowering(function constants): ", args_err)), header);
+        return {out, false, ir_get_diagnostic(*state)};
+    }
+    ir_sort_function_constants_deterministic(*out);
+    return {out, true, ir_get_diagnostic(*state)};
 }
 
 ir_lower_collect_structs_from_helpers :: (

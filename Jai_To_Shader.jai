@@ -364,6 +364,127 @@ transpiled_shader_exprs_from_call :: (call: Code, loc: Source_Code_Location) -> 
     return source_expr, meta_expr, constants_expr;
 }
 
+function_constant_default_type_name :: (type: IR_Function_Constant_Type) -> string #compile_time {
+    if type == {
+    case .BOOL;   return "bool";
+    case .U8;     return "u8";
+    case .S8;     return "s8";
+    case .U16;    return "u16";
+    case .S16;    return "s16";
+    case .U32;    return "u32";
+    case .S32;    return "s32";
+    case .U64;    return "u64";
+    case .S64;    return "s64";
+    case .FLOAT;  return "float";
+    case .FLOAT2; return "Vector2";
+    case .FLOAT3; return "Vector3";
+    case .FLOAT4; return "Vector4";
+    }
+    return "";
+}
+
+function_constant_default_value_expr :: (fc: IR_Function_Constant) -> string #compile_time {
+    if fc.has_scalar_default_value {
+        if fc.type == .BOOL return ifx fc.scalar_default_value != 0 then "true" else "false";
+        type_name := function_constant_default_type_name(fc.type);
+        if type_name.count != 0 && fc.type != .FLOAT && fc.type != .FLOAT2 && fc.type != .FLOAT3 && fc.type != .FLOAT4 {
+            return tprint("cast(%) %", type_name, fc.scalar_default_value);
+        }
+    }
+    return fc.default_value_text;
+}
+
+make_default_function_constants_expr :: (constants: [] IR_Function_Constant) -> string #compile_time {
+    if constants.count == 0 return "struct {}.{}";
+
+    sb: String_Builder;
+    append(*sb, "struct {\n");
+    for constants {
+        field_type_name := function_constant_default_type_name(it.type);
+        if field_type_name.count == 0 {
+            compiler_report(tprint("Jai Shader Transpiler: unsupported function constant type '%' for default expression synthesis.", it.type), loc=it.location);
+            return "struct {}.{}";
+        }
+        append(*sb, tprint("  %: % = %;\n", it.name, field_type_name, function_constant_default_value_expr(it)));
+    }
+    append(*sb, "}.{}");
+    return builder_to_string(*sb);
+}
+
+collect_function_constants_from_header :: (header: *Code_Procedure_Header, start_arg_index: s64, loc: Source_Code_Location = #caller_location) -> (constants: [..] IR_Function_Constant, ok: bool) #compile_time {
+    constants: [..] IR_Function_Constant;
+    if !header return constants, false;
+    result := ir_collect_header_function_constants(header, start_arg_index);
+    collected_constants, collected_ok, diag := unpack_result(result);
+    if !collected_ok {
+        report_message := "Jai Shader Transpiler: failed collecting function constants from shader header.";
+        if diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, diag.message);
+        if diag.has_location compiler_report(report_message, diag.location);
+        else compiler_report(report_message, loc=loc);
+        return collected_constants, false;
+    }
+    return collected_constants, true;
+}
+
+default_pair_function_constants_expr_from_procs :: (vertex_shader: Code, fragment_shader: Code, loc: Source_Code_Location = #caller_location) -> string #compile_time {
+    vertex_info := discover_procedure_info(vertex_shader, "vertex_shader", loc);
+    fragment_info := discover_procedure_info(fragment_shader, "fragment_shader", loc);
+    if !vertex_info.proc_header || !fragment_info.proc_header return "struct {}.{}";
+
+    vertex_constants, vertex_ok := collect_function_constants_from_header(vertex_info.proc_header, 1, loc);
+    if !vertex_ok return "struct {}.{}";
+    fragment_constants, fragment_ok := collect_function_constants_from_header(fragment_info.proc_header, 1, loc);
+    if !fragment_ok return "struct {}.{}";
+    ir_vertex := IR_Vertex_Shader.{};
+    ir_fragment := IR_Fragment_Shader.{};
+    ir_vertex.function_constants = vertex_constants;
+    ir_fragment.function_constants = fragment_constants;
+    merged_constants: [..] IR_Function_Constant;
+    assign_pair_function_constant_spec_ids(*ir_vertex, *ir_fragment, *merged_constants);
+    return make_default_function_constants_expr(merged_constants);
+}
+
+default_mesh_function_constants_expr_from_procs :: (mesh_shader: Code, fragment_shader: Code, loc: Source_Code_Location = #caller_location) -> string #compile_time {
+    mesh_info := discover_procedure_info(mesh_shader, "mesh_shader", loc);
+    fragment_info := discover_procedure_info(fragment_shader, "fragment_shader", loc);
+    if !mesh_info.proc_header || !fragment_info.proc_header return "struct {}.{}";
+
+    mesh_constants, mesh_ok := collect_function_constants_from_header(mesh_info.proc_header, 0, loc);
+    if !mesh_ok return "struct {}.{}";
+    fragment_constants, fragment_ok := collect_function_constants_from_header(fragment_info.proc_header, 1, loc);
+    if !fragment_ok return "struct {}.{}";
+    ir_mesh := IR_Mesh_Shader.{};
+    ir_fragment := IR_Fragment_Shader.{};
+    ir_mesh.function_constants = mesh_constants;
+    ir_fragment.function_constants = fragment_constants;
+    merged_constants: [..] IR_Function_Constant;
+    assign_mesh_function_constant_spec_ids(null, *ir_mesh, *ir_fragment, *merged_constants);
+    return make_default_function_constants_expr(merged_constants);
+}
+
+default_mesh_function_constants_expr_from_procs :: (task_shader: Code, mesh_shader: Code, fragment_shader: Code, loc: Source_Code_Location = #caller_location) -> string #compile_time {
+    task_info := discover_procedure_info(task_shader, "task_shader", loc);
+    mesh_info := discover_procedure_info(mesh_shader, "mesh_shader", loc);
+    fragment_info := discover_procedure_info(fragment_shader, "fragment_shader", loc);
+    if !task_info.proc_header || !mesh_info.proc_header || !fragment_info.proc_header return "struct {}.{}";
+
+    task_constants, task_ok := collect_function_constants_from_header(task_info.proc_header, 0, loc);
+    if !task_ok return "struct {}.{}";
+    mesh_constants, mesh_ok := collect_function_constants_from_header(mesh_info.proc_header, 0, loc);
+    if !mesh_ok return "struct {}.{}";
+    fragment_constants, fragment_ok := collect_function_constants_from_header(fragment_info.proc_header, 1, loc);
+    if !fragment_ok return "struct {}.{}";
+    ir_task := IR_Task_Shader.{};
+    ir_mesh := IR_Mesh_Shader.{};
+    ir_fragment := IR_Fragment_Shader.{};
+    ir_task.function_constants = task_constants;
+    ir_mesh.function_constants = mesh_constants;
+    ir_fragment.function_constants = fragment_constants;
+    merged_constants: [..] IR_Function_Constant;
+    assign_mesh_function_constant_spec_ids(*ir_task, *ir_mesh, *ir_fragment, *merged_constants);
+    return make_default_function_constants_expr(merged_constants);
+}
+
 Code_Procedure_Discovery :: struct {
     decl_name: string;
     proc_header: *Code_Procedure_Header;
@@ -374,6 +495,21 @@ discover_procedure_info :: (code: Code, required_note: string, loc: Source_Code_
     return_fail :: (msg: string) #expand {
         compiler_report(tprint("Jai Shader Transpiler: %", msg), loc=loc);
         `return .{};
+    }
+
+    resolve_procedure_decl :: (decl: *Code_Declaration) -> *Code_Declaration {
+        current := decl;
+        for 0..15 {
+            if !current || !current.expression return null;
+            if current.expression.kind == .PROCEDURE_HEADER return current;
+            if current.expression.kind != .IDENT return current;
+            ident := cast(*Code_Ident) current.expression;
+            if !ident.resolved_declaration || ident.resolved_declaration.kind != .DECLARATION return current;
+            next_decl := cast(*Code_Declaration) ident.resolved_declaration;
+            if next_decl == current return current;
+            current = next_decl;
+        }
+        return current;
     }
 
     code_node := compiler_get_nodes(code);
@@ -393,7 +529,10 @@ discover_procedure_info :: (code: Code, required_note: string, loc: Source_Code_
     if resolved_decl.kind != .DECLARATION {
         return_fail(tprint("Expected ident passed to get_transpiled2 to resolve to a .DECLARATION, got %.", resolved_decl.kind));
     }
-    code_declaration := cast(*Code_Declaration)resolved_decl;
+    code_declaration := resolve_procedure_decl(cast(*Code_Declaration)resolved_decl);
+    if code_declaration == null {
+        return_fail("Expected a resolvable procedure declaration for get_transpiled2 procedure argument.");
+    }
     if (code_declaration.flags & .IS_CONSTANT) == 0 {
         return_fail("Expected a constant declaration for get_transpiled2 procedure argument.");
     }
@@ -406,11 +545,11 @@ discover_procedure_info :: (code: Code, required_note: string, loc: Source_Code_
     }
     proc_header := cast(*Code_Procedure_Header)code_declaration.expression;
 
-    found_required_note := false;
+    found_required_note := required_note.count == 0;
     for proc_header.notes if it.text == required_note {
         found_required_note = true;
     }
-    
+
     if !found_required_note {
         return_fail(tprint("Expected note '%' on procedure '%'.", required_note, code_declaration.name));
     }
@@ -515,7 +654,12 @@ split_packed_shader_names :: (packed_names: string) -> (string, string, bool) #c
 }
 
 get_transpiled2_named_exprs :: (vert_name: string, frag_name: string, loc: Source_Code_Location = #caller_location) -> (source_expr: string, meta_expr: string, ok: bool) #compile_time {
-    if vert_name.count == 0 || frag_name.count == 0 return "", "", false;
+    source_expr, meta_expr, _, ok := get_transpiled2_named_exprs_with_constants(vert_name, frag_name, loc);
+    return source_expr, meta_expr, ok;
+}
+
+get_transpiled2_named_exprs_with_constants :: (vert_name: string, frag_name: string, loc: Source_Code_Location = #caller_location) -> (source_expr: string, meta_expr: string, constants_expr: string, ok: bool) #compile_time {
+    if vert_name.count == 0 || frag_name.count == 0 return "", "", "", false;
     
     #if OS == .MACOS {
         canonical_target_expr := ".METAL";
@@ -533,7 +677,8 @@ get_transpiled2_named_exprs :: (vert_name: string, frag_name: string, loc: Sourc
             log("----- meta_expr:\n%\n------", meta_expr);
         }
         
-        return source_expr, meta_expr, true;
+        constants_expr := tprint("G.%.{}", function_constants_type_name_for_request(request_name));
+        return source_expr, meta_expr, constants_expr, true;
     } else {
         canonical_target_expr := ".VULKAN_GLSL";
         request_name := tprint("transpiled_pair_vulkan_glsl_%_%", vert_name, frag_name);
@@ -544,7 +689,8 @@ get_transpiled2_named_exprs :: (vert_name: string, frag_name: string, loc: Sourc
         );
         source_expr := tprint("G.lookup_transpiled(\"%\", \"%\", \"%\")", canonical_target_expr, vert_name, frag_name);
         meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("pair|%|%|%", entry_id_target_name_from_canonical_target_expr(canonical_target_expr), vert_name, frag_name), function_constants_type_name_for_request(request_name));
-        return source_expr, meta_expr, true;
+        constants_expr := tprint("G.%.{}", function_constants_type_name_for_request(request_name));
+        return source_expr, meta_expr, constants_expr, true;
     }
 }
 
@@ -578,7 +724,12 @@ get_transpiled_compute_named_exprs :: (compute_name: string, loc: Source_Code_Lo
 }
 
 get_transpiled_mesh_pipeline_named_exprs :: (mesh_name: string, fragment_name: string, loc: Source_Code_Location = #caller_location) -> (bundle_expr: string, meta_expr: string, ok: bool) #compile_time {
-    if mesh_name.count == 0 || fragment_name.count == 0 return "", "", false;
+    bundle_expr, meta_expr, _, ok := get_transpiled_mesh_pipeline_named_exprs_with_constants(mesh_name, fragment_name, loc);
+    return bundle_expr, meta_expr, ok;
+}
+
+get_transpiled_mesh_pipeline_named_exprs_with_constants :: (mesh_name: string, fragment_name: string, loc: Source_Code_Location = #caller_location) -> (bundle_expr: string, meta_expr: string, constants_expr: string, ok: bool) #compile_time {
+    if mesh_name.count == 0 || fragment_name.count == 0 return "", "", "", false;
 
     request_name := tprint("transpiled_mesh_metal_%_%", mesh_name, fragment_name);
     to_lower_in_place(request_name);
@@ -589,11 +740,17 @@ get_transpiled_mesh_pipeline_named_exprs :: (mesh_name: string, fragment_name: s
 
     bundle_expr := tprint("G.lookup_transpiled_mesh(\".METAL\", \"\", \"%\", \"%\")", mesh_name, fragment_name);
     meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("mesh|METAL||%|%", mesh_name, fragment_name), function_constants_type_name_for_request(request_name));
-    return bundle_expr, meta_expr, true;
+    constants_expr := tprint("G.%.{}", function_constants_type_name_for_request(request_name));
+    return bundle_expr, meta_expr, constants_expr, true;
 }
 
 get_transpiled_task_mesh_pipeline_named_exprs :: (task_name: string, mesh_name: string, fragment_name: string, loc: Source_Code_Location = #caller_location) -> (bundle_expr: string, meta_expr: string, ok: bool) #compile_time {
-    if task_name.count == 0 || mesh_name.count == 0 || fragment_name.count == 0 return "", "", false;
+    bundle_expr, meta_expr, _, ok := get_transpiled_task_mesh_pipeline_named_exprs_with_constants(task_name, mesh_name, fragment_name, loc);
+    return bundle_expr, meta_expr, ok;
+}
+
+get_transpiled_task_mesh_pipeline_named_exprs_with_constants :: (task_name: string, mesh_name: string, fragment_name: string, loc: Source_Code_Location = #caller_location) -> (bundle_expr: string, meta_expr: string, constants_expr: string, ok: bool) #compile_time {
+    if task_name.count == 0 || mesh_name.count == 0 || fragment_name.count == 0 return "", "", "", false;
 
     request_name := tprint("transpiled_mesh_metal_%_%_%", task_name, mesh_name, fragment_name);
     to_lower_in_place(request_name);
@@ -604,7 +761,8 @@ get_transpiled_task_mesh_pipeline_named_exprs :: (task_name: string, mesh_name: 
 
     bundle_expr := tprint("G.lookup_transpiled_mesh(\".METAL\", \"%\", \"%\", \"%\")", task_name, mesh_name, fragment_name);
     meta_expr := tprint("JTS.Shader_Meta.{request_name = \"%\", entry_id = \"%\", function_constants_type_name = \"%\"}", request_name, tprint("mesh|METAL|%|%|%", task_name, mesh_name, fragment_name), function_constants_type_name_for_request(request_name));
-    return bundle_expr, meta_expr, true;
+    constants_expr := tprint("G.%.{}", function_constants_type_name_for_request(request_name));
+    return bundle_expr, meta_expr, constants_expr, true;
 }
 
 get_transpiled2 :: (vert: $V, frag: $F, target: Transpiled_Target, call: Code = #caller_code, loc: Source_Code_Location = #caller_location) -> (shader_bytes: string, shader_meta: Shader_Meta) #expand {
@@ -682,8 +840,163 @@ get_default_function_constants :: (
     loc: Source_Code_Location = #caller_location
 ) #expand {
     #insert #run,stallable -> string {
-        _, _, constants_expr := transpiled_shader_exprs_from_call(call, loc);
-        return tprint("%;", constants_expr);
+        root := compiler_get_nodes(call);
+        if root.kind != .PROCEDURE_CALL {
+            compiler_report("Jai Shader Transpiler: get_default_function_constants must be called directly.", loc=loc);
+            return "return .{};";
+        }
+
+        pc := cast(*Code_Procedure_Call) root;
+        if pc.arguments_unsorted.count != 3 {
+            compiler_report("Jai Shader Transpiler: get_default_function_constants expects 3 args (target, vert_fn, frag_fn).", loc=loc);
+            return "return .{};";
+        }
+
+        vertex_info := discover_procedure_info(pc.arguments_unsorted[1].expression, "vertex_shader", loc);
+        fragment_info := discover_procedure_info(pc.arguments_unsorted[2].expression, "fragment_shader", loc);
+        if !vertex_info.ok || !fragment_info.ok {
+            return "return .{};";
+        }
+
+        vert_result := ir_lower_vertex_from_shader_context(.{name = vertex_info.proc_header.name, header = vertex_info.proc_header});
+        ir_vertex, vertex_ok, vertex_diag := unpack_result(vert_result);
+        if !vertex_ok {
+            report_message := "Jai Shader Transpiler: failed lowering vertex function constants.";
+            if vertex_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, vertex_diag.message);
+            if vertex_diag.has_location compiler_report(report_message, vertex_diag.location);
+            else compiler_report(report_message, loc=loc);
+            return "return .{};";
+        }
+
+        frag_result := ir_lower_fragment_from_shader_context(.{name = fragment_info.proc_header.name, header = fragment_info.proc_header});
+        ir_fragment, fragment_ok, fragment_diag := unpack_result(frag_result);
+        if !fragment_ok {
+            report_message := "Jai Shader Transpiler: failed lowering fragment function constants.";
+            if fragment_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, fragment_diag.message);
+            if fragment_diag.has_location compiler_report(report_message, fragment_diag.location);
+            else compiler_report(report_message, loc=loc);
+            return "return .{};";
+        }
+
+        merged_constants: [..] IR_Function_Constant;
+        assign_pair_function_constant_spec_ids(*ir_vertex, *ir_fragment, *merged_constants);
+        return tprint("%;", make_default_function_constants_expr(merged_constants));
+    };
+}
+
+get_default_mesh_function_constants :: (
+    target: Transpiled_Target,
+    mesh_shader: Any,
+    fragment_shader: Any,
+    call: Code = #caller_code,
+    loc: Source_Code_Location = #caller_location
+) #expand {
+    #insert #run,stallable -> string {
+        root := compiler_get_nodes(call);
+        if root.kind != .PROCEDURE_CALL {
+            compiler_report("Jai Shader Transpiler: get_default_mesh_function_constants must be called directly.", loc=loc);
+            return "return .{};";
+        }
+
+        pc := cast(*Code_Procedure_Call) root;
+        if pc.arguments_unsorted.count != 3 {
+            compiler_report("Jai Shader Transpiler: get_default_mesh_function_constants expects 3 args (target, mesh_fn, fragment_fn).", loc=loc);
+            return "return .{};";
+        }
+
+        mesh_info := discover_procedure_info(pc.arguments_unsorted[1].expression, "mesh_shader", loc);
+        fragment_info := discover_procedure_info(pc.arguments_unsorted[2].expression, "fragment_shader", loc);
+        if !mesh_info.ok || !fragment_info.ok {
+            return "return .{};";
+        }
+
+        mesh_result := ir_lower_mesh_from_shader_context(.{name = mesh_info.proc_header.name, header = mesh_info.proc_header});
+        ir_mesh, mesh_ok, mesh_diag := unpack_result(mesh_result);
+        if !mesh_ok {
+            report_message := "Jai Shader Transpiler: failed lowering mesh function constants.";
+            if mesh_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, mesh_diag.message);
+            if mesh_diag.has_location compiler_report(report_message, mesh_diag.location);
+            else compiler_report(report_message, loc=loc);
+            return "return .{};";
+        }
+
+        frag_result := ir_lower_fragment_from_shader_context(.{name = fragment_info.proc_header.name, header = fragment_info.proc_header});
+        ir_fragment, fragment_ok, fragment_diag := unpack_result(frag_result);
+        if !fragment_ok {
+            report_message := "Jai Shader Transpiler: failed lowering mesh fragment function constants.";
+            if fragment_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, fragment_diag.message);
+            if fragment_diag.has_location compiler_report(report_message, fragment_diag.location);
+            else compiler_report(report_message, loc=loc);
+            return "return .{};";
+        }
+
+        merged_constants: [..] IR_Function_Constant;
+        assign_mesh_function_constant_spec_ids(null, *ir_mesh, *ir_fragment, *merged_constants);
+        return tprint("%;", make_default_function_constants_expr(merged_constants));
+    };
+}
+
+get_default_mesh_function_constants :: (
+    target: Transpiled_Target,
+    task_shader: Any,
+    mesh_shader: Any,
+    fragment_shader: Any,
+    call: Code = #caller_code,
+    loc: Source_Code_Location = #caller_location
+) #expand {
+    #insert #run,stallable -> string {
+        root := compiler_get_nodes(call);
+        if root.kind != .PROCEDURE_CALL {
+            compiler_report("Jai Shader Transpiler: get_default_mesh_function_constants must be called directly.", loc=loc);
+            return "return .{};";
+        }
+
+        pc := cast(*Code_Procedure_Call) root;
+        if pc.arguments_unsorted.count != 4 {
+            compiler_report("Jai Shader Transpiler: get_default_mesh_function_constants expects 4 args (target, task_fn, mesh_fn, fragment_fn).", loc=loc);
+            return "return .{};";
+        }
+
+        task_info := discover_procedure_info(pc.arguments_unsorted[1].expression, "task_shader", loc);
+        mesh_info := discover_procedure_info(pc.arguments_unsorted[2].expression, "mesh_shader", loc);
+        fragment_info := discover_procedure_info(pc.arguments_unsorted[3].expression, "fragment_shader", loc);
+        if !task_info.ok || !mesh_info.ok || !fragment_info.ok {
+            return "return .{};";
+        }
+
+        task_result := ir_lower_task_from_shader_context(.{name = task_info.proc_header.name, header = task_info.proc_header});
+        ir_task, task_ok, task_diag := unpack_result(task_result);
+        if !task_ok {
+            report_message := "Jai Shader Transpiler: failed lowering task function constants.";
+            if task_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, task_diag.message);
+            if task_diag.has_location compiler_report(report_message, task_diag.location);
+            else compiler_report(report_message, loc=loc);
+            return "return .{};";
+        }
+
+        mesh_result := ir_lower_mesh_from_shader_context(.{name = mesh_info.proc_header.name, header = mesh_info.proc_header});
+        ir_mesh, mesh_ok, mesh_diag := unpack_result(mesh_result);
+        if !mesh_ok {
+            report_message := "Jai Shader Transpiler: failed lowering mesh function constants.";
+            if mesh_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, mesh_diag.message);
+            if mesh_diag.has_location compiler_report(report_message, mesh_diag.location);
+            else compiler_report(report_message, loc=loc);
+            return "return .{};";
+        }
+
+        frag_result := ir_lower_fragment_from_shader_context(.{name = fragment_info.proc_header.name, header = fragment_info.proc_header});
+        ir_fragment, fragment_ok, fragment_diag := unpack_result(frag_result);
+        if !fragment_ok {
+            report_message := "Jai Shader Transpiler: failed lowering mesh fragment function constants.";
+            if fragment_diag.message.count != 0 report_message = tprint("%\nReason: %", report_message, fragment_diag.message);
+            if fragment_diag.has_location compiler_report(report_message, fragment_diag.location);
+            else compiler_report(report_message, loc=loc);
+            return "return .{};";
+        }
+
+        merged_constants: [..] IR_Function_Constant;
+        assign_mesh_function_constant_spec_ids(*ir_task, *ir_mesh, *ir_fragment, *merged_constants);
+        return tprint("%;", make_default_function_constants_expr(merged_constants));
     };
 }
 
@@ -927,6 +1240,11 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
             add_code(plugin, s2, "waiting_meshes");
             mark_generated_symbol_emitted(plugin, source_symbol);
           }
+          emit_generated_function_constant_decl(plugin,
+                                               generated_function_constant_base_name(mesh_ctx.name, ""),
+                                               mesh_ctx.mesh_fn.header.name,
+                                               mesh_ctx.fragment_fn.header.name,
+                                               mesh_ctx.function_constants);
 
           manifest_entry := manifest_make_mesh_entry(mesh_ctx, workspace_root);
           if manifest_entry.request_name.count != 0 array_add(*plugin.manifest_entries, manifest_entry);
@@ -1257,6 +1575,50 @@ assign_pair_function_constant_spec_ids :: (vertex: *IR_Vertex_Shader, fragment: 
   }
 }
 
+assign_mesh_function_constant_spec_ids :: (task: *IR_Task_Shader, mesh: *IR_Mesh_Shader, fragment: *IR_Fragment_Shader, out_mesh_constants: *[..] IR_Function_Constant) {
+  array_reset(out_mesh_constants);
+  if task for task.function_constants if !function_constant_already_present(out_mesh_constants.*, it) array_add(out_mesh_constants, it);
+  if mesh for mesh.function_constants if !function_constant_already_present(out_mesh_constants.*, it) array_add(out_mesh_constants, it);
+  if fragment for fragment.function_constants if !function_constant_already_present(out_mesh_constants.*, it) array_add(out_mesh_constants, it);
+
+  next_spec_id: u32 = 0;
+  for i: 0..out_mesh_constants.count-1 {
+    out_mesh_constants.*[i].spec_id = next_spec_id;
+    next_spec_id += function_constant_spec_slot_count(out_mesh_constants.*[i].type);
+  }
+
+  if task {
+    for i: 0..task.function_constants.count-1 {
+      fc := *task.function_constants[i];
+      for mesh_fc: out_mesh_constants.* {
+        if !function_constant_identity_matches(fc, mesh_fc) continue;
+        fc.spec_id = mesh_fc.spec_id;
+        break;
+      }
+    }
+  }
+  if mesh {
+    for i: 0..mesh.function_constants.count-1 {
+      fc := *mesh.function_constants[i];
+      for mesh_fc: out_mesh_constants.* {
+        if !function_constant_identity_matches(fc, mesh_fc) continue;
+        fc.spec_id = mesh_fc.spec_id;
+        break;
+      }
+    }
+  }
+  if fragment {
+    for i: 0..fragment.function_constants.count-1 {
+      fc := *fragment.function_constants[i];
+      for mesh_fc: out_mesh_constants.* {
+        if !function_constant_identity_matches(fc, mesh_fc) continue;
+        fc.spec_id = mesh_fc.spec_id;
+        break;
+      }
+    }
+  }
+}
+
 generated_function_constant_base_name :: (request_name: string, kind_suffix: string) -> string {
   base := sanitize_identifier_component(request_name);
   to_lower_in_place(base);
@@ -1311,7 +1673,15 @@ emit_generated_function_constant_decl :: (plugin: *Jai_To_Shader_Plugin,
   code := builder_to_string(*sb);
   #if VERBOSE log("----\n%\n----", code);
 
-  add_code(plugin, code, tprint("function_constants_%", base_name));
+  generated_source_path := compute_path_to_shader_bucket_module(plugin.workspace);
+  existing_source, read_ok := read_entire_file(generated_source_path);
+  assert(read_ok, "Failed reading generated shader bucket module '%'.", generated_source_path);
+  if existing_source.count > 0 && existing_source[existing_source.count - 1] != 10 {
+    existing_source = sprint("%\n", existing_source);
+  }
+  merged_source := sprint("%%", existing_source, code);
+  ok := write_entire_file(generated_source_path, merged_source);
+  assert(ok, "Failed writing generated shader bucket module '%'.", generated_source_path);
   mark_generated_symbol_emitted(plugin, struct_name);
   mark_generated_symbol_emitted(plugin, info_name);
 }
@@ -2104,6 +2474,7 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   payload_struct_name := "";
   payload_size_bytes: s64 = 0;
   payload_memory_length: s64 = 0;
+  ir_task: *IR_Task_Shader = null;
   if mesh_ctx.task_fn != null {
     task_ir_res := ir_lower_task_from_shader_context(.{name = mesh_ctx.task_fn.header.name, header = mesh_ctx.task_fn.header});
     ir_task, task_ok, task_diag := unpack_result(task_ir_res);
@@ -2202,6 +2573,7 @@ write_shader_mesh_ir_spirv :: (mesh_ctx: *Shader_Write_Mesh_Context) -> (string,
   ir_mesh.output = ir_fragment.input;
   assign_single_function_constant_spec_ids(*ir_fragment);
   normalize_shader(*ir_fragment);
+  assign_mesh_function_constant_spec_ids(ifx mesh_ctx.task_fn then ir_task else null, *ir_mesh, *ir_fragment, *mesh_ctx.function_constants);
 
   mesh_spv_res := to_spv_binary(*ir_mesh);
   mesh_spv, mesh_spv_ok, mesh_spv_diag := unpack_result(mesh_spv_res);
@@ -2842,6 +3214,7 @@ Shader_Write_Mesh_Context :: struct {
   metal_task_entry_name: string;
   metal_mesh_entry_name: string;
   metal_fragment_entry_name: string;
+  function_constants: [..] IR_Function_Constant;
 }
 
 member_is_stage_builtin :: (member: *Type_Info_Struct_Member) -> bool {

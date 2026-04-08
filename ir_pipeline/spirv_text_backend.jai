@@ -665,6 +665,8 @@ IR_SPV_Gen_Function_Constant :: struct {
   source_arg_name: string;
   type: IR_Function_Constant_Type;
   default_value_text: string;
+  has_scalar_default_value: bool;
+  scalar_default_value: s64;
   spec_id: u32;
   id: Id;
   component_count: s64;
@@ -1192,6 +1194,8 @@ register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Fu
       source_arg_name = it.source_arg_name,
       type = type_kind,
       default_value_text = it.default_value_text,
+      has_scalar_default_value = it.has_scalar_default_value,
+      scalar_default_value = it.scalar_default_value,
       spec_id = it.spec_id,
       id = id,
       component_count = component_count,
@@ -1232,43 +1236,51 @@ spv_append_function_constant_defs :: (sb: *String_Builder, s: *IR_SPV_Gen_State)
   for s.function_constants {
     if it.type == {
       case .BOOL;
-        if it.default_value_text == "true" {
+        if it.has_scalar_default_value && it.scalar_default_value != 0 {
           append(sb, tprint("% = OpSpecConstantTrue %\n", id_text(it.id), id_text(s.id_bool)));
-        } else if it.default_value_text == "false" {
+        } else if it.has_scalar_default_value {
           append(sb, tprint("% = OpSpecConstantFalse %\n", id_text(it.id), id_text(s.id_bool)));
         } else {
-          return_err("function constant '%' expected bool literal, got '%'.", it.name, it.default_value_text);
+          return_err("function constant '%' is missing a folded scalar default value.", it.name);
         }
       case .U8;
-        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        value64 := it.scalar_default_value;
+        value_ok := it.has_scalar_default_value;
         if !value_ok || value64 < 0 || value64 > 0xFF return_err("function constant '%' expected u8 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_uint8), cast(u8) value64));
       case .S8;
-        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        value64 := it.scalar_default_value;
+        value_ok := it.has_scalar_default_value;
         if !value_ok || value64 < -128 || value64 > 127 return_err("function constant '%' expected s8 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int8), cast(s8) value64));
       case .U16;
-        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        value64 := it.scalar_default_value;
+        value_ok := it.has_scalar_default_value;
         if !value_ok || value64 < 0 || value64 > 0xFFFF return_err("function constant '%' expected u16 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_uint16), cast(u16) value64));
       case .S16;
-        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        value64 := it.scalar_default_value;
+        value_ok := it.has_scalar_default_value;
         if !value_ok || value64 < -32768 || value64 > 32767 return_err("function constant '%' expected s16 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int16), cast(s16) value64));
       case .U32;
-        value, value_ok := parse_u32_literal_text(it.default_value_text);
+        value := cast(u32) it.scalar_default_value;
+        value_ok := it.has_scalar_default_value && it.scalar_default_value >= 0 && it.scalar_default_value <= 0xFFFF_FFFF;
         if !value_ok return_err("function constant '%' expected u32 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_uint), value));
       case .S32;
-        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        value64 := it.scalar_default_value;
+        value_ok := it.has_scalar_default_value;
         if !value_ok return_err("function constant '%' expected s32 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int), cast(s32) value64));
       case .U64;
-        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        value64 := it.scalar_default_value;
+        value_ok := it.has_scalar_default_value;
         if !value_ok || value64 < 0 return_err("function constant '%' expected u64 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_uint64), cast(u64) value64));
       case .S64;
-        value64, value_ok := parse_i64_literal_text(it.default_value_text);
+        value64 := it.scalar_default_value;
+        value_ok := it.has_scalar_default_value;
         if !value_ok return_err("function constant '%' expected s64 literal, got '%'.", it.name, it.default_value_text);
         append(sb, tprint("% = OpSpecConstant % %\n", id_text(it.id), id_text(s.id_int64), value64));
       case .FLOAT;
@@ -1299,46 +1311,54 @@ spv_module_append_function_constant_defs_binary :: (m: *SPV_Module, s: *IR_SPV_G
   for s.function_constants {
     if it.type == {
     case .BOOL;
-      if it.default_value_text == "true" {
+      if it.has_scalar_default_value && it.scalar_default_value != 0 {
         spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_TRUE, cast(u32) s.id_bool, cast(u32) it.id);
-      } else if it.default_value_text == "false" {
+      } else if it.has_scalar_default_value {
         spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_FALSE, cast(u32) s.id_bool, cast(u32) it.id);
       } else {
-        return_err("function constant '%' expected bool literal, got '%'.", it.name, it.default_value_text);
+        return_err("function constant '%' is missing a folded scalar default value.", it.name);
       }
     case .U8;
-      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      value64 := it.scalar_default_value;
+      value_ok := it.has_scalar_default_value;
       if !value_ok || value64 < 0 || value64 > 0xFF return_err("function constant '%' expected u8 literal, got '%'.", it.name, it.default_value_text);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_uint8, cast(u32) it.id, cast(u32) cast(u8) value64);
     case .S8;
-      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      value64 := it.scalar_default_value;
+      value_ok := it.has_scalar_default_value;
       if !value_ok || value64 < -128 || value64 > 127 return_err("function constant '%' expected s8 literal, got '%'.", it.name, it.default_value_text);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int8, cast(u32) it.id, cast(u32) cast(u8) cast(s8) value64);
     case .U16;
-      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      value64 := it.scalar_default_value;
+      value_ok := it.has_scalar_default_value;
       if !value_ok || value64 < 0 || value64 > 0xFFFF return_err("function constant '%' expected u16 literal, got '%'.", it.name, it.default_value_text);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_uint16, cast(u32) it.id, cast(u32) cast(u16) value64);
     case .S16;
-      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      value64 := it.scalar_default_value;
+      value_ok := it.has_scalar_default_value;
       if !value_ok || value64 < -32768 || value64 > 32767 return_err("function constant '%' expected s16 literal, got '%'.", it.name, it.default_value_text);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int16, cast(u32) it.id, cast(u32) cast(u16) cast(s16) value64);
     case .U32;
-      value, value_ok := parse_u32_literal_text(it.default_value_text);
+      value := cast(u32) it.scalar_default_value;
+      value_ok := it.has_scalar_default_value && it.scalar_default_value >= 0 && it.scalar_default_value <= 0xFFFF_FFFF;
       if !value_ok return_err("function constant '%' expected u32 literal, got '%'.", it.name, it.default_value_text);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_uint, cast(u32) it.id, value);
     case .S32;
-      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      value64 := it.scalar_default_value;
+      value_ok := it.has_scalar_default_value;
       if !value_ok return_err("function constant '%' expected s32 literal, got '%'.", it.name, it.default_value_text);
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int, cast(u32) it.id, cast(u32) cast(s32) value64);
     case .U64;
-      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      value64 := it.scalar_default_value;
+      value_ok := it.has_scalar_default_value;
       if !value_ok || value64 < 0 return_err("function constant '%' expected u64 literal, got '%'.", it.name, it.default_value_text);
       bits := cast(u64) value64;
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_uint64, cast(u32) it.id,
                               cast,no_check(u32) (bits & cast(u64) 0xFFFF_FFFF),
                               cast,no_check(u32) ((bits >> 32) & cast(u64) 0xFFFF_FFFF));
     case .S64;
-      value64, value_ok := parse_i64_literal_text(it.default_value_text);
+      value64 := it.scalar_default_value;
+      value_ok := it.has_scalar_default_value;
       if !value_ok return_err("function constant '%' expected s64 literal, got '%'.", it.name, it.default_value_text);
       bits := cast(u64) value64;
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_int64, cast(u32) it.id,
