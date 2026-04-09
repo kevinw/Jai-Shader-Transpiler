@@ -1078,6 +1078,7 @@ ir_shared_lower_function :: (header: *Code_Procedure_Header, state: *IR_Lowering
   if header.returns.count > 1 return out, false;
 
   out.name = header.name;
+  out.origin_header = header;
   if header.returns.count == 1 {
     ret := header.returns[0];
     ret_type := ifx ret.type_inst then ret.type_inst.result else ifx ret.expression then ret.expression.type else null;

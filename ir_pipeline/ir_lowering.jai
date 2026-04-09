@@ -692,6 +692,62 @@ ir_eval_function_constant_scalar_expr :: (expr: *IR_Expr, expected_type: IR_Func
   }
 }
 
+ir_eval_function_constant_float_expr :: (expr: *IR_Expr) -> (float, bool) {
+  if !expr return 0.0, false;
+
+  if expr.kind == {
+  case .LITERAL;
+    if expr.origin_node && expr.origin_node.kind == .LITERAL {
+      lit := cast(*Code_Literal) expr.origin_node;
+      if lit.value_type != .NUMBER return 0.0, false;
+      if lit.value_flags & .FLOAT {
+        if lit.type && lit.type.type == .FLOAT {
+          ftype := cast(*Type_Info_Float) lit.type;
+          if ftype.runtime_size == 4 return cast(float) lit._float64, true;
+          if ftype.runtime_size == 8 return cast(float) lit._float64, true;
+        }
+        return cast(float) lit._float64, true;
+      }
+      if lit.type && lit.type.type == .INTEGER {
+        inttype := cast(*Type_Info_Integer) lit.type;
+        if inttype.signed return cast(float) lit._s64, true;
+      }
+      return cast(float) lit._u64, true;
+    }
+
+    value, parsed_ok, remainder := string_to_float(expr.text);
+    if parsed_ok && remainder.count == 0 return value, true;
+    int_value, int_ok := string_to_int(expr.text);
+    if int_ok return cast(float) int_value, true;
+    return 0.0, false;
+
+  case .UNARY;
+    value, ok := ir_eval_function_constant_float_expr(expr.left);
+    if !ok return 0.0, false;
+    if expr.unary_op == .PLUS return value, true;
+    if expr.unary_op == .NEGATE return -value, true;
+    return 0.0, false;
+
+  case .CAST;
+    nested_value, nested_ok := ir_eval_function_constant_float_expr(expr.left);
+    return nested_value, nested_ok;
+
+  case; return 0.0, false;
+  }
+}
+
+ir_eval_function_constant_vector_expr :: (expr: *IR_Expr, expected_count: s64) -> ([4] float, bool) {
+  values: [4] float;
+  if !expr || expr.kind != .CONSTRUCTOR return values, false;
+  if expr.args.count != expected_count return values, false;
+  for i: 0..expected_count-1 {
+    value, ok := ir_eval_function_constant_float_expr(expr.args[i]);
+    if !ok return values, false;
+    values[i] = value;
+  }
+  return values, true;
+}
+
 ir_validate_function_constant_value :: (name: string,
                                         type: *Type_Info,
                                         expression: *Code_Node,
@@ -742,6 +798,8 @@ ir_validate_function_constant_value :: (name: string,
   is_vector_constant := false;
   has_scalar_default_value := false;
   scalar_default_value: s64;
+  has_vector_default_value := false;
+  vector_default_value: [4] float;
   if function_constant_type == {
   case .FLOAT2; is_vector_constant = true;
   case .FLOAT3; is_vector_constant = true;
@@ -750,6 +808,21 @@ ir_validate_function_constant_value :: (name: string,
 
   if is_vector_constant {
     if lowered_default.kind != .CONSTRUCTOR {
+      if source_struct_name.count != 0 {
+        ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time vector constructor default value.", source_struct_name, name), expression);
+      } else {
+        ir_set_diagnostic(state, tprint("IR lowering: @function_constant '%' currently requires a compile-time vector constructor default value.", name), expression);
+      }
+      return out, false;
+    }
+    expected_count: s64 = 0;
+    if function_constant_type == {
+    case .FLOAT2; expected_count = 2;
+    case .FLOAT3; expected_count = 3;
+    case .FLOAT4; expected_count = 4;
+    }
+    vector_default_value, has_vector_default_value = ir_eval_function_constant_vector_expr(lowered_default, expected_count);
+    if !has_vector_default_value {
       if source_struct_name.count != 0 {
         ir_set_diagnostic(state, tprint("IR lowering: @function_constants field '%.%' currently requires a compile-time vector constructor default value.", source_struct_name, name), expression);
       } else {
@@ -790,6 +863,8 @@ ir_validate_function_constant_value :: (name: string,
     default_value_text = default_value_text,
     has_scalar_default_value = has_scalar_default_value,
     scalar_default_value = scalar_default_value,
+    has_vector_default_value = has_vector_default_value,
+    vector_default_value = vector_default_value,
     source_struct_name = source_struct_name,
     source_arg_name = source_arg_name,
     location = make_location(source_node),
@@ -1703,6 +1778,9 @@ ir_lower_expr :: (node: *Code_Node,
       if !resolved_ok resolved_name, resolved_ok = ir_resolve_call_target_name_from_code_node(pc.procedure_expression);
       if resolved_ok {
         out.call_resolved_name = resolved_name;
+        resolved_header, header_ok := ir_resolve_call_target_header_from_code_node(pc.resolved_procedure_expression);
+        if !header_ok resolved_header, header_ok = ir_resolve_call_target_header_from_code_node(pc.procedure_expression);
+        if header_ok out.call_resolved_header = resolved_header;
         resolved_builtin := ir_builtin_call_kind_from_callee(resolved_name);
         if resolved_builtin != .NONE {
           out.call_target_kind = .BUILTIN;
@@ -2109,6 +2187,47 @@ ir_resolve_call_target_name_from_code_node :: (node: *Code_Node, depth: s64 = 0)
   }
 
   return "", false;
+}
+
+ir_resolve_call_target_header_from_code_node :: (node: *Code_Node, depth: s64 = 0) -> (*Code_Procedure_Header, bool) {
+  if !node || depth > 8 return null, false;
+
+  if node.kind == .PROCEDURE_HEADER {
+    header := cast(*Code_Procedure_Header) node;
+    if !header || header.name.count == 0 return null, false;
+    return header, true;
+  }
+
+  if node.kind == .PROCEDURE_BODY {
+    body := cast(*Code_Procedure_Body) node;
+    if body && body.header && body.header.name.count != 0 return body.header, true;
+    return null, false;
+  }
+
+  if node.kind == .DECLARATION {
+    decl := cast(*Code_Declaration) node;
+    if !decl.expression return null, false;
+    nested_header, nested_ok := ir_resolve_call_target_header_from_code_node(decl.expression, depth + 1);
+    return nested_header, nested_ok;
+  }
+
+  if node.kind == .IDENT {
+    ident := cast(*Code_Ident) node;
+    if ident.resolved_declaration {
+      resolved_header, resolved_ok := ir_resolve_call_target_header_from_code_node(cast(*Code_Node) ident.resolved_declaration, depth + 1);
+      if resolved_ok return resolved_header, true;
+    }
+    return null, false;
+  }
+
+  if node.kind == .CAST {
+    cast_node := cast(*Code_Cast) node;
+    if !cast_node.expression return null, false;
+    nested_header, nested_ok := ir_resolve_call_target_header_from_code_node(cast_node.expression, depth + 1);
+    return nested_header, nested_ok;
+  }
+
+  return null, false;
 }
 
 ir_lower_compute_input_struct :: (name: string, type: *Type_Info) -> (IR_Struct, bool) {

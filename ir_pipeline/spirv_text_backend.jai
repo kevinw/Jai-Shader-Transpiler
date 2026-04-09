@@ -667,6 +667,8 @@ IR_SPV_Gen_Function_Constant :: struct {
   default_value_text: string;
   has_scalar_default_value: bool;
   scalar_default_value: s64;
+  has_vector_default_value: bool;
+  vector_default_value: [4] float;
   spec_id: u32;
   id: Id;
   component_count: s64;
@@ -1108,12 +1110,10 @@ spv_parse_function_constant_float_vector_literal :: (text: string, expected_coun
 }
 
 emit_vector_function_constant_def :: (sb: *String_Builder, s: *IR_SPV_Gen_State, fc: IR_SPV_Gen_Function_Constant, expected_count: s64, vector_type_id: s64) -> bool {
-  component_texts, components_ok := spv_parse_function_constant_float_vector_literal(fc.default_value_text, expected_count);
-  if !components_ok return false;
+  if !fc.has_vector_default_value return false;
 
   for i: 0..expected_count-1 {
-    value_text, value_ok := parse_f32_literal_text(component_texts[i]);
-    if !value_ok return false;
+    value_text := sprint("%", fc.vector_default_value[i]);
     append(sb, tprint("% = OpSpecConstant % %\n", id_text(fc.component_ids[i]), id_text(s.id_float), value_text));
   }
 
@@ -1196,6 +1196,8 @@ register_function_constants :: (s: *IR_SPV_Gen_State, shader_constants: [] IR_Fu
       default_value_text = it.default_value_text,
       has_scalar_default_value = it.has_scalar_default_value,
       scalar_default_value = it.scalar_default_value,
+      has_vector_default_value = it.has_vector_default_value,
+      vector_default_value = it.vector_default_value,
       spec_id = it.spec_id,
       id = id,
       component_count = component_count,
@@ -1372,31 +1374,25 @@ spv_module_append_function_constant_defs_binary :: (m: *SPV_Module, s: *IR_SPV_G
       bits := (.*) cast(*u32)*value;
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_float, cast(u32) it.id, bits);
     case .FLOAT2;
-      component_texts, components_ok := spv_parse_function_constant_float_vector_literal(it.default_value_text, 2);
-      if !components_ok return_err("function constant '%' expected float2 literal, got '%'.", it.name, it.default_value_text);
+      if !it.has_vector_default_value return_err("function constant '%' is missing a folded float2 default value.", it.name);
       for i: 0..1 {
-        value, parsed_ok, remainder := string_to_float(component_texts[i]);
-        if !parsed_ok || remainder.count != 0 return_err("function constant '%' expected float2 literal, got '%'.", it.name, it.default_value_text);
+        value := it.vector_default_value[i];
         bits := (.*) cast(*u32)*value;
         spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_float, cast(u32) it.component_ids[i], bits);
       }
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_COMPOSITE, cast(u32) s.id_float2, cast(u32) it.id, cast(u32) it.component_ids[0], cast(u32) it.component_ids[1]);
     case .FLOAT3;
-      component_texts, components_ok := spv_parse_function_constant_float_vector_literal(it.default_value_text, 3);
-      if !components_ok return_err("function constant '%' expected float3 literal, got '%'.", it.name, it.default_value_text);
+      if !it.has_vector_default_value return_err("function constant '%' is missing a folded float3 default value.", it.name);
       for i: 0..2 {
-        value, parsed_ok, remainder := string_to_float(component_texts[i]);
-        if !parsed_ok || remainder.count != 0 return_err("function constant '%' expected float3 literal, got '%'.", it.name, it.default_value_text);
+        value := it.vector_default_value[i];
         bits := (.*) cast(*u32)*value;
         spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_float, cast(u32) it.component_ids[i], bits);
       }
       spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT_COMPOSITE, cast(u32) s.id_float3, cast(u32) it.id, cast(u32) it.component_ids[0], cast(u32) it.component_ids[1], cast(u32) it.component_ids[2]);
     case .FLOAT4;
-      component_texts, components_ok := spv_parse_function_constant_float_vector_literal(it.default_value_text, 4);
-      if !components_ok return_err("function constant '%' expected float4 literal, got '%'.", it.name, it.default_value_text);
+      if !it.has_vector_default_value return_err("function constant '%' is missing a folded float4 default value.", it.name);
       for i: 0..3 {
-        value, parsed_ok, remainder := string_to_float(component_texts[i]);
-        if !parsed_ok || remainder.count != 0 return_err("function constant '%' expected float4 literal, got '%'.", it.name, it.default_value_text);
+        value := it.vector_default_value[i];
         bits := (.*) cast(*u32)*value;
         spv_module_append_words(m, .TYPES_CONSTANTS_GLOBALS, SPV_OP_SPEC_CONSTANT, cast(u32) s.id_float, cast(u32) it.component_ids[i], bits);
       }
@@ -1925,6 +1921,74 @@ find_function :: (s: *IR_SPV_Gen_State, name: string) -> *IR_Function {
   }
   return null;
 }
+
+ir_overload_types_match :: (a: IR_Type, b: IR_Type) -> bool {
+  if a.kind != b.kind return false;
+  if a.kind == .STRUCT {
+    if a.origin && b.origin return a.origin == b.origin;
+    return a.struct_name == b.struct_name && a.display_name == b.display_name;
+  }
+  if a.kind == .POINTER {
+    return a.pointee_kind == b.pointee_kind &&
+      a.pointee_struct_name == b.pointee_struct_name &&
+      a.pointee_element_kind == b.pointee_element_kind &&
+      a.pointee_element_struct_name == b.pointee_element_struct_name &&
+      a.pointee_array_count == b.pointee_array_count;
+  }
+  if a.kind == .FIXED_ARRAY {
+    return a.element_kind == b.element_kind &&
+      a.element_struct_name == b.element_struct_name &&
+      a.array_count == b.array_count;
+  }
+  return true;
+}
+
+find_function_for_call :: (s: *IR_SPV_Gen_State, name: string, call_args: [] *IR_Expr) -> *IR_Function {
+  if !s return null;
+
+  target := ir_canonical_callee_name(name);
+  best: *IR_Function = null;
+  best_score: s64 = -1;
+
+  for *s.functions {
+    if ir_canonical_callee_name(it.name) != target continue;
+    if it.args.count != call_args.count continue;
+
+    score: s64 = 0;
+    match := true;
+    for arg_index: 0..it.args.count-1 {
+      call_arg := call_args[arg_index];
+      if !call_arg {
+        match = false;
+        break;
+      }
+      if !ir_overload_types_match(it.args[arg_index].type, call_arg.result_type) {
+        match = false;
+        break;
+      }
+      score += 1;
+    }
+
+    if match && score > best_score {
+      best = it;
+      best_score = score;
+    }
+  }
+
+  if best return best;
+  return find_function(s, name);
+}
+
+find_function_for_expr_call :: (s: *IR_SPV_Gen_State, call_expr: *IR_Expr, fallback_name: string) -> *IR_Function {
+  if !s || !call_expr return null;
+  if call_expr.call_resolved_header {
+    for *s.functions {
+      if it.origin_header == call_expr.call_resolved_header return it;
+    }
+  }
+  return find_function_for_call(s, fallback_name, call_expr.args);
+}
+
 find_struct :: (s: *IR_SPV_Gen_State, name: string, origin: *Type_Info_Struct = null) -> *IR_Struct {
   if origin {
     for *s.extra_structs if it.origin && it.origin == origin return it;
@@ -3290,7 +3354,7 @@ init_local_struct_from_expr :: (s: *IR_SPV_Gen_State, dst: *IR_SPV_Gen_Local_Str
   }
 
   if expr.kind == .CALL && expr.left && expr.left.kind == .IDENT {
-    helper := find_function(s, expr.left.text);
+    helper := find_function_for_expr_call(s, expr, expr.left.text);
     if helper && helper.return_type.kind == .STRUCT {
       helper_return_struct_name := spv_struct_name_from_ir_type(helper.return_type);
       if helper_return_struct_name == dst.type_name {
@@ -4225,11 +4289,36 @@ emit_float_builtin_call :: (s: *IR_SPV_Gen_State, builtin_name: string, args: []
     if !a_ok return 0, .UNKNOWN, false, a_diag;
     b_id, b_type, b_ok, b_diag := emit_expr(s, args[1]);
     if !b_ok return 0, .UNKNOWN, false, b_diag;
+    op_name := ifx builtin_name == "min" then "FMin" else "FMax";
+    if a_type == .FLOAT2 || b_type == .FLOAT2 {
+      av, av_ok, av_diag := coerce_to_float2(s, a_id, a_type);
+      if !av_ok return 0, .UNKNOWN, false, av_diag;
+      bv, bv_ok, bv_diag := coerce_to_float2(s, b_id, b_type);
+      if !bv_ok return 0, .UNKNOWN, false, bv_diag;
+      result := spv_extinst2(s, s.id_float2, op_name, av, bv);
+      return result, .FLOAT2, true, diag;
+    }
+    if a_type == .FLOAT3 || b_type == .FLOAT3 {
+      av, av_ok, av_diag := coerce_to_float3(s, a_id, a_type);
+      if !av_ok return 0, .UNKNOWN, false, av_diag;
+      bv, bv_ok, bv_diag := coerce_to_float3(s, b_id, b_type);
+      if !bv_ok return 0, .UNKNOWN, false, bv_diag;
+      result := spv_extinst2(s, s.id_float3, op_name, av, bv);
+      return result, .FLOAT3, true, diag;
+    }
+    if a_type == .FLOAT4 || b_type == .FLOAT4 {
+      av, av_ok, av_diag := coerce_to_float4(s, a_id, a_type);
+      if !av_ok return 0, .UNKNOWN, false, av_diag;
+      bv, bv_ok, bv_diag := coerce_to_float4(s, b_id, b_type);
+      if !bv_ok return 0, .UNKNOWN, false, bv_diag;
+      result := spv_extinst2(s, s.id_float4, op_name, av, bv);
+      return result, .FLOAT4, true, diag;
+    }
+
     af, af_ok, af_diag := coerce_to_float(s, a_id, a_type);
     if !af_ok return 0, .UNKNOWN, false, af_diag;
     bf, bf_ok, bf_diag := coerce_to_float(s, b_id, b_type);
     if !bf_ok return 0, .UNKNOWN, false, bf_diag;
-    op_name := ifx builtin_name == "min" then "FMin" else "FMax";
     result := spv_extinst2(s, s.id_float, op_name, af, bf);
     return result, .FLOAT, true, diag;
   }
@@ -5863,7 +5952,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
             return member_id, member_type, member_ok, member_diag;
           }
         }
-        helper := find_function(s, expr.left.left.text);
+        helper := find_function_for_expr_call(s, expr.left, expr.left.left.text);
         if !helper return_err("unknown helper '%'.", expr.left.left.text);
         helper_ret_kind := spv_kind_from_ir_type(helper.return_type);
         helper_ret_text := helper.return_type.display_name;
@@ -7038,7 +7127,7 @@ emit_expr :: (s: *IR_SPV_Gen_State, expr: *IR_Expr) -> (value_id: s64, value_typ
         if !builtin_ok return 0, .UNKNOWN, false, builtin_diag;
         return builtin_id, builtin_type, true, diag;
       }
-      helper := find_function(s, helper_name);
+      helper := find_function_for_expr_call(s, expr, helper_name);
       if !helper return_err("unsupported call target '%'.", helper_name);
       helper_id, helper_type, helper_ok, helper_diag := eval_inline_function(s, helper, expr.args);
       return helper_id, helper_type, helper_ok, helper_diag;
@@ -7309,7 +7398,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
           load_ok, load_diag := load_buffer_struct_into_local_struct(s, local_struct, stmt.decl_init);
           if !load_ok return false, false, make_diag("struct declaration '%': subscript initializer failed: %", stmt.decl_name, load_diag.message);
         } else if stmt.decl_init.kind == .CALL && stmt.decl_init.left && stmt.decl_init.left.kind == .IDENT {
-          helper := find_function(s, stmt.decl_init.left.text);
+          helper := find_function_for_expr_call(s, stmt.decl_init, stmt.decl_init.left.text);
           helper_return_struct_name := "";
           if helper {
             if helper.return_type.kind == .STRUCT {
@@ -7348,7 +7437,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
             }
           } else if stmt.binary_right && stmt.binary_right.kind == .CALL &&
                     stmt.binary_right.left && stmt.binary_right.left.kind == .IDENT {
-            helper := find_function(s, stmt.binary_right.left.text);
+            helper := find_function_for_expr_call(s, stmt.binary_right, stmt.binary_right.left.text);
             helper_return_struct_name := "";
             if helper {
               if helper.return_type.kind == .STRUCT {
@@ -7948,7 +8037,7 @@ emit_stmt :: (s: *IR_SPV_Gen_State, stmt: *IR_Stmt) -> (ok: bool, terminated: bo
         return true, false, diag;
       }
 
-      helper := find_function(s, helper_name);
+      helper := find_function_for_expr_call(s, stmt.call_expr, helper_name);
       if helper && helper_returns_void(helper) {
         call_ok, call_diag := eval_inline_function_void(s, helper, stmt.call_expr.args);
         if !call_ok return false, false, call_diag;

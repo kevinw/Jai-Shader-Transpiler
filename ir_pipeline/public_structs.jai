@@ -94,6 +94,8 @@ IR_Function_Constant :: struct {
   default_value_text: string;
   has_scalar_default_value: bool;
   scalar_default_value: s64;
+  has_vector_default_value: bool;
+  vector_default_value: [4] float;
   declaration: *Code_Declaration;
   source_struct_name: string;
   source_arg_name: string;
@@ -163,6 +165,7 @@ IR_Function_Arg :: struct {
 
 IR_Function :: struct {
   name: string;
+  origin_header: *Code_Procedure_Header;
   return_type: IR_Type;
   args: [..] IR_Function_Arg;
   body: IR_Block;
@@ -295,6 +298,7 @@ IR_Expr :: struct {
   call_target_kind: IR_Call_Target_Kind;
   call_builtin_kind: IR_Call_Builtin_Kind;
   call_resolved_name: string;
+  call_resolved_header: *Code_Procedure_Header;
   binary_operator_type: Operator_Type;
   text: string;
   left: *IR_Expr;

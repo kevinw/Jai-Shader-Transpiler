@@ -325,6 +325,35 @@ graphics_test_global_fixed_array_fragment :: (using input: Graphics_Bindless_Ver
   return out;
 } @fragment_shader
 
+graphics_test_linear_present_tonemap :: (x: float, exposure: float) -> float {
+  hdr := x * max(exposure, 0.001);
+  mapped := (hdr * (2.51 * hdr + 0.03)) / (hdr * (2.43 * hdr + 0.59) + 0.14);
+  return clamp(mapped, 0.0, 1.0);
+}
+
+graphics_test_linear_present_tonemap :: (color: Vector3, exposure: float) -> Vector3 {
+  hdr := color * max(exposure, 0.001);
+  a := Vector3.{2.51, 2.51, 2.51};
+  b := Vector3.{0.03, 0.03, 0.03};
+  c := Vector3.{2.43, 2.43, 2.43};
+  d := Vector3.{0.59, 0.59, 0.59};
+  e := Vector3.{0.14, 0.14, 0.14};
+  mapped := (hdr * (a * hdr + b)) / (hdr * (c * hdr + d) + e);
+  return .{
+    graphics_test_linear_present_tonemap(mapped.x, 1.0),
+    graphics_test_linear_present_tonemap(mapped.y, 1.0),
+    graphics_test_linear_present_tonemap(mapped.z, 1.0),
+  };
+}
+
+graphics_test_vector_tonemap_helper_fragment :: (using input: Graphics_Test_Vertex_Out) -> Graphics_Test_Fragment_Out {
+  using out: Graphics_Test_Fragment_Out;
+  _ = input;
+  color := graphics_test_linear_present_tonemap(.{0.8, 0.45, 0.2}, 1.25);
+  out_color = .{color.x, color.y, color.z, 1.0};
+  return out;
+} @fragment_shader
+
 Graphics_Instance_Vertex_In :: struct {
   a_pos: Vector2; @semantic_ATTRIBUTE0
   vertex_id: u32; @semantic_SV_VertexID
@@ -2125,6 +2154,43 @@ run_global_fixed_array_case_metal :: () {
   log("[OK] graphics_global_fixed_array");
 }
 
+run_vector_tonemap_helper_pair_case_metal :: () {
+  init_objective_c();
+  init_metal();
+
+  pair_source := get_transpiled(.METAL, graphics_test_red_triangle_vertex, graphics_test_vector_tonemap_helper_fragment);
+  check_contains(pair_source, "vertex", "vector-tonemap-helper pair metal");
+  check_contains(pair_source, "fragment", "vector-tonemap-helper pair metal");
+  check_occurs_once(pair_source, "using namespace metal;", "vector-tonemap-helper pair metal");
+
+  device := cast(*MTLDevice) MTLCreateSystemDefaultDevice();
+  if !device fail("Failed to get default Metal device");
+
+  compile_options := objc_init(objc_alloc(MTLCompileOptions));
+  defer release(compile_options);
+  MTLCompileOptions.setLanguageVersion(compile_options, .MTLLanguageVersion2_1);
+
+  error: *NSError = null;
+  pair_lib := MTLDevice.newLibraryWithSource_options_error(device, NSString.getTempString(pair_source), compile_options, *error);
+  if log_nserror("Failed to compile vector-tonemap-helper pair metal source", error) || !pair_lib {
+    fail("Failed to compile vector-tonemap-helper pair metal source");
+  }
+  defer release(pair_lib);
+
+  vertex_entry := extract_stage_entry_name(pair_source, "vertex");
+  fragment_entry := extract_stage_entry_name(pair_source, "fragment");
+
+  fn_vertex := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(vertex_entry));
+  if !fn_vertex fail("Failed to find vector-tonemap-helper pair vertex entry point '%'", vertex_entry);
+  defer release(fn_vertex);
+
+  fn_fragment := cast(*MTLFunction) MTLLibrary.newFunctionWithName(pair_lib, NSString.getTempString(fragment_entry));
+  if !fn_fragment fail("Failed to find vector-tonemap-helper pair fragment entry point '%'", fragment_entry);
+  defer release(fn_fragment);
+
+  log("[OK] graphics_vector_tonemap_helper_pair");
+}
+
 main :: () {
   #if OS != .MACOS {
     log("Skipping graphics semantics runner on % (Metal-only test).", OS);
@@ -2148,7 +2214,8 @@ main :: () {
   run_matrix_nested_pair_case_metal();
   run_local_struct_pointer_case_metal();
   run_global_fixed_array_case_metal();
-  log("Passed 17 graphics semantics cases.");
+  run_vector_tonemap_helper_pair_case_metal();
+  log("Passed 18 graphics semantics cases.");
 }
 
 #scope_file

@@ -157,6 +157,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; EnumStor
   {"tuple_destructure_helper_calls", .Bare},
   {"call_arg_implicit_cast_to_s64", .Bare},
   {"shaderfuncs_vector_mix_clamp", .Bare},
+  {"shaderfuncs_vector_min_max_tonemap", .Bare},
   {"shaderfuncs_vector_step_smoothstep_mod", .Bare},
   {"shaderfuncs_vector_coerce_int_scalars", .Bare},
   {"vector_anonymous_literal_chain", .Bare},
@@ -2375,6 +2376,25 @@ shaderfuncs_vector_mix_clamp :: (using in: Compute_Semantics_In, values: *u32) {
   bounded := clamp(mixed, 0.08, 0.91);
   bounded = clamp(bounded, Vector3.{0.10, 0.12, 0.06}, Vector3.{0.88, 0.83, 0.79});
   values[idx] = cast(u32) (bounded.x * 173.0 + bounded.y * 257.0 + bounded.z * 311.0 + cast(float) idx * 1.5);
+} @compute_shader
+
+shaderfuncs_vector_min_max_tonemap :: (using in: Compute_Semantics_In, values: *u32) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  color := Vector3.{
+    cast(float) (values[idx] % 41) * 0.041 + 0.11,
+    cast(float) (idx % 29) * 0.033 + 0.07,
+    cast(float) ((values[idx] + idx) % 37) * 0.027 + 0.03,
+  };
+  hdr := color * max(cast(float) ((idx % 9) + 1) * 0.23, 0.001);
+  a := Vector3.{2.51, 2.51, 2.51};
+  b := Vector3.{0.03, 0.03, 0.03};
+  c := Vector3.{2.43, 2.43, 2.43};
+  d := Vector3.{0.59, 0.59, 0.59};
+  e := Vector3.{0.14, 0.14, 0.14};
+  mapped := (hdr * (a * hdr + b)) / (hdr * (c * hdr + d) + e);
+  bounded := clamp(mapped, 0.0, 1.0);
+  values[idx] = cast(u32) floor((bounded.x * 173.0 + bounded.y * 257.0 + bounded.z * 311.0) + 0.5);
 } @compute_shader
 
 shaderfuncs_vector_step_smoothstep_mod :: (using in: Compute_Semantics_In, values: *u32) {
