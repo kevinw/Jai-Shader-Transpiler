@@ -8,6 +8,7 @@ ir_reset_diagnostic :: (state: *IR_Lowering_State) #foreign ir_pipe_lib "_jdll_i
 ir_uses_pointer_abi_local :: (args: [] IR_Function_Arg, extra_structs: [] IR_Struct) -> bool #foreign ir_pipe_lib "_jdll_ir_uses_pointer_abi_local";
 ir_struct_has_pointer_fields_recursive_local :: (extra_structs: [] IR_Struct, name: string) -> bool #foreign ir_pipe_lib "_jdll_ir_struct_has_pointer_fields_recursive_local";
 spv_memory_model_from_text :: (spvasm: string) -> string #foreign ir_pipe_lib "_jdll_spv_memory_model_from_text";
+ir_merge_metal_bundle_sources :: (sources: [] string) -> string #foreign ir_pipe_lib "_jdll_ir_merge_metal_bundle_sources";
 ir_merge_metal_pair_sources :: (vertex_source: string, fragment_source: string) -> string #foreign ir_pipe_lib "_jdll_ir_merge_metal_pair_sources";
 ir_metal_split_top_level_decls :: (source: string, out_preamble: *string, out_decls: *[..] string) #foreign ir_pipe_lib "_jdll_ir_metal_split_top_level_decls";
 shader_name_from_call_arg :: (arg: *Code_Node) -> string #foreign ir_pipe_lib "_jdll_shader_name_from_call_arg";
@@ -26,6 +27,7 @@ ir_lower_task_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Resul
 ir_lower_compute_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Compute_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_compute_from_shader_context";
 ir_lower_fragment_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Fragment_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_fragment_from_shader_context";
 ir_lower_vertex_from_shader_context :: (ctx: IR_Shader_Header_Context) -> IR_Result(IR_Vertex_Shader) #foreign ir_pipe_lib "_jdll_ir_lower_vertex_from_shader_context";
+ir_collect_header_function_constants :: (header: *Code_Procedure_Header, start_arg_index: s64 = 1) -> IR_Result([..] IR_Function_Constant) #foreign ir_pipe_lib "_jdll_ir_collect_header_function_constants";
     
 #load "../../ir_pipeline/public_structs.jai";
 

@@ -2488,7 +2488,7 @@ ir_collect_header_function_constants :: (
     }
     ir_sort_function_constants_deterministic(*out);
     return {out, true, ir_get_diagnostic(*state)};
-}
+} @jdll_export
 
 ir_lower_collect_structs_from_helpers :: (
     main_header: *Code_Procedure_Header,
