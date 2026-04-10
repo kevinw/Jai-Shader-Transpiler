@@ -385,46 +385,6 @@ manifest_make_mesh_entry :: (ctx: *Shader_Write_Mesh_Context, workspace_root: st
 emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
   assert(plugin != null);
 
-  global_dependencies: [..] string;
-  for plugin.manifest_entries {
-    for it.dependencies {
-      array_add_if_unique(*global_dependencies, it);
-    }
-  }
-
-  sb: String_Builder;
-  append(*sb, "version 3\n");
-  append(*sb, tprint("pipeline_fingerprint %\n", jst_pipeline_fingerprint()));
-  append(*sb, tprint("entry_count %\n", plugin.manifest_entries.count));
-  append(*sb, tprint("global_dependency_count %\n", global_dependencies.count));
-  for global_dependencies append(*sb, tprint("global_dependency %\n", it));
-
-  for plugin.manifest_entries {
-    append(*sb, "entry_begin\n");
-    append(*sb, tprint("entry_id %\n", it.entry_id));
-    append(*sb, tprint("request_name %\n", it.request_name));
-    append(*sb, tprint("output_source_path %\n", it.output_source_path));
-    append(*sb, tprint("output_air_path %\n", it.output_air_path));
-    append(*sb, tprint("output_metallib_path %\n", it.output_metallib_path));
-    append(*sb, tprint("shader_kind %\n", it.shader_kind));
-    append(*sb, tprint("stage %\n", it.stage));
-    append(*sb, tprint("target %\n", it.target));
-    append(*sb, tprint("primary_name %\n", it.primary_name));
-    append(*sb, tprint("secondary_name %\n", it.secondary_name));
-    append(*sb, tprint("tertiary_name %\n", it.tertiary_name));
-    append(*sb, tprint("metal_task_entry %\n", it.metal_task_entry));
-    append(*sb, tprint("metal_mesh_entry %\n", it.metal_mesh_entry));
-    append(*sb, tprint("metal_vertex_entry %\n", it.metal_vertex_entry));
-    append(*sb, tprint("metal_fragment_entry %\n", it.metal_fragment_entry));
-    append(*sb, tprint("metal_compute_entry %\n", it.metal_compute_entry));
-    append(*sb, tprint("metal_compute_binding_mode %\n", it.metal_compute_binding_mode));
-    append(*sb, tprint("signature_hash %\n", it.signature_hash));
-    append(*sb, tprint("signature %\n", it.signature));
-    append(*sb, tprint("dependency_count %\n", it.dependencies.count));
-    for it.dependencies append(*sb, tprint("dependency %\n", it));
-    append(*sb, "entry_end\n");
-  }
-
   make_directory_if_it_does_not_exist(DEBUG_OUTDIR, recursive=true);
   workspace_name := copy_string(get_name(plugin.workspace),, temp);
   if workspace_name.count == 0 workspace_name = "workspace";
@@ -443,7 +403,7 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
   if manifest_set_hash == 0 manifest_set_hash = manifest_hash_u64(workspace_name);
 
   path := tprint("%/shader_reload_manifest_%_%.txt", DEBUG_OUTDIR, workspace_name, formatInt(manifest_set_hash, base=16));
-  manifest_text := builder_to_string(*sb);
+  manifest_text := manifest_build_text(plugin.manifest_entries, jst_pipeline_fingerprint());
   ok := write_entire_file(path, manifest_text);
   if !ok {
     log_error("Jai Shader Transpiler: failed to write shader reload manifest to '%'.", path);
@@ -464,7 +424,9 @@ emit_shader_reload_manifest :: (plugin: *Jai_To_Shader_Plugin) {
     move_ok := file_move(app_latest_tmp_path, app_latest_path);
     if !move_ok {
       compiler_report(tprint("Could not atomically update app manifest '%'", app_latest_path));
+      return;
     }
+
   }
 }
 
@@ -511,4 +473,49 @@ sanitize_shader_reload_manifest_alias_component :: (value: string) -> string {
     }
   }
   return out;
+}
+
+manifest_build_text :: (entries: [] Shader_Reload_Manifest_Entry, pipeline_fingerprint: string) -> string {
+  global_dependencies: [..] string;
+  for entries {
+    for it.dependencies {
+      array_add_if_unique(*global_dependencies, it);
+    }
+  }
+
+  sb: String_Builder;
+  append(*sb, "version 3\n");
+  append(*sb, tprint("pipeline_fingerprint %\n", pipeline_fingerprint));
+  append(*sb, tprint("entry_count %\n", entries.count));
+  append(*sb, tprint("global_dependency_count %\n", global_dependencies.count));
+  for global_dependencies append(*sb, tprint("global_dependency %\n", it));
+
+  for entries {
+    entry := it;
+    append(*sb, "entry_begin\n");
+    append(*sb, tprint("entry_id %\n", entry.entry_id));
+    append(*sb, tprint("request_name %\n", entry.request_name));
+    append(*sb, tprint("output_source_path %\n", entry.output_source_path));
+    append(*sb, tprint("output_air_path %\n", entry.output_air_path));
+    append(*sb, tprint("output_metallib_path %\n", entry.output_metallib_path));
+    append(*sb, tprint("shader_kind %\n", entry.shader_kind));
+    append(*sb, tprint("stage %\n", entry.stage));
+    append(*sb, tprint("target %\n", entry.target));
+    append(*sb, tprint("primary_name %\n", entry.primary_name));
+    append(*sb, tprint("secondary_name %\n", entry.secondary_name));
+    append(*sb, tprint("tertiary_name %\n", entry.tertiary_name));
+    append(*sb, tprint("metal_task_entry %\n", entry.metal_task_entry));
+    append(*sb, tprint("metal_mesh_entry %\n", entry.metal_mesh_entry));
+    append(*sb, tprint("metal_vertex_entry %\n", entry.metal_vertex_entry));
+    append(*sb, tprint("metal_fragment_entry %\n", entry.metal_fragment_entry));
+    append(*sb, tprint("metal_compute_entry %\n", entry.metal_compute_entry));
+    append(*sb, tprint("metal_compute_binding_mode %\n", entry.metal_compute_binding_mode));
+    append(*sb, tprint("signature_hash %\n", entry.signature_hash));
+    append(*sb, tprint("signature %\n", entry.signature));
+    append(*sb, tprint("dependency_count %\n", entry.dependencies.count));
+    for entry.dependencies append(*sb, tprint("dependency %\n", it));
+    append(*sb, "entry_end\n");
+  }
+
+  return builder_to_string(*sb);
 }

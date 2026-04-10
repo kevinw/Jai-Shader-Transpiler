@@ -82,6 +82,7 @@ Jai_To_Shader_Plugin :: struct {
       lookup_entries: [..] Transpiled_Lookup_Entry;
       emitted_symbol_names: [..] string;
       manifest_entries: [..] Shader_Reload_Manifest_Entry;
+      accumulated_manifest_entries: [..] Shader_Reload_Manifest_Entry;
       did_emit_lookup_overloads: bool;
       did_log_ir_pipeline: bool;
       did_log_ir_limitations: bool;
@@ -1219,7 +1220,10 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
           }
 
           manifest_entry := manifest_make_pair_entry(pair_ctx, workspace_root);
-          if manifest_entry.request_name.count != 0 array_add(*plugin.manifest_entries, manifest_entry);
+          if manifest_entry.request_name.count != 0 {
+            array_add(*plugin.manifest_entries, manifest_entry);
+            manifest_add_or_replace_entry(*plugin.accumulated_manifest_entries, manifest_entry);
+          }
 
           remove pair_ctx;
         }
@@ -1247,7 +1251,10 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
                                                mesh_ctx.function_constants);
 
           manifest_entry := manifest_make_mesh_entry(mesh_ctx, workspace_root);
-          if manifest_entry.request_name.count != 0 array_add(*plugin.manifest_entries, manifest_entry);
+          if manifest_entry.request_name.count != 0 {
+            array_add(*plugin.manifest_entries, manifest_entry);
+            manifest_add_or_replace_entry(*plugin.accumulated_manifest_entries, manifest_entry);
+          }
           remove mesh_ctx;
         }
 
@@ -1332,16 +1339,13 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
               }
             }
             manifest_entry := manifest_make_single_entry(ctx, workspace_root);
-            if manifest_entry.request_name.count != 0 array_add(*plugin.manifest_entries, manifest_entry);
+            if manifest_entry.request_name.count != 0 {
+              array_add(*plugin.manifest_entries, manifest_entry);
+              manifest_add_or_replace_entry(*plugin.accumulated_manifest_entries, manifest_entry);
+            }
           }
           array_reset(*plugin.currently_waiting_contexts);
         }
-
-        if !build_metal_artifacts_for_manifest_entries(plugin, workspace_root) {
-          compiler_report("Jai Shader Transpiler: failed building Metal AIR/metallib artifacts.");
-        }
-
-        if plugin.manifest_entries.count > 0 emit_shader_reload_manifest(plugin);
         #if VERBOSE jst_log_cache_summary();
 
         emit_lookup_overloads(plugin, p.workspace);
@@ -1356,6 +1360,16 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
     
     case .COMPLETE; {
       using,except(message, plugin) plugin;
+      workspace_root := get_working_directory();
+      saved_manifest_entries := manifest_entries;
+      manifest_entries = accumulated_manifest_entries;
+      if manifest_entries.count > 0 {
+        if !build_metal_artifacts_for_manifest_entries(plugin, workspace_root) {
+          compiler_report("Jai Shader Transpiler: failed building Metal AIR/metallib artifacts.");
+        }
+        emit_shader_reload_manifest(plugin);
+      }
+      manifest_entries = saved_manifest_entries;
       if currently_waiting_contexts.count != 0 || currently_waiting_pair_contexts.count != 0 || currently_waiting_mesh_contexts.count != 0 {
         complete_message := cast(*Message_Complete)message;
         if complete_message.error_code == 0 {
@@ -1370,6 +1384,7 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       array_reset(*lookup_entries);
       array_reset(*emitted_symbol_names);
       array_reset(*manifest_entries);
+      array_reset(*accumulated_manifest_entries);
       did_emit_lookup_overloads = false;
       did_log_ir_pipeline = false;
       did_log_ir_limitations = false;
@@ -1377,6 +1392,16 @@ convert_procs :: (p: *Metaprogram_Plugin, message: *Message) {
       table_reset(*get_transpiled_requests_seen);
     }
   }
+}
+
+manifest_add_or_replace_entry :: (entries: *[..] Shader_Reload_Manifest_Entry, entry: Shader_Reload_Manifest_Entry) {
+  assert(entries != null);
+  for *entries.* {
+    if it.entry_id != entry.entry_id continue;
+    it.* = entry;
+    return;
+  }
+  array_add(entries, entry);
 }
 
 _before_intercept :: (p: *Metaprogram_Plugin, intercept_flags: *Intercept_Flags) {

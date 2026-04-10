@@ -347,7 +347,9 @@ shader_reload_build_entry_ids_with_context :: (using paths: *Shader_Path_Context
         return false;
     }
 
-    verbose_log("build start app=% resolved=% ids=% cwd=%", app_source_file, resolved_app_source_file, changed_entry_ids_csv, build_working_dir);
+    // Hot reload currently rebuilds the full app shader bundle so the latest manifest and Metallib stay coherent.
+    // We still keep changed_entry_ids_csv for logging and for limiting which live pipelines get swapped afterward.
+    verbose_log("build start app=% resolved=% ids=% mode=full_app cwd=%", app_source_file, resolved_app_source_file, changed_entry_ids_csv, build_working_dir);
     process_result, stdout, stderr, timeout := Process.run_command(
         "jai",
         "build.jai",
