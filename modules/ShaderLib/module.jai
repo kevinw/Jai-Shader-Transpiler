@@ -33,6 +33,29 @@ decode_bc5_normal :: inline (encoded: Vector4) -> Vector3 {
     return decode_bc5_normal(.{encoded.x, encoded.y});
 }
 
+hash01 :: (i: u32) -> float {
+    return hash01(cast(float)i);
+}
+
+hash01 :: (seed: float) -> float {
+    x := sin(seed * 12.9898 + 78.233) * 43758.547;
+    return x - floor(x);
+}
+
+hash01 :: (i: u32, pos: Vector2) -> float {
+    return hash01(cast(float)i, pos);
+}
+
+hash01 :: (i: float, pos: Vector2) -> float {
+    k0: float = 12.9898;
+    k1: float = 78.233;
+    k2: float = 37.719;
+    k3: float = 43758.547;
+    n := sin(pos.x * k0 + pos.y * k1 + cast(float) i * k2);
+    x := n * k3;
+    return x - floor(x);
+}
+
 #scope_file
 #import "Math";
 #import "Jai-Shader-Transpiler/modules/ShaderFuncs";

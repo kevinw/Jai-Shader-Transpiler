@@ -1,3 +1,9 @@
+/*
+
+The idea here is to provide a glsl- or hlsl- like set of shader functions which can get lowered
+to appropriate intrinsics
+
+*/
 #import "Basic";
 #import "Math";
 
