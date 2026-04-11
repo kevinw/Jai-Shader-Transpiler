@@ -3517,12 +3517,31 @@ emit_buffer_struct_field_ptr_from_member_expr :: (s: *IR_SPV_Gen_State, member_e
   if !member_expr || member_expr.kind != .MEMBER return_err("expected member expression for struct-buffer field access.");
 
   buffer_name, field_path, path_ok := resolve_buffer_prefix_and_field_path(s, member_expr);
-  if !path_ok return_err("member root must resolve to a buffer identifier.");
-  buffer := find_buffer(s, buffer_name);
-  if !buffer return_err("unknown buffer '%'.", buffer_name);
+  buffer: IR_SPV_Gen_Buffer;
+  has_buffer := false;
+  if path_ok {
+    found_buffer := find_buffer(s, buffer_name);
+    if found_buffer {
+      buffer = found_buffer.*;
+      has_buffer = true;
+    }
+  } else {
+    buffer, buffer_name, path_ok, diag = resolve_buffer_alias_from_expr(s, member_expr.left);
+    if !path_ok {
+      if diag.message.count != 0 return 0, .UNKNOWN, false, diag;
+      return_err("member root must resolve to a buffer identifier.");
+    }
+    field_path = member_expr.text;
+    has_buffer = true;
+  }
+  if !has_buffer return_err("unknown buffer '%'.", buffer_name);
   if buffer.element_kind != .STRUCT return_err("buffer '%' is not a struct buffer.", buffer.name);
   if field_path.count == 0 return_err("buffer '%' must be accessed through a field.", buffer.name);
-  field := find_buffer_field(buffer, field_path);
+  field: *IR_SPV_Gen_Buffer_Field = null;
+  for *buffer.fields if it.name == field_path {
+    field = it;
+    break;
+  }
   if !field return_err("unknown field '%.%'.", buffer.name, field_path);
   if field.is_array return_err("buffer struct field '%.%' is an array; index it first.", buffer.name, field_path);
 

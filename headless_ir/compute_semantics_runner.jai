@@ -111,6 +111,7 @@ ALL_TEST_FUNCTIONS :: (struct { name: string; type: enum { Bare; Table; EnumStor
   {"vector_component_write_order", .Boids},
   {"nested_array_struct_chain", .Boids},
   {"using_shadow_member_write", .Bare},
+  {"using_pointer_arg_source", .Vec4Box},
   {"signed_unsigned_shift_compare", .Bare},
   {"int64_loop_cast_mod", .Bare},
   {"matrix_ctor_scalar_chain", .Bare},
@@ -1661,6 +1662,13 @@ using_shadow_member_write :: (using in: Compute_Semantics_In, values: *u32) {
     values[idx] += inner;
   }
   values[idx] += a;
+} @compute_shader
+
+using_pointer_arg_source :: (using in: Compute_Semantics_In, values: *u32, table: *Compute_Vec4_Box) {
+  if thread_id.x >= 64 return;
+  idx := thread_id.x;
+  using table;
+  values[idx] = values[idx] + cast(u32) (v.x * 4.0) + (idx % 5) + idx;
 } @compute_shader
 
 signed_unsigned_shift_compare :: (using in: Compute_Semantics_In, values: *u32) {

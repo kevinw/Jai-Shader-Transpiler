@@ -742,17 +742,28 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       }
 
       using_type := op.expression.type;
-      if !using_type || using_type.type != .STRUCT {
-        return_err("IR lowering: using currently supports struct expressions only", op.expression);
+      using_struct_type: *Type_Info = null;
+      using_struct: *Type_Info_Struct = null;
+      if using_type && using_type.type == .STRUCT {
+        using_struct_type = using_type;
+        using_struct = cast(*Type_Info_Struct) using_type;
+      } else if using_type && using_type.type == .POINTER {
+        ptr := cast(*Type_Info_Pointer) using_type;
+        if ptr.pointer_to && ptr.pointer_to.type == .STRUCT {
+          using_struct_type = ptr.pointer_to;
+          using_struct = cast(*Type_Info_Struct) ptr.pointer_to;
+        }
       }
-      using_struct := cast(*Type_Info_Struct) using_type;
+      if !using_struct {
+        return_err("IR lowering: using currently supports struct expressions and pointers to struct expressions only", op.expression);
+      }
 
       src: IR_Using_Source;
       src.expression_node = op.expression;
       for *using_struct.members array_add(*src.field_names, it.name);
       array_add(active_usings, src);
 
-      if output_fields.count != 0 && ir_shared_struct_fields_match_names(using_type, output_fields) {
+      if output_fields.count != 0 && ir_shared_struct_fields_match_names(using_struct_type, output_fields) {
         if op.expression.kind == .IDENT {
           ident := cast(*Code_Ident) op.expression;
           if ident.resolved_declaration {
