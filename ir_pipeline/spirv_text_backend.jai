@@ -2578,6 +2578,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
     for struct_def.fields {
       if it.type.kind == .STRUCT && spv_kind_from_ir_type_for_layout(s, it.type) == .STRUCT {
         outer_field_name := it.name;
+        flatten_nested_into_parent := buffer_struct_field_is_using(struct_def, *it);
         nested_struct_name := it.type.struct_name;
         nested_struct := find_struct(s, nested_struct_name);
         if !nested_struct {
@@ -2671,7 +2672,7 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
             return_err("SPIR-V generic backend: buffer struct '%' nested field '%.%' is not CPU-blittable (cpu offset %, gpu offset %).", struct_def.name, outer_field_name, nested_field.name, nested_cpu_offset, nested_offset);
           }
 
-          nested_field_name := tprint("%.%", outer_field_name, nested_field.name);
+          nested_field_name := ifx flatten_nested_into_parent then nested_field.name else tprint("%.%", outer_field_name, nested_field.name);
           field_index := buffer_info.fields.count;
           array_add(*buffer_info.fields, .{
             name = nested_field_name,
@@ -2783,7 +2784,6 @@ init_base :: (s: *IR_SPV_Gen_State, buffers: [] IR_Compute_Buffer, bound_value: 
       }
 
       field_index := buffer_info.fields.count;
-      assert(field_index == it_index, "buffer field collection order diverged from IR_Struct iteration order for '%' field '%'", struct_def.name, it.name);
       array_add(*buffer_info.fields, .{
         name = it.name,
         index = field_index,
@@ -2958,6 +2958,16 @@ host_blit_align_for_kind :: (kind: IR_SPV_Gen_Type) -> s64 {
   return 4;
 }
 
+buffer_struct_field_is_using :: (struct_def: *IR_Struct, field: *IR_Field) -> bool {
+  if !struct_def || !field return false;
+  if !struct_def.origin return false;
+  if field.source_member_index < 0 return false;
+
+  member_index := cast(s64) field.source_member_index;
+  if member_index >= struct_def.origin.members.count return false;
+  return !!(struct_def.origin.members[member_index].flags & .USING);
+}
+
 find_buffer_field :: (buffer: *IR_SPV_Gen_Buffer, name: string) -> *IR_SPV_Gen_Buffer_Field {
   assert(buffer != null);
   return find_by_name(*buffer.fields, name);
@@ -3010,7 +3020,134 @@ register_buffer_layout_struct :: (s: *IR_SPV_Gen_State, struct_name: string) -> 
     array_element_type_id: s64 = 0;
 
     if it.type.kind == .STRUCT {
-      return null, false, make_diag("buffer layout struct '%' field '%' nested struct type '%' is unsupported.", struct_name, it.name, it.type.struct_name);
+      if !buffer_struct_field_is_using(struct_def, *it) {
+        return null, false, make_diag("buffer layout struct '%' field '%' nested struct type '%' is unsupported.", struct_name, it.name, it.type.struct_name);
+      }
+
+      nested_struct_name := it.type.struct_name;
+      nested_struct := find_struct(s, nested_struct_name);
+      if !nested_struct return null, false, make_diag("buffer layout struct '%' field '%' references unknown nested struct '%'.", struct_name, it.name, nested_struct_name);
+
+      nested_offset := offset;
+      nested_cpu_offset := cpu_offset;
+      nested_max_align: s64 = 1;
+      nested_cpu_max_align: s64 = 1;
+
+      for nested_struct.fields {
+        nested_field := it;
+        if nested_field.type.kind == .STRUCT {
+          return null, false, make_diag("buffer layout struct '%' using field '%' nested struct field '%' type '%' is unsupported.", struct_name, nested_struct_name, nested_field.name, nested_field.type.struct_name);
+        }
+
+        field_type = IR_SPV_Gen_Type.UNKNOWN;
+        field_type_name = ir_string_first_non_empty(nested_field.type.display_name, nested_field.type.struct_name);
+        field_struct_name = "";
+        field_type_id = 0;
+        field_ptr_storage_type_id = 0;
+        field_size = 0;
+        field_align = 1;
+        is_array = false;
+        array_count = 0;
+        array_stride = 0;
+        array_type_id = 0;
+        array_length_const_id = 0;
+        array_element_struct_name = "";
+        array_element_type_id = 0;
+
+        if nested_field.type.kind == .FIXED_ARRAY {
+          if nested_field.type.array_count <= 0 || nested_field.type.array_count > 0xFFFF_FFFF {
+            return null, false, make_diag("buffer layout struct '%' nested field '%' has invalid fixed array count %.", struct_name, nested_field.name, nested_field.type.array_count);
+          }
+
+          if nested_field.type.element_kind == .STRUCT {
+            nested_layout, nested_ok, nested_diag := register_buffer_layout_struct(s, nested_field.type.element_struct_name);
+            if !nested_ok return null, false, nested_diag;
+            field_type = .STRUCT;
+            field_struct_name = nested_layout.name;
+            field_type_id = nested_layout.type_id;
+            field_align = nested_layout.max_align;
+            field_size = nested_layout.stride;
+            array_element_struct_name = nested_layout.name;
+            array_element_type_id = nested_layout.type_id;
+          } else {
+            field_type = spv_kind_from_ir_type_kind(nested_field.type.element_kind);
+            field_type_name = ir_string_first_non_empty(nested_field.type.element_display_name, nested_field.type.element_struct_name);
+            if field_type == .UNKNOWN || field_type == .STRUCT {
+              return null, false, make_diag("buffer layout struct '%' nested field '%' array element type '%' is unsupported.", struct_name, nested_field.name, field_type_name);
+            }
+            field_type_id = type_id_from_kind(s, field_type);
+            field_ptr_storage_type_id = storage_ptr_type_id_from_kind(s, field_type);
+            field_align = host_blit_align_for_kind(field_type);
+            field_size = byte_size_of_kind(field_type);
+          }
+
+          if field_size <= 0 {
+            return null, false, make_diag("buffer layout struct '%' nested field '%' array element type '%' has unsupported layout.", struct_name, nested_field.name, field_type_name);
+          }
+          array_count = nested_field.type.array_count;
+          array_stride = align_up(field_size, field_align);
+          field_size = array_stride * array_count;
+          array_length_const_id = get_u32_const(s, cast(u32) array_count);
+          array_type_id = new_id(s);
+          add_debug_name(s, array_type_id, debug_type_name(s, tprint("%_%_array", struct_name, nested_field.name)));
+          is_array = true;
+        } else {
+          field_type = spv_kind_from_ir_type_for_layout(s, nested_field.type);
+          if field_type == .UNKNOWN {
+            return null, false, make_diag("buffer layout struct '%' nested field '%' type '%' is unsupported.", struct_name, nested_field.name, field_type_name);
+          }
+          field_type_id = type_id_from_kind(s, field_type);
+          field_ptr_storage_type_id = storage_ptr_type_id_from_kind(s, field_type);
+          field_size = byte_size_of_kind(field_type);
+          if field_size <= 0 {
+            return null, false, make_diag("buffer layout struct '%' nested field '%' type '%' has unsupported layout.", struct_name, nested_field.name, field_type_name);
+          }
+          field_align = host_blit_align_for_kind(field_type);
+        }
+
+        nested_offset = align_up(nested_offset, field_align);
+        if field_align > nested_max_align nested_max_align = field_align;
+
+        cpu_field_align := ifx field_type == .STRUCT then field_align else host_blit_align_for_kind(field_type);
+        nested_cpu_offset = align_up(nested_cpu_offset, cpu_field_align);
+        if cpu_field_align > nested_cpu_max_align nested_cpu_max_align = cpu_field_align;
+
+        if nested_cpu_offset != nested_offset {
+          return null, false, make_diag("buffer layout struct '%' nested field '%' is not CPU-blittable (cpu offset %, gpu offset %).", struct_name, nested_field.name, nested_cpu_offset, nested_offset);
+        }
+
+        field_index := layout.fields.count;
+        array_add(*layout.fields, .{
+          name = nested_field.name,
+          index = field_index,
+          type = field_type,
+          struct_name = field_struct_name,
+          type_id = field_type_id,
+          ptr_storage_type_id = field_ptr_storage_type_id,
+          is_array = is_array,
+          array_count = array_count,
+          array_stride = array_stride,
+          array_type_id = array_type_id,
+          array_length_const_id = array_length_const_id,
+          array_element_struct_name = array_element_struct_name,
+          array_element_type_id = array_element_type_id,
+          offset = nested_offset,
+        });
+        add_debug_member_name(s, layout.type_id, field_index, nested_field.name);
+        nested_offset += field_size;
+        nested_cpu_offset += field_size;
+      }
+
+      nested_stride := align_up(nested_offset, nested_max_align);
+      nested_cpu_stride := align_up(nested_cpu_offset, nested_cpu_max_align);
+      if nested_cpu_stride != nested_stride {
+        return null, false, make_diag("buffer layout struct '%' nested using field '%' is not CPU-blittable (cpu stride %, gpu stride %).", struct_name, it.name, nested_cpu_stride, nested_stride);
+      }
+      if nested_max_align > max_align max_align = nested_max_align;
+      if nested_cpu_max_align > cpu_max_align cpu_max_align = nested_cpu_max_align;
+      offset = nested_stride;
+      cpu_offset = nested_cpu_stride;
+      continue;
     }
 
     if it.type.kind == .FIXED_ARRAY {
