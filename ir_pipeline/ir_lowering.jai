@@ -148,10 +148,6 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
   out: IR_Type;
   if !type return out, false;
 
-  display_name, display_ok := ir_type_to_shader_name(type);
-  if !display_ok return out, false;
-  out.display_name = display_name;
-
   if type.type == .POINTER {
     ptr := cast(*Type_Info_Pointer) type;
     if !ptr.pointer_to return out, false;
@@ -163,6 +159,7 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
       if builtin_pointee_kind != .UNKNOWN pointee_kind = builtin_pointee_kind;
     }
     out.kind = .POINTER;
+    out.display_name = tprint("*%", pointee.display_name);
     out.pointee_kind = pointee_kind;
     out.pointee_display_name = pointee.display_name;
     out.pointee_struct_name = pointee.struct_name;
@@ -186,6 +183,7 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
       if builtin_elem_kind != .UNKNOWN elem_kind = builtin_elem_kind;
     }
     out.kind = .FIXED_ARRAY;
+    out.display_name = tprint("%.[%]", elem_ir.display_name, array_t.array_count);
     out.element_kind = elem_kind;
     out.element_display_name = elem_ir.display_name;
     out.element_struct_name = elem_ir.struct_name;
@@ -196,6 +194,7 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
   if type.type == .STRUCT {
     st := cast(*Type_Info_Struct) type;
     lowered_name := jai_to_hlsl_type_name(get_struct_type_name(st));
+    out.display_name = lowered_name;
     builtin_kind := ir_type_kind_from_slang_name(lowered_name);
     if builtin_kind != .UNKNOWN {
       out.kind = builtin_kind;
@@ -207,9 +206,127 @@ ir_type_from_type_info :: (type: *Type_Info) -> (IR_Type, bool) {
     return out, true;
   }
 
+  display_name, display_ok := ir_type_to_shader_name(type);
+  if !display_ok return out, false;
+  out.display_name = display_name;
   out.kind = ir_type_kind_from_slang_name(display_name);
   if out.kind == .UNKNOWN return out, false;
   return out, true;
+}
+
+ir_type_info_from_declaration :: (decl: *Code_Declaration) -> *Type_Info {
+  if !decl return null;
+  if decl.type_inst && decl.type_inst.result return decl.type_inst.result;
+  if !decl.expression return null;
+  if decl.expression.kind == .TYPE_INSTANTIATION {
+    inst := cast(*Code_Type_Instantiation) decl.expression;
+    if inst.result return inst.result;
+  }
+  return decl.expression.type;
+}
+
+ir_type_info_from_type_expr :: (node: *Code_Node, depth: s64 = 0) -> *Type_Info {
+  if !node || depth > 8 return null;
+
+  if node.kind == .TYPE_DEFINITION {
+    defn := cast(*Code_Type_Definition) node;
+    return defn.info;
+  }
+
+  if node.kind == .TYPE_INSTANTIATION {
+    inst := cast(*Code_Type_Instantiation) node;
+    if inst.result return inst.result;
+    if inst.type_valued_expression return ir_type_info_from_type_expr(inst.type_valued_expression, depth + 1);
+    return null;
+  }
+
+  if node.kind == .IDENT {
+    ident := cast(*Code_Ident) node;
+    if ident.resolved_declaration return ir_type_info_from_type_expr(cast(*Code_Node) ident.resolved_declaration, depth + 1);
+    return null;
+  }
+
+  if node.kind == .DECLARATION {
+    decl := cast(*Code_Declaration) node;
+    if decl.type_inst && decl.type_inst.result return decl.type_inst.result;
+    if decl.expression return ir_type_info_from_type_expr(decl.expression, depth + 1);
+    return null;
+  }
+
+  if node.kind == .UNARY_OPERATOR {
+    un := cast(*Code_Unary_Operator) node;
+    if un.subexpression return ir_type_info_from_type_expr(un.subexpression, depth + 1);
+  }
+
+  if node.kind == .CAST {
+    cn := cast(*Code_Cast) node;
+    if cn.expression return ir_type_info_from_type_expr(cn.expression, depth + 1);
+  }
+
+  if node.type return node.type;
+  return null;
+}
+
+ir_type_from_typed_array_literal_info :: (info: *Code_Array_Literal_Info) -> (IR_Type, bool) {
+  out: IR_Type;
+  if !info || !info.element_type return out, false;
+  elem_type := info.element_type.result;
+  if !elem_type elem_type = ir_type_info_from_type_expr(cast(*Code_Node) info.element_type);
+  if !elem_type && info.element_type.type_valued_expression && info.element_type.type_valued_expression.kind == .IDENT {
+    ident := cast(*Code_Ident) info.element_type.type_valued_expression;
+    elem_kind := ir_type_kind_from_slang_name(ident.name);
+    if elem_kind != .UNKNOWN {
+      out.kind = .FIXED_ARRAY;
+      out.element_kind = elem_kind;
+      out.element_display_name = ident.name;
+      out.array_count = info.array_members.count;
+      out.display_name = tprint("%.[%]", ident.name, out.array_count);
+      return out, true;
+    }
+  }
+  if !elem_type {
+    element_builder: String_Builder;
+    PP.print_expression(*element_builder, cast(*Code_Node) info.element_type);
+    element_name := builder_to_string(*element_builder);
+    elem_kind := ir_type_kind_from_slang_name(element_name);
+    if elem_kind != .UNKNOWN {
+      out.kind = .FIXED_ARRAY;
+      out.element_kind = elem_kind;
+      out.element_display_name = element_name;
+      out.array_count = info.array_members.count;
+      out.display_name = tprint("%.[%]", element_name, out.array_count);
+      return out, true;
+    }
+  }
+  if !elem_type return out, false;
+  elem_ir, elem_ok := ir_type_from_type_info(elem_type);
+  if !elem_ok return out, false;
+  elem_kind := elem_ir.kind;
+  if elem_kind == .STRUCT {
+    builtin_elem_kind := ir_type_kind_from_slang_name(elem_ir.display_name);
+    if builtin_elem_kind != .UNKNOWN elem_kind = builtin_elem_kind;
+  }
+  out.kind = .FIXED_ARRAY;
+  out.element_kind = elem_kind;
+  out.element_display_name = elem_ir.display_name;
+  out.element_struct_name = elem_ir.struct_name;
+  out.array_count = info.array_members.count;
+  out.display_name = tprint("%.[%]", elem_ir.display_name, out.array_count);
+  return out, true;
+}
+
+ir_type_from_declaration_info :: (decl: *Code_Declaration) -> (IR_Type, bool) {
+  if decl && decl.expression && decl.expression.kind == .LITERAL {
+    lit := cast(*Code_Literal) decl.expression;
+    if lit.value_type == .ARRAY {
+      ir_type, ir_type_ok := ir_type_from_typed_array_literal_info(lit.array_literal_info);
+      if ir_type_ok return ir_type, true;
+    }
+  }
+  decl_type := ir_type_info_from_declaration(decl);
+  if !decl_type return .{}, false;
+  ir_type, ir_type_ok := ir_type_from_type_info(decl_type);
+  return ir_type, ir_type_ok;
 }
 
 ir_lower_struct_from_type :: (name: string, type: *Type_Info) -> (IR_Struct, bool) {
@@ -405,7 +522,7 @@ ir_collect_parameter_using_sources :: (header: *Code_Procedure_Header, out_sourc
     }
     if !decl continue;
 
-    decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
+    decl_type := ir_type_info_from_declaration(decl);
     if !decl_type continue;
 
     st: *Type_Info_Struct = null;
@@ -1495,10 +1612,14 @@ ir_lower_expr :: (node: *Code_Node,
           ir_set_diagnostic(state, "IR lowering: array literal is missing literal info", node);
           return null, false;
         }
+        if out.result_type.kind == .UNKNOWN {
+          array_ir_type, array_ir_ok := ir_type_from_typed_array_literal_info(info);
+          if array_ir_ok out.result_type = array_ir_type;
+        }
         member_expected_type: *Type_Info = null;
         if info.element_type {
           if info.element_type.result member_expected_type = info.element_type.result;
-          else if info.element_type.type_valued_expression member_expected_type = info.element_type.type_valued_expression.type;
+          else member_expected_type = ir_type_info_from_type_expr(cast(*Code_Node) info.element_type);
         }
         for info.array_members {
           arg, ok := ir_lower_expr(it, ctx, active_usings, active_aliases, member_expected_type);
@@ -2349,7 +2470,7 @@ ir_collect_compute_declared_structs_in_node :: (node: *Code_Node, out_extra_stru
 
   if node.kind == .DECLARATION {
     decl := cast(*Code_Declaration) node;
-    decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
+    decl_type := ir_type_info_from_declaration(decl);
     if !ir_collect_compute_declared_struct_type(decl_type, state, node, out_extra_structs) return false;
     return ir_collect_payload_structs_in_expr(cast(*Code_Node) decl, out_extra_structs, state);
   }

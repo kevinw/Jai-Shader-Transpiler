@@ -88,6 +88,7 @@ main :: () {
   _ = get_transpiled(.OPENGL_GLSL, tiles_fragment_shader);
   _ = get_transpiled(.OPENGL_GLSL, array_support_vertex_shader);
   _ = get_transpiled(.OPENGL_GLSL, array_support_fragment_shader);
+  _ = get_transpiled(.OPENGL_GLSL, typed_array_decl_vertex_shader);
   _ = get_transpiled(.OPENGL_GLSL, compute_write_indices);
 
   args_ok, args, is_set := parse_arguments(struct { singleframe: bool; test_readback: bool; });
@@ -107,6 +108,7 @@ main :: () {
   _ = array_support_fragment_shader(.{}, .{});
   _ = get_transpiled(.OPENGL_GLSL, array_support_vertex_shader);
   _ = get_transpiled(.OPENGL_GLSL, array_support_fragment_shader);
+  _ = get_transpiled(.OPENGL_GLSL, typed_array_decl_vertex_shader);
 
   vao: u32;
   buffer: u32;

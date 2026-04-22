@@ -47,3 +47,22 @@ array_support_fragment_shader :: (using in: Array_Test_Vertex_Out, using un: Arr
   out_color = local_palette[0] * (sample_offset.x + 0.5) + u_palette[1] * 0.5;
   return out;
 } @fragment_shader
+
+Typed_Array_Decl_Vertex_Uniforms :: struct {}
+
+Typed_Array_Decl_Vertex_In :: struct {
+  vertex_id: u32; @SV_VertexID
+}
+
+Typed_Array_Decl_Vertex_Out :: struct {
+  gl_Position: Vector4; @position
+}
+
+typed_array_decl_vertex_shader :: (using in: Typed_Array_Decl_Vertex_In,
+                                   using un: Typed_Array_Decl_Vertex_Uniforms) -> Typed_Array_Decl_Vertex_Out {
+  using out: Typed_Array_Decl_Vertex_Out;
+  LOOKUP :: float.[0.0, 0.0, 1.0, 0.0, 1.0, 1.0];
+  x := LOOKUP[vertex_id] * 2.0 - 1.0;
+  gl_Position = Vector4.{ x, 0.0, 0.0, 1.0 };
+  return out;
+} @vertex_shader

@@ -119,6 +119,7 @@ metal_example_with_window :: () -> (success: bool) {
     fragment_metal_source := get_transpiled(.METAL, tiles_fragment_shader);
     _ = get_transpiled(.METAL, array_support_vertex_shader);
     _ = get_transpiled(.METAL, array_support_fragment_shader);
+    _ = get_transpiled(.METAL, typed_array_decl_vertex_shader);
     _ = get_transpiled(.METAL, compute_write_indices);
 
     args_ok, args, is_set := parse_arguments(struct { singleframe: bool; test_readback: bool; });
@@ -182,6 +183,7 @@ metal_example_with_window :: () -> (success: bool) {
     _ = array_support_fragment_shader(.{}, .{});
     _ = get_transpiled(.METAL, array_support_vertex_shader);
     _ = get_transpiled(.METAL, array_support_fragment_shader);
+    _ = get_transpiled(.METAL, typed_array_decl_vertex_shader);
 
     if !run_compute_sanity_check(device, queue, compile_options) return false;
     

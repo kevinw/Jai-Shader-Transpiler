@@ -247,11 +247,21 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         return true;
       }
 
-      decl_type := ifx decl.type_inst then decl.type_inst.result else ifx decl.expression then decl.expression.type else null;
+      decl_type := ir_type_info_from_declaration(decl);
       out_stmt: IR_Stmt;
       out_stmt.kind = .DECL;
       out_stmt.origin_node = stmt;
-      decl_ir_type, decl_ir_type_ok := ir_type_from_type_info(decl_type);
+      init_expr: *IR_Expr = null;
+      init_ok := true;
+      if decl.expression {
+        init_expr, init_ok = ir_lower_expr(decl.expression, ctx, active_usings.*, active_aliases.*, decl_type);
+        if !init_ok return false;
+      }
+      decl_ir_type, decl_ir_type_ok := ir_type_from_declaration_info(decl);
+      if !decl_ir_type_ok && init_expr && init_expr.result_type.kind != .UNKNOWN {
+        decl_ir_type = init_expr.result_type;
+        decl_ir_type_ok = true;
+      }
       if !decl_ir_type_ok {
         ir_set_diagnostic(state, tprint("IR lowering: unsupported typed declaration info for '%'", decl.name), stmt);
         return false;
@@ -268,9 +278,6 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         }
       }
       if decl.expression {
-        init_expr, init_ok := ir_lower_expr(decl.expression, ctx, active_usings.*, active_aliases.*, decl_type);
-        if !init_ok return false;
-
         if should_alias_struct_resource_local {
           if decl.expression.kind != .LITERAL {
             ir_set_diagnostic(state, tprint("IR lowering: resource-backed local struct '%' requires a struct literal initializer", decl.name), stmt);
@@ -656,11 +663,18 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
       out_stmt: IR_Stmt;
       out_stmt.kind = .RETURN;
       out_stmt.origin_node = stmt;
+      return_value_node: *Code_Node = null;
       if op.arguments_sorted.count == 1 {
+        return_value_node = op.arguments_sorted[0];
+      } else if op.arguments_sorted.count == 0 && op.arguments_unsorted.count == 1 && op.arguments_unsorted[0].expression {
+        return_value_node = op.arguments_unsorted[0].expression;
+      }
+
+      if return_value_node {
         if !allow_return_value {
           return_err("IR lowering: return value not allowed in this context", stmt);
         }
-        ret_node := op.arguments_sorted[0];
+        ret_node := return_value_node;
         ret_type := ret_node.type;
 
         // For entry shader outputs, lower `return { ... }` as assignments to `o` and `return o;`.
@@ -724,7 +738,7 @@ ir_shared_lower_stmt :: (stmt: *Code_Node,
         ret_expr, ret_ok := ir_lower_expr(ret_node, ctx, active_usings.*, active_aliases.*, ret_type);
         if !ret_ok return false;
         out_stmt.return_expr = ret_expr;
-      } else if op.arguments_sorted.count > 1 {
+      } else if op.arguments_sorted.count > 1 || op.arguments_unsorted.count > 1 {
         return_err("IR lowering: multi-value return is unsupported", stmt);
       }
       ir_shared_emit_deferred_for_exit(out_block, active_defer_entries.*, 0);
